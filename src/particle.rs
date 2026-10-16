@@ -1,16 +1,21 @@
+//! Free-flight motion and elastic collisions with stationary chamber walls.
+
 use macroquad::prelude::Vec3;
 
-// Reduced simulation units: every particle currently has equal mass.
+/// Common particle mass in reduced simulation units.
 pub const PARTICLE_MASS: f32 = 1.0;
 
-#[derive(Clone, Debug)]
+/// A hard sphere represented by its center position and velocity.
 pub struct Particle {
     pub position: Vec3,
     pub velocity: Vec3,
 }
 
 impl Particle {
-    // Returns the total magnitude of momentum transferred to the walls.
+    /// Advances the particle and reflects it from the chamber walls.
+    ///
+    /// Returns the sum of impulse magnitudes transferred to the walls.
+    /// `wall_limit` is the maximum center coordinate on each axis.
     pub fn update(&mut self, dt: f32, wall_limit: f32) -> f32 {
         self.position += self.velocity * dt;
 
@@ -22,6 +27,7 @@ impl Particle {
     }
 }
 
+/// Reflects one velocity component and returns the wall impulse magnitude.
 fn bounce(position: &mut f32, velocity: &mut f32, limit: f32) -> f32 {
     if *position > limit {
         *position = limit;

@@ -1,58 +1,57 @@
+//! Hard-sphere collision resolution and reduced-unit gas measurements.
+
 use macroquad::prelude::Vec3;
 
-use crate::particle::{PARTICLE_MASS, Particle};
+use crate::particle::{
+    PARTICLE_MASS, //
+    Particle,
+};
 
 const COLLISION_DISTANCE_EPSILON: f32 = 1e-6;
 const BOLTZMANN_CONSTANT: f32 = 1.0;
-const TRANSLATION_DEGREES_OF_FREEDOM: f32 = 3.0;
+const TRANSLATIONAL_DEGREES_OF_FREEDOM: f32 = 3.0;
 const CUBE_FACE_COUNT: f32 = 6.0;
 
-pub fn resolve_collisions(particles: &mut [Particle], radius: f32) {
+/// Resolves an elastic collision between two equal-mass hard spheres.
+///
+/// The spatial grid selects candidates; this function rejects separated
+/// pairs, corrects overlap, and exchanges only the normal velocity component.
+pub fn resolve_pair(a: &mut Particle, b: &mut Particle, radius: f32) {
     let minimum_distance = 2.0 * radius;
+    let displacement = b.position - a.position;
+    let distance_squared = displacement.length_squared();
 
-    for i in 0..particles.len() {
-        let (left, right) = particles.split_at_mut(i + 1);
-        let a = &mut left[i];
-
-        for b in right {
-            let displacement = b.position - a.position;
-            let distance = displacement.length();
-
-            if distance >= minimum_distance {
-                continue;
-            }
-
-            let normal = if distance > COLLISION_DISTANCE_EPSILON {
-                displacement / distance
-            } else {
-                Vec3::X
-            };
-
-            // Separate overlapping particles.
-            let overlap = minimum_distance - distance;
-            a.position -= normal * overlap * 0.5;
-            b.position += normal * overlap * 0.5;
-
-            // Calculate relative velocity along the collision normal.
-            let relative_velocity = b.velocity - a.velocity;
-            let normal_speed = relative_velocity.dot(normal);
-
-            // Only resolve collisions between approaching particles.
-            if normal_speed >= 0.0 {
-                continue;
-            }
-
-            // Perfectly elastic collision between equal-mass particles.
-            a.velocity += normal * normal_speed;
-            b.velocity -= normal * normal_speed;
-        }
+    if distance_squared >= minimum_distance * minimum_distance {
+        return;
     }
+
+    let distance = distance_squared.sqrt();
+    // A fixed fallback axis avoids division by zero for coincident centers.
+    let normal = if distance > COLLISION_DISTANCE_EPSILON {
+        displacement / distance
+    } else {
+        Vec3::X
+    };
+
+    let overlap = minimum_distance - distance;
+    a.position -= normal * overlap * 0.5;
+    b.position += normal * overlap * 0.5;
+
+    let normal_speed = (b.velocity - a.velocity).dot(normal);
+    if normal_speed >= 0.0 {
+        return;
+    }
+
+    a.velocity += normal * normal_speed;
+    b.velocity -= normal * normal_speed;
 }
 
+/// Returns translational kinetic energy in reduced simulation units.
 fn particle_kinetic_energy(velocity: Vec3) -> f32 {
     0.5 * PARTICLE_MASS * velocity.length_squared()
 }
 
+/// Returns the sum of particle translational kinetic energies.
 pub fn kinetic_energy(particles: &[Particle]) -> f32 {
     particles
         .iter()
@@ -60,14 +59,15 @@ pub fn kinetic_energy(particles: &[Particle]) -> f32 {
         .sum()
 }
 
+/// Returns kinetic temperature with bulk translational motion removed.
+///
+/// Uses three degrees of freedom per particle and `k_B = 1`.
 pub fn temperature(particles: &[Particle]) -> f32 {
     let n = particles.len();
-
     if n < 2 {
         return 0.0;
     }
 
-    // Exclude motion of the gas as a whole.
     let mean_velocity = particles
         .iter()
         .map(|particle| particle.velocity)
@@ -79,10 +79,12 @@ pub fn temperature(particles: &[Particle]) -> f32 {
         .map(|particle| particle_kinetic_energy(particle.velocity - mean_velocity))
         .sum();
 
-    2.0 * thermal_energy / (TRANSLATION_DEGREES_OF_FREEDOM * (n - 1) as f32 * BOLTZMANN_CONSTANT)
+    2.0 * thermal_energy / (TRANSLATIONAL_DEGREES_OF_FREEDOM * (n - 1) as f32 * BOLTZMANN_CONSTANT)
 }
 
-// Total impulse over all six walls, divided by their total area and elapsed time.
+/// Returns average wall pressure from impulse over total area and time.
+///
+/// Assumes a cubic chamber and a positive sample duration.
 pub fn pressure_from_wall_impulse(
     total_impulse: f32,
     chamber_size: f32,
@@ -95,7 +97,10 @@ pub fn pressure_from_wall_impulse(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::simulation::{CHAMBER_SIZE, PARTICLE_RADIUS};
+    use crate::simulation::{
+        CHAMBER_SIZE,
+        PARTICLE_RADIUS, //
+    };
     use macroquad::prelude::vec3;
 
     const TEST_PARTICLE_OFFSET: f32 = 0.16;
@@ -121,7 +126,8 @@ mod tests {
         let energy_before = kinetic_energy(&particles);
         let momentum_before = particles[0].velocity + particles[1].velocity;
 
-        resolve_collisions(&mut particles, PARTICLE_RADIUS);
+        let (left, right) = particles.split_at_mut(1);
+        resolve_pair(&mut left[0], &mut right[0], PARTICLE_RADIUS);
 
         let energy_after = kinetic_energy(&particles);
         let momentum_after = particles[0].velocity + particles[1].velocity;

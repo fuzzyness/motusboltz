@@ -1,6 +1,22 @@
+//! Orbit, pan, and zoom controls for the 3D chamber.
+
 use std::f32::consts::FRAC_PI_2;
 
-use macroquad::prelude::*;
+use macroquad::prelude::{
+    Camera3D,
+    KeyCode,
+    MouseButton,
+    Vec2,
+    Vec3, //
+    is_key_down,
+    is_key_pressed,
+    is_mouse_button_down,
+    mouse_position,
+    mouse_wheel,
+    screen_height,
+    vec2,
+    vec3,
+};
 
 const INITIAL_POSITION: Vec3 = Vec3::new(6.0, 4.0, 6.0);
 const INITIAL_TARGET: Vec3 = Vec3::ZERO;
@@ -13,6 +29,7 @@ const ZOOM_SENSITIVITY: f32 = 0.005;
 const MIN_DISTANCE: f32 = 4.0;
 const MAX_DISTANCE: f32 = 25.0;
 
+/// A camera orbiting a movable target at a constrained distance and pitch.
 pub struct OrbitCamera {
     target: Vec3,
     distance: f32,
@@ -23,6 +40,7 @@ pub struct OrbitCamera {
 }
 
 impl OrbitCamera {
+    /// Creates a camera with the initial chamber-centered view.
     pub fn new() -> Self {
         let offset = INITIAL_POSITION - INITIAL_TARGET;
         let distance = offset.length();
@@ -37,13 +55,14 @@ impl OrbitCamera {
         }
     }
 
+    /// Restores the initial view and clears drag state.
     pub fn reset(&mut self) {
         *self = Self::new();
     }
 
+    /// Applies keyboard and pointer input for one rendered frame.
     pub fn update(&mut self) {
         if is_key_pressed(KeyCode::R) {
-            println!("Camera reset");
             self.reset();
             return;
         }
@@ -67,8 +86,8 @@ impl OrbitCamera {
             self.previous_pan_mouse = None;
         }
 
-        // Prevent scrolling gestures from triggering zoom
-        // while the user is dragging the camera.
+        // Trackpad drag gestures may also produce scroll events. Ignore
+        // them while dragging so panning does not accidentally zoom.
         if !left_down && !right_down {
             self.update_zoom();
         }
@@ -97,12 +116,12 @@ impl OrbitCamera {
 
             let camera = self.camera();
 
-            // Calculate the camera's local axes.
+            // Use the viewing plane rather than the world axes for panning.
             let forward = (camera.target - camera.position).normalize();
             let right = forward.cross(camera.up).normalize();
             let up = right.cross(forward).normalize();
 
-            // Convert pixel movement into world-space movement.
+            // Scale pixel movement by distance and vertical field of view.
             let world_units_per_pixel =
                 2.0 * self.distance * (camera.fovy / 2.0).tan() / screen_height();
 
@@ -124,6 +143,7 @@ impl OrbitCamera {
         }
     }
 
+    /// Builds the Macroquad camera from the current orbit state.
     pub fn camera(&self) -> Camera3D {
         let cos_pitch = self.pitch.cos();
 
