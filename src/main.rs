@@ -7,6 +7,7 @@ mod physics;
 mod render;
 mod simulation;
 mod spatial_grid;
+mod temperature_slider;
 
 use std::fmt::Write;
 
@@ -14,10 +15,8 @@ use macroquad::prelude::{
     Color,
     KeyCode,
     SKYBLUE,
-    Vec3,
-    WHITE, //
+    WHITE,
     clear_background,
-    draw_cube_wires,
     draw_text,
     get_frame_time,
     get_time,
@@ -25,22 +24,26 @@ use macroquad::prelude::{
     next_frame,
     screen_height,
     set_camera,
-    set_default_camera,
+    set_default_camera, //
 };
 
 use camera::OrbitCamera;
 use performance::PerformanceMonitor;
 use render::{
+    CylinderDimensions,
     DRAW_CALL_INDEX_CAPACITY,
-    DRAW_CALL_VERTEX_CAPACITY, //
+    DRAW_CALL_VERTEX_CAPACITY,
     ParticleRenderer,
+    draw_cylinder_chamber, //
 };
 use simulation::{
-    CHAMBER_SIZE,
+    CHAMBER_HEIGHT,
+    CHAMBER_RADIUS,
     PARTICLE_COUNT_PRESETS,
-    PRESSURE_WINDOW_SECONDS, //
-    Simulation,
+    PRESSURE_WINDOW_SECONDS,
+    Simulation, //
 };
+use temperature_slider::TemperatureSlider;
 
 const BACKGROUND_COLOR: Color = Color {
     r: 12.0 / 255.0,
@@ -61,6 +64,9 @@ const PARTICLE_PRESET_KEYS: [KeyCode; PARTICLE_COUNT_PRESETS.len()] = [
 ];
 
 const PRESET_HELP_LABEL: &str = "Particle presets:";
+const ENERGY_COLOR_HELP: &str =
+    "Particle energy: blue = low, orange = medium, red = high | Flash = collision";
+const ENERGY_COLOR_HELP_LINE_SPACING: f32 = 28.0;
 
 const TEXT_MARGIN_X: f32 = 20.0;
 const TITLE_POSITION_Y: f32 = 35.0;
@@ -81,6 +87,18 @@ const FPS_PRECISION: usize = 1;
 const PHYSICS_MS_PRECISION: usize = 3;
 const CHECKS_PRECISION: usize = 1;
 
+fn draw_metric_lines(lines: &[String], start_y: f32) {
+    for (line, value) in lines.iter().enumerate() {
+        draw_text(
+            value,
+            TEXT_MARGIN_X,
+            start_y + line as f32 * METRICS_LINE_SPACING,
+            METRICS_FONT_SIZE,
+            TEXT_COLOR,
+        );
+    }
+}
+
 fn window_conf() -> macroquad::conf::Conf {
     let mut config = macroquad::conf::Conf::default();
     config.miniquad_conf.window_title = "motusboltz".to_owned();
@@ -95,6 +113,7 @@ async fn main() {
     let mut camera = OrbitCamera::new();
     let mut performance = PerformanceMonitor::new();
     let mut particle_renderer = ParticleRenderer::new();
+    let mut temperature_slider = TemperatureSlider::new(simulation.temperature());
 
     // Generate the shortcut legend from the same presets used for input.
     let mut preset_help = String::from(PRESET_HELP_LABEL);
@@ -111,10 +130,17 @@ async fn main() {
             if is_key_pressed(key) {
                 if simulation.particles.len() != count {
                     simulation.set_particle_count(count);
+                    // Keep the selected temperature across particle presets.
+                    simulation.set_temperature(temperature_slider.value());
                     performance = PerformanceMonitor::new();
                 }
                 break;
             }
+        }
+
+        // Slider gestures change kinetic energy without orbiting the camera.
+        if let Some(temperature) = temperature_slider.update() {
+            simulation.set_temperature(temperature);
         }
 
         let frame_time = get_frame_time();
@@ -124,12 +150,23 @@ async fn main() {
         let physics_duration = get_time() - physics_start;
         performance.record_frame(frame_time, physics_duration, update_stats);
 
-        camera.update();
+        camera.update(!temperature_slider.blocks_camera());
+        let view_camera = camera.camera();
         clear_background(BACKGROUND_COLOR);
-        set_camera(&camera.camera());
+        set_camera(&view_camera);
 
-        draw_cube_wires(Vec3::ZERO, Vec3::splat(CHAMBER_SIZE), CHAMBER_COLOR);
-        particle_renderer.draw(&simulation.particles, simulation.particle_radius());
+        draw_cylinder_chamber(CHAMBER_RADIUS, CHAMBER_HEIGHT, CHAMBER_COLOR);
+        particle_renderer.draw(
+            &simulation.particles,
+            simulation.collision_flashes(),
+            simulation.particle_radius(),
+            &view_camera,
+            CylinderDimensions {
+                radius: CHAMBER_RADIUS,
+                height: CHAMBER_HEIGHT,
+            },
+            BACKGROUND_COLOR,
+        );
 
         // Return to screen-space coordinates for diagnostic text.
         set_default_camera();
@@ -169,15 +206,7 @@ async fn main() {
             pressure_label,
         ];
 
-        for (line, metric) in metrics.iter().enumerate() {
-            draw_text(
-                metric,
-                TEXT_MARGIN_X,
-                METRICS_POSITION_Y + line as f32 * METRICS_LINE_SPACING,
-                METRICS_FONT_SIZE,
-                TEXT_COLOR,
-            );
-        }
+        draw_metric_lines(&metrics, METRICS_POSITION_Y);
 
         if let Some(sample) = performance.sample() {
             let performance_y = METRICS_POSITION_Y
@@ -196,17 +225,18 @@ async fn main() {
                 ),
             ];
 
-            for (line, metric) in performance_metrics.iter().enumerate() {
-                draw_text(
-                    metric,
-                    TEXT_MARGIN_X,
-                    performance_y + line as f32 * METRICS_LINE_SPACING,
-                    METRICS_FONT_SIZE,
-                    TEXT_COLOR,
-                );
-            }
+            draw_metric_lines(&performance_metrics, performance_y);
         }
 
+        temperature_slider.draw();
+
+        draw_text(
+            ENERGY_COLOR_HELP,
+            TEXT_MARGIN_X,
+            screen_height() - HELP_BOTTOM_MARGIN - ENERGY_COLOR_HELP_LINE_SPACING,
+            HELP_FONT_SIZE,
+            TEXT_COLOR,
+        );
         draw_text(
             &preset_help,
             TEXT_MARGIN_X,

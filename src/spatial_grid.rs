@@ -19,7 +19,7 @@ pub struct SpatialGrid {
 }
 
 impl SpatialGrid {
-    /// Builds a grid covering the cubic chamber.
+    /// Builds a cubic broad-phase grid around the cylindrical chamber.
     ///
     /// # Panics
     ///
@@ -84,10 +84,19 @@ impl SpatialGrid {
         }
     }
 
-    /// Resolves candidate collisions and reports the pair-check count.
+    /// Resolves nearby pairs, invoking `on_collision` for actual impacts.
     ///
-    /// Tests each intra-cell pair and each neighboring-cell pair once.
-    pub fn resolve_collisions(&mut self, particles: &mut [Particle]) -> usize {
+    /// Each pair is checked once. The callback receives particle indices only
+    /// if the collision changes their velocities, not for overlap correction.
+    /// Returns the total number of candidate pairs checked.
+    pub fn resolve_collisions<F>(
+        &mut self,
+        particles: &mut [Particle],
+        mut on_collision: F,
+    ) -> usize
+    where
+        F: FnMut(usize, usize),
+    {
         self.rebuild(particles);
 
         let mut candidate_checks = 0;
@@ -99,7 +108,9 @@ impl SpatialGrid {
             // Each pair of occupants in this cell is visited once.
             for (offset, &first) in occupants.iter().enumerate() {
                 for &second in &occupants[offset + 1..] {
-                    Self::resolve_index_pair(particles, first, second, self.particle_radius);
+                    if Self::resolve_index_pair(particles, first, second, self.particle_radius) {
+                        on_collision(first, second);
+                    }
                     candidate_checks += 1;
                 }
             }
@@ -123,12 +134,14 @@ impl SpatialGrid {
 
                         for &first in occupants {
                             for &second in &self.cells[neighbor_index] {
-                                Self::resolve_index_pair(
+                                if Self::resolve_index_pair(
                                     particles,
                                     first,
                                     second,
                                     self.particle_radius,
-                                );
+                                ) {
+                                    on_collision(first, second);
+                                }
                                 candidate_checks += 1;
                             }
                         }
@@ -140,7 +153,12 @@ impl SpatialGrid {
         candidate_checks
     }
 
-    fn resolve_index_pair(particles: &mut [Particle], first: usize, second: usize, radius: f32) {
+    fn resolve_index_pair(
+        particles: &mut [Particle],
+        first: usize,
+        second: usize,
+        radius: f32,
+    ) -> bool {
         // `split_at_mut()` guarantees disjoint mutable particle references.
         let (a, b) = if first < second {
             let (left, right) = particles.split_at_mut(second);
@@ -150,7 +168,7 @@ impl SpatialGrid {
             (&mut right[0], &mut left[second])
         };
 
-        physics::resolve_pair(a, b, radius);
+        physics::resolve_pair(a, b, radius)
     }
 }
 
@@ -160,7 +178,7 @@ mod tests {
     use macroquad::prelude::vec3;
 
     use crate::simulation::{
-        CHAMBER_SIZE,
+        CHAMBER_DIAMETER,
         PARTICLE_RADIUS, //
     };
 
@@ -175,8 +193,8 @@ mod tests {
     }
 
     #[test]
-    fn finds_a_collision_across_a_cell_boundary() {
-        let mut grid = SpatialGrid::new(CHAMBER_SIZE, PARTICLE_RADIUS);
+    fn resolves_and_reports_a_collision_across_a_cell_boundary() {
+        let mut grid = SpatialGrid::new(CHAMBER_DIAMETER, PARTICLE_RADIUS);
         let boundary = -grid.chamber_half_size + BOUNDARY_CELL_INDEX as f32 * grid.cell_size;
         let separation_from_boundary = PARTICLE_RADIUS / 2.0;
         let mut particles = [
@@ -190,46 +208,54 @@ mod tests {
             grid.cell_index(particles[1].position),
         );
 
-        let checks = grid.resolve_collisions(&mut particles);
+        let mut impacts = Vec::new();
+        let checks = grid.resolve_collisions(&mut particles, |a, b| impacts.push((a, b)));
 
         assert_eq!(checks, 1);
+        assert_eq!(impacts, vec![(0, 1)]);
         assert!(particles[0].velocity.x < 0.0);
         assert!(particles[1].velocity.x > 0.0);
+
+        // The particles have already bounced. They should not flash again
+        // merely because they still overlap at the next grid update.
+        impacts.clear();
+        grid.resolve_collisions(&mut particles, |a, b| impacts.push((a, b)));
+        assert!(impacts.is_empty());
     }
 
     #[test]
     fn skips_particles_in_distant_cells() {
-        let mut grid = SpatialGrid::new(CHAMBER_SIZE, PARTICLE_RADIUS);
+        let mut grid = SpatialGrid::new(CHAMBER_DIAMETER, PARTICLE_RADIUS);
         let mut particles = [
             particle(-1.0, PARTICLE_SPEED),
             particle(1.0, -PARTICLE_SPEED),
         ];
 
-        assert_eq!(grid.resolve_collisions(&mut particles), 0);
+        assert_eq!(grid.resolve_collisions(&mut particles, |_, _| {}), 0);
     }
 
     #[test]
     fn clearing_grid_removes_stale_particle_locations() {
-        let mut grid = SpatialGrid::new(CHAMBER_SIZE, PARTICLE_RADIUS);
+        let mut grid = SpatialGrid::new(CHAMBER_DIAMETER, PARTICLE_RADIUS);
         let mut particles = [
             particle(-1.5, PARTICLE_SPEED),
             particle(-1.4, -PARTICLE_SPEED),
         ];
 
-        assert_eq!(grid.resolve_collisions(&mut particles), 1);
+        assert_eq!(grid.resolve_collisions(&mut particles, |_, _| {}), 1);
         particles[1].position = vec3(1.5, 0.0, 0.0);
-        assert_eq!(grid.resolve_collisions(&mut particles), 0);
+        assert_eq!(grid.resolve_collisions(&mut particles, |_, _| {}), 0);
     }
 
     #[test]
     fn visits_each_pair_in_the_same_cell_once() {
-        let mut grid = SpatialGrid::new(CHAMBER_SIZE, PARTICLE_RADIUS);
+        let mut grid = SpatialGrid::new(CHAMBER_DIAMETER, PARTICLE_RADIUS);
         let mut particles = [
             particle(-1.5, 0.0),
             particle(-1.5, 0.0),
             particle(-1.5, 0.0),
         ];
 
-        assert_eq!(grid.resolve_collisions(&mut particles), 3);
+        assert_eq!(grid.resolve_collisions(&mut particles, |_, _| {}), 3);
     }
 }
