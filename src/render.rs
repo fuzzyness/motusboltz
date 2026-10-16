@@ -1,4 +1,4 @@
-//! Batched hard-sphere rendering with kinetic-energy colors and depth shading.
+//! Batched particle rendering with kinetic-energy colors and depth shading.
 
 use std::f32::consts::{
     PI,
@@ -16,7 +16,6 @@ use macroquad::prelude::{
     ORANGE,
     Vec2,
     Vec3,
-    draw_line_3d,
     vec3, //
 };
 
@@ -49,10 +48,6 @@ const LIGHT_DIRECTION: Vec3 = Vec3::new(0.4, 0.7, 0.6);
 const AMBIENT_LIGHT: f32 = 0.35;
 const DIFFUSE_LIGHT: f32 = 0.65;
 const DEPTH_FADE_STRENGTH: f32 = 0.8;
-
-// A denser rim keeps its straight segments close to the circular wall.
-const CYLINDER_RING_SEGMENTS: usize = 96;
-const CYLINDER_VERTICAL_GUIDES: usize = 8;
 
 // Impact markers are visual feedback, not extra heat or lost/gained energy.
 const COLLISION_FLASH_COLOR: Color = Color::from_rgba(255, 252, 226, 255);
@@ -116,34 +111,6 @@ fn collision_color(base: Color, remaining_seconds: f32) -> Color {
         COLLISION_FLASH_COLOR,
         fraction * COLLISION_FLASH_STRENGTH,
     )
-}
-
-/// Draws the two circular rims and a few vertical guides of the cylinder.
-///
-/// The walls are represented by a wireframe so they do not hide particles.
-/// The top rim can later be replaced by a moving piston face.
-pub fn draw_cylinder_chamber(radius: f32, height: f32, color: Color) {
-    let half_height = height / 2.0;
-    let guide_interval = CYLINDER_RING_SEGMENTS / CYLINDER_VERTICAL_GUIDES;
-
-    for segment in 0..CYLINDER_RING_SEGMENTS {
-        let angle = TAU * segment as f32 / CYLINDER_RING_SEGMENTS as f32;
-        let next_angle = TAU * (segment + 1) as f32 / CYLINDER_RING_SEGMENTS as f32;
-        let (sin_angle, cos_angle) = angle.sin_cos();
-        let (next_sin, next_cos) = next_angle.sin_cos();
-        let x = radius * cos_angle;
-        let z = radius * sin_angle;
-        let next_x = radius * next_cos;
-        let next_z = radius * next_sin;
-
-        for y in [-half_height, half_height] {
-            draw_line_3d(vec3(x, y, z), vec3(next_x, y, next_z), color);
-        }
-
-        if segment.is_multiple_of(guide_interval) {
-            draw_line_3d(vec3(x, -half_height, z), vec3(x, half_height, z), color);
-        }
-    }
 }
 
 /// Smooth depth fade for a vertical cylinder centered at the origin.

@@ -1,12 +1,16 @@
 //! Hard-sphere collision resolution and reduced-unit gas measurements.
 
-use std::f32::consts::TAU;
+use std::f32::consts::{
+    PI,
+    TAU, //
+};
 
 use macroquad::prelude::Vec3;
 
 use crate::particle::{
     PARTICLE_MASS,
-    Particle, //
+    Particle,
+    WallImpulses, //
 };
 
 const COLLISION_DISTANCE_EPSILON: f32 = 1e-6;
@@ -136,18 +140,40 @@ pub fn rescale_thermal_velocities(particles: &mut [Particle], target_temperature
     }
 }
 
-/// Returns average pressure over the cylinder's side and two end caps.
+/// Time-averaged pressures on the cylinder walls and moving piston.
 ///
-/// The total area is `2 pi r h + 2 pi r^2`. Wall impulses are summed as
-/// magnitudes, so this is one surface-averaged pressure measurement.
-pub fn pressure_from_wall_impulse(
-    total_impulse: f32,
+/// Each surface pressure is based on that surface's own area. `total` is
+/// the area-weighted average of all three surface pressures, not their sum.
+#[derive(Clone, Copy, Debug)]
+pub struct WallPressures {
+    pub side: f32,
+    pub top: f32,
+    pub bottom: f32,
+    pub total: f32,
+}
+
+/// Converts accumulated wall impulses into pressure over the sampling window.
+///
+/// The curved side has area `2 pi r h`; each flat cap has area `pi r^2`.
+/// During piston motion, `chamber_height` is the mean sampled height, so
+/// the denominator represents integrated side-wall area over the window.
+/// Only the magnitudes of momentum transfer are accumulated.
+pub fn pressures_from_wall_impulses(
+    impulses: WallImpulses,
     chamber_radius: f32,
     chamber_height: f32,
     sample_duration: f32,
-) -> f32 {
-    let total_wall_area = TAU * chamber_radius * (chamber_height + chamber_radius);
-    total_impulse / (total_wall_area * sample_duration)
+) -> WallPressures {
+    let side_area = TAU * chamber_radius * chamber_height;
+    let cap_area = PI * chamber_radius * chamber_radius;
+    let total_area = side_area + 2.0 * cap_area;
+
+    WallPressures {
+        side: impulses.side / (side_area * sample_duration),
+        top: impulses.top / (cap_area * sample_duration),
+        bottom: impulses.bottom / (cap_area * sample_duration),
+        total: impulses.total() / (total_area * sample_duration),
+    }
 }
 
 #[cfg(test)]
@@ -162,9 +188,11 @@ mod tests {
 
     const TEST_PARTICLE_OFFSET: f32 = 0.16;
     const TEST_PARTICLE_SPEED: f32 = 1.0;
-    const TEST_WALL_IMPULSE: f32 = 96.0;
+    const TEST_SIDE_IMPULSE: f32 = 32.0;
+    const TEST_TOP_IMPULSE: f32 = 24.0;
+    const TEST_BOTTOM_IMPULSE: f32 = 40.0;
     const TEST_SAMPLE_DURATION: f32 = 2.0;
-    const EXPECTED_PRESSURE: f32 = 2.0 / std::f32::consts::PI;
+    const EXPECTED_TOTAL_PRESSURE: f32 = 2.0 / PI;
     const TOLERANCE: f32 = 1e-6;
     const TARGET_TEST_TEMPERATURE: f32 = 2.0;
     const TEST_DRIFT_SPEED: f32 = 0.6;
@@ -220,15 +248,39 @@ mod tests {
     }
 
     #[test]
-    fn pressure_uses_total_wall_area_and_elapsed_time() {
-        let pressure = pressure_from_wall_impulse(
-            TEST_WALL_IMPULSE,
+    fn pressure_uses_each_surface_area_and_preserves_total() {
+        let impulses = WallImpulses {
+            side: TEST_SIDE_IMPULSE,
+            top: TEST_TOP_IMPULSE,
+            bottom: TEST_BOTTOM_IMPULSE,
+        };
+        let pressures = pressures_from_wall_impulses(
+            impulses,
             CHAMBER_RADIUS,
             CHAMBER_HEIGHT,
             TEST_SAMPLE_DURATION,
         );
 
-        assert!((pressure - EXPECTED_PRESSURE).abs() < TOLERANCE);
+        let side_area = TAU * CHAMBER_RADIUS * CHAMBER_HEIGHT;
+        let cap_area = PI * CHAMBER_RADIUS * CHAMBER_RADIUS;
+        let weighted_average = (pressures.side * side_area
+            + (pressures.top + pressures.bottom) * cap_area)
+            / (side_area + 2.0 * cap_area);
+
+        assert!(
+            (pressures.side - TEST_SIDE_IMPULSE / (side_area * TEST_SAMPLE_DURATION)).abs()
+                < TOLERANCE
+        );
+        assert!(
+            (pressures.top - TEST_TOP_IMPULSE / (cap_area * TEST_SAMPLE_DURATION)).abs()
+                < TOLERANCE
+        );
+        assert!(
+            (pressures.bottom - TEST_BOTTOM_IMPULSE / (cap_area * TEST_SAMPLE_DURATION)).abs()
+                < TOLERANCE
+        );
+        assert!((pressures.total - EXPECTED_TOTAL_PRESSURE).abs() < TOLERANCE);
+        assert!((pressures.total - weighted_average).abs() < TOLERANCE);
     }
 
     #[test]
