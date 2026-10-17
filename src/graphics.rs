@@ -1,6 +1,7 @@
-//! Batched particle rendering with kinetic-energy colors and depth shading.
+//! Batched particles and 3D visualization of the Stirling mechanism.
 
 use std::f32::consts::{
+    FRAC_PI_2,
     PI,
     TAU, //
 };
@@ -16,14 +17,20 @@ use macroquad::prelude::{
     ORANGE,
     Vec2,
     Vec3,
+    draw_line_3d,
     vec3, //
 };
 
-use crate::particle::Particle;
-use crate::physics;
-use crate::simulation::{
+use crate::engine::{
+    ChamberGeometry,
+    PowerPistons, //
+};
+use crate::gas as physics;
+use crate::gas::{
     COLLISION_FLASH_DURATION,
-    INITIAL_SPEED_LIMIT, //
+    INITIAL_SPEED_LIMIT,
+    PARTICLE_MASS, //
+    Particle,
 };
 
 // Keep each batch within Macroquad's vertex and index buffer limits.
@@ -38,9 +45,8 @@ const HOT_COLOR: Color = Color::from_rgba(255, 67, 62, 255);
 
 // For independent velocities uniform in [-v_max, v_max], the expected
 // kinetic energy in 3D is m * v_max^2 / 2. Keep this scale independent of
-// the temperature slider, so heating the gas changes its color distribution.
-const NORMAL_PARTICLE_ENERGY: f32 =
-    crate::particle::PARTICLE_MASS * INITIAL_SPEED_LIMIT * INITIAL_SPEED_LIMIT / 2.0;
+// the heater control, so heating the gas changes its color distribution.
+const NORMAL_PARTICLE_ENERGY: f32 = PARTICLE_MASS * INITIAL_SPEED_LIMIT * INITIAL_SPEED_LIMIT / 2.0;
 const HOT_ENERGY_MULTIPLIER: f32 = 3.0;
 
 // Camera-space light components: right, up, and toward the viewer.
@@ -59,6 +65,7 @@ pub const DRAW_CALL_INDEX_CAPACITY: usize = 60_000;
 /// Radius and height of the cylindrical chamber in simulation units.
 ///
 /// Both values are positive and refer to the chamber's inner dimensions.
+#[derive(Clone, Copy)]
 pub struct CylinderDimensions {
     pub radius: f32,
     pub height: f32,
@@ -76,7 +83,7 @@ fn mix_color(first: Color, second: Color, amount: f32) -> Color {
     }
 }
 
-/// Maps *individual thermal kinetic energy* to a fixed blue/orange/red scale.
+/// Maps each marker's thermal kinetic energy to a fixed blue/orange/red scale.
 fn kinetic_energy_color(energy: f32) -> Color {
     if energy <= NORMAL_PARTICLE_ENERGY {
         mix_color(COLD_COLOR, NORMAL_COLOR, energy / NORMAL_PARTICLE_ENERGY)
@@ -372,188 +379,329 @@ impl ParticleRenderer {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+// Tubular outlines give the cylinder visible depth without solid walls.
+pub(crate) const CYLINDER_RING_SEGMENTS: usize = 96;
+const CYLINDER_VERTICAL_GUIDES: usize = 8;
+pub(crate) const FRAME_TUBE_SIDES: usize = 8;
+pub(crate) const FRAME_TUBE_RADIUS: f32 = 0.035;
+const FRAME_AMBIENT_LIGHT: f32 = 0.65;
+const FRAME_DIFFUSE_LIGHT: f32 = 0.35;
+const FRAME_LIGHT_DIRECTION: Vec3 = Vec3::new(0.4, 0.7, 0.6);
 
-    use crate::simulation::{
-        CHAMBER_HEIGHT,
-        CHAMBER_RADIUS,
-        PARTICLE_COUNT_PRESETS, //
-    };
+/// Appends a tubular outline to a mesh, using a supplied centerline and basis.
+///
+/// The basis vectors describe a perpendicular cross-section at each point.
+/// The triangles face outward for both circular rims and vertical guides.
+pub(crate) fn append_tube(
+    mesh: &mut Mesh,
+    sections: usize,
+    closed: bool,
+    color: Color,
+    mut cross_section: impl FnMut(usize) -> (Vec3, Vec3, Vec3),
+) {
+    let first_vertex = mesh.vertices.len();
+    let light_direction = FRAME_LIGHT_DIRECTION.normalize();
 
-    const VERTICES_PER_TRIANGLE: usize = 3;
-    const TEST_BACKGROUND: Color = Color::from_rgba(12, 18, 30, 255);
-    const TEST_CAMERA_POSITION: Vec3 = Vec3::new(0.0, 0.0, 8.0);
-    const TEST_CAMERA_TRANSLATION: Vec3 = Vec3::new(1.0, -2.0, 3.0);
-    const FLOAT_TOLERANCE: f32 = 1e-6;
+    for section in 0..sections {
+        let (center, axis_u, axis_v) = cross_section(section);
 
-    fn test_camera() -> Camera3D {
-        Camera3D {
-            position: TEST_CAMERA_POSITION,
-            target: Vec3::ZERO,
-            up: Vec3::Y,
-            ..Default::default()
+        for side in 0..FRAME_TUBE_SIDES {
+            let angle = TAU * side as f32 / FRAME_TUBE_SIDES as f32;
+            let (sin_angle, cos_angle) = angle.sin_cos();
+            let normal = axis_u * cos_angle + axis_v * sin_angle;
+            let position = center + normal * FRAME_TUBE_RADIUS;
+            let brightness =
+                FRAME_AMBIENT_LIGHT + FRAME_DIFFUSE_LIGHT * normal.dot(light_direction).max(0.0);
+            let shaded_color = Color {
+                r: color.r * brightness,
+                g: color.g * brightness,
+                b: color.b * brightness,
+                a: color.a,
+            };
+
+            mesh.vertices
+                .push(Vertex::new2(position, Vec2::ZERO, shaded_color));
         }
     }
 
-    #[test]
-    fn sphere_mesh_indices_are_valid_and_face_outward() {
-        let sphere = SphereTemplate::new();
-        let (triangles, remainder) = sphere.indices.as_chunks::<VERTICES_PER_TRIANGLE>();
+    let segments = if closed { sections } else { sections - 1 };
 
-        assert!(remainder.is_empty());
+    for section in 0..segments {
+        let next_section = (section + 1) % sections;
 
-        for triangle in triangles {
-            let a = sphere.positions[triangle[0] as usize];
-            let b = sphere.positions[triangle[1] as usize];
-            let c = sphere.positions[triangle[2] as usize];
+        for side in 0..FRAME_TUBE_SIDES {
+            let next_side = (side + 1) % FRAME_TUBE_SIDES;
+            let a = (first_vertex + section * FRAME_TUBE_SIDES + side) as u16;
+            let b = (first_vertex + next_section * FRAME_TUBE_SIDES + side) as u16;
+            let c = (first_vertex + section * FRAME_TUBE_SIDES + next_side) as u16;
+            let d = (first_vertex + next_section * FRAME_TUBE_SIDES + next_side) as u16;
 
-            let outward = (b - a).cross(c - a).dot(a + b + c);
-            assert!(outward > 0.0, "sphere triangle is inverted or degenerate");
+            mesh.indices.extend([a, c, b, b, c, d]);
         }
-    }
-
-    #[test]
-    fn shading_matches_template_vertices() {
-        let mut sphere = SphereTemplate::new();
-        sphere.update_lighting(&test_camera());
-        assert_eq!(sphere.positions.len(), sphere.brightness.len());
-
-        for &brightness in &sphere.brightness {
-            assert!((AMBIENT_LIGHT..=1.0).contains(&brightness));
-        }
-    }
-
-    #[test]
-    fn visible_surface_brightness_is_stable_while_orbiting() {
-        let front_camera = test_camera();
-        let back_camera = Camera3D {
-            position: -TEST_CAMERA_POSITION,
-            ..test_camera()
-        };
-        let front_light = camera_light_direction(&front_camera);
-        let back_light = camera_light_direction(&back_camera);
-
-        let front_brightness = lambert_brightness(Vec3::Z, front_light);
-        let back_brightness = lambert_brightness(Vec3::NEG_Z, back_light);
-
-        assert!((front_brightness - back_brightness).abs() < FLOAT_TOLERANCE);
-        assert!(front_brightness > AMBIENT_LIGHT);
-    }
-
-    #[test]
-    fn kinetic_colors_use_an_absolute_energy_scale() {
-        let low = kinetic_energy_color(0.0);
-        let middle = kinetic_energy_color(NORMAL_PARTICLE_ENERGY);
-        let high = kinetic_energy_color(NORMAL_PARTICLE_ENERGY * HOT_ENERGY_MULTIPLIER);
-
-        assert_eq!(low, COLD_COLOR);
-        assert_eq!(middle, NORMAL_COLOR);
-        assert_eq!(high, HOT_COLOR);
-        assert_eq!(kinetic_energy_color(f32::MAX), HOT_COLOR);
-
-        let between = kinetic_energy_color(NORMAL_PARTICLE_ENERGY / 2.0);
-        assert!(between.b > NORMAL_COLOR.b);
-        assert!(between.r < NORMAL_COLOR.r);
-    }
-
-    #[test]
-    fn collision_highlight_fades_without_changing_alpha() {
-        let base = kinetic_energy_color(NORMAL_PARTICLE_ENERGY);
-        let just_collided = collision_color(base, COLLISION_FLASH_DURATION);
-        let expired = collision_color(base, 0.0);
-
-        assert!(just_collided.g > base.g);
-        assert!(just_collided.b > base.b);
-        assert_eq!(just_collided.a, base.a);
-        assert_eq!(expired, base);
-    }
-
-    #[test]
-    fn far_particles_fade_more_than_near_particles() {
-        let fade = DepthFade::new(&test_camera(), CHAMBER_RADIUS, CHAMBER_HEIGHT);
-        let near = vec3(0.0, 0.0, CHAMBER_RADIUS);
-        let far = vec3(0.0, 0.0, -CHAMBER_RADIUS);
-        let near_amount = fade.amount(near);
-        let far_amount = fade.amount(far);
-
-        assert!(near_amount.abs() < FLOAT_TOLERANCE);
-        assert!((far_amount - DEPTH_FADE_STRENGTH).abs() < FLOAT_TOLERANCE);
-        assert!(near_amount < far_amount);
-
-        let near_color = mix_color(NORMAL_COLOR, TEST_BACKGROUND, near_amount);
-        let far_color = mix_color(NORMAL_COLOR, TEST_BACKGROUND, far_amount);
-        assert!(near_color.r > far_color.r);
-        assert_eq!(far_color.a, NORMAL_COLOR.a);
-    }
-
-    #[test]
-    fn panning_does_not_change_depth_fade() {
-        let first = test_camera();
-        let second = Camera3D {
-            position: first.position + TEST_CAMERA_TRANSLATION,
-            target: first.target + TEST_CAMERA_TRANSLATION,
-            ..test_camera()
-        };
-        let near = vec3(0.0, 0.0, CHAMBER_RADIUS);
-        let first_fade = DepthFade::new(&first, CHAMBER_RADIUS, CHAMBER_HEIGHT);
-        let second_fade = DepthFade::new(&second, CHAMBER_RADIUS, CHAMBER_HEIGHT);
-
-        assert!((first_fade.amount(near) - second_fade.amount(near)).abs() < FLOAT_TOLERANCE);
-    }
-
-    #[test]
-    fn depth_fade_uses_cylindrical_projection() {
-        let camera = Camera3D {
-            position: vec3(0.0, TEST_CAMERA_POSITION.y + CHAMBER_HEIGHT, CHAMBER_RADIUS),
-            target: Vec3::ZERO,
-            ..test_camera()
-        };
-        let fade = DepthFade::new(&camera, CHAMBER_RADIUS, CHAMBER_HEIGHT);
-        let projected_radius = CHAMBER_RADIUS
-            * (fade.forward.x * fade.forward.x + fade.forward.z * fade.forward.z).sqrt()
-            + CHAMBER_HEIGHT / 2.0 * fade.forward.y.abs();
-
-        assert!((fade.half_extent - projected_radius).abs() < FLOAT_TOLERANCE);
-    }
-
-    #[test]
-    fn batches_cover_all_particles_without_overflowing_indices() {
-        let mut renderer = ParticleRenderer::new();
-        let particle_count = *PARTICLE_COUNT_PRESETS
-            .last()
-            .expect("presets must not be empty");
-        renderer.resize_batches(particle_count);
-
-        let total_particles: usize = renderer
-            .batches
-            .iter()
-            .map(|mesh| mesh.vertices.len() / renderer.template.positions.len())
-            .sum();
-
-        assert_eq!(total_particles, particle_count);
-
-        for mesh in &renderer.batches {
-            assert!(mesh.vertices.len() < DRAW_CALL_VERTEX_CAPACITY);
-            assert!(mesh.indices.len() < DRAW_CALL_INDEX_CAPACITY);
-            assert!(
-                mesh.indices
-                    .iter()
-                    .all(|&index| (index as usize) < mesh.vertices.len())
-            );
-        }
-    }
-
-    #[test]
-    fn resizing_rebuilds_only_the_batch_layout() {
-        let mut renderer = ParticleRenderer::new();
-
-        renderer.resize_batches(PARTICLES_PER_BATCH);
-        assert_eq!(renderer.batches.len(), 1);
-
-        renderer.resize_batches(PARTICLES_PER_BATCH + 1);
-        assert_eq!(renderer.batches.len(), 2);
-        assert_eq!(renderer.particle_count, PARTICLES_PER_BATCH + 1);
     }
 }
+
+/// Static cylindrical wireframe with small, shaded, three-dimensional tubes.
+///
+/// Constructed once and submitted as one mesh each frame. The frame is only
+/// visual; the collision boundary still uses the dimensions of the cylinder.
+pub struct CylinderFrame {
+    mesh: Mesh,
+}
+
+impl CylinderFrame {
+    /// Builds two circular rims and evenly spaced vertical supports.
+    pub fn new(chamber: CylinderDimensions, color: Color) -> Self {
+        assert!(chamber.radius.is_finite() && chamber.radius > 0.0);
+        assert!(chamber.height.is_finite() && chamber.height > 0.0);
+
+        let mut mesh = Mesh {
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            texture: None,
+        };
+        let half_height = chamber.height / 2.0;
+
+        for y in [-half_height, half_height] {
+            append_tube(&mut mesh, CYLINDER_RING_SEGMENTS, true, color, |section| {
+                let angle = TAU * section as f32 / CYLINDER_RING_SEGMENTS as f32;
+                let (sin_angle, cos_angle) = angle.sin_cos();
+                let radial = vec3(cos_angle, 0.0, sin_angle);
+
+                (radial * chamber.radius + Vec3::Y * y, radial, Vec3::Y)
+            });
+        }
+
+        for guide in 0..CYLINDER_VERTICAL_GUIDES {
+            let angle = TAU * guide as f32 / CYLINDER_VERTICAL_GUIDES as f32;
+            let (sin_angle, cos_angle) = angle.sin_cos();
+            let radial = vec3(cos_angle, 0.0, sin_angle);
+            let lateral = vec3(sin_angle, 0.0, -cos_angle);
+
+            append_tube(&mut mesh, 2, false, color, |section| {
+                let y = if section == 0 {
+                    -half_height
+                } else {
+                    half_height
+                };
+                (radial * chamber.radius + Vec3::Y * y, radial, lateral)
+            });
+        }
+
+        assert!(mesh.vertices.len() <= u16::MAX as usize);
+        assert!(mesh.vertices.len() < DRAW_CALL_VERTEX_CAPACITY);
+        assert!(mesh.indices.len() < DRAW_CALL_INDEX_CAPACITY);
+
+        Self { mesh }
+    }
+
+    /// Places an otherwise identical frame around a horizontally offset chamber.
+    pub fn at_x(chamber: CylinderDimensions, color: Color, center_x: f32) -> Self {
+        let mut frame = Self::new(chamber, color);
+        for vertex in &mut frame.mesh.vertices {
+            vertex.position.x += center_x;
+        }
+        frame
+    }
+
+    /// Submits the existing frame geometry without regenerating it.
+    pub fn draw(&self) {
+        draw_mesh(&self.mesh);
+    }
+}
+
+const LEFT_COLOR: Color = Color::from_rgba(241, 145, 92, 255);
+const RIGHT_COLOR: Color = Color::from_rgba(110, 189, 255, 255);
+const CONNECTOR_COLOR: Color = Color::from_rgba(180, 224, 209, 255);
+const PISTON_COLOR: Color = Color::from_rgba(184, 193, 203, 255);
+const PISTON_BOTTOM_COLOR: Color = Color::from_rgba(108, 132, 158, 255);
+const PISTON_THICKNESS: f32 = 0.10;
+const PISTON_EDGE_CLEARANCE: f32 = 0.04;
+
+/// Reusable disk translated vertically without rebuilding its mesh.
+struct PistonDisc {
+    mesh: Mesh,
+    y: f32,
+}
+
+impl PistonDisc {
+    fn new(center_x: f32, chamber_radius: f32) -> Self {
+        let mut mesh = Mesh {
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            texture: None,
+        };
+        let radius = chamber_radius - PISTON_EDGE_CLEARANCE;
+        mesh.vertices.push(Vertex::new2(
+            vec3(center_x, PISTON_THICKNESS, 0.0),
+            Vec2::ZERO,
+            PISTON_COLOR,
+        ));
+        mesh.vertices.push(Vertex::new2(
+            vec3(center_x, 0.0, 0.0),
+            Vec2::ZERO,
+            PISTON_BOTTOM_COLOR,
+        ));
+        for index in 0..CYLINDER_RING_SEGMENTS {
+            let angle = TAU * index as f32 / CYLINDER_RING_SEGMENTS as f32;
+            let (sin, cos) = angle.sin_cos();
+            for (y, color) in [(PISTON_THICKNESS, PISTON_COLOR), (0.0, PISTON_BOTTOM_COLOR)] {
+                mesh.vertices.push(Vertex::new2(
+                    vec3(center_x + radius * cos, y, radius * sin),
+                    Vec2::ZERO,
+                    color,
+                ));
+            }
+        }
+        for index in 0..CYLINDER_RING_SEGMENTS {
+            let next = (index + 1) % CYLINDER_RING_SEGMENTS;
+            let upper = (2 + 2 * index) as u16;
+            let lower = upper + 1;
+            let next_upper = (2 + 2 * next) as u16;
+            let next_lower = next_upper + 1;
+            mesh.indices.extend([0, next_upper, upper]);
+            mesh.indices.extend([1, lower, next_lower]);
+            mesh.indices.extend([upper, next_upper, lower]);
+            mesh.indices.extend([next_upper, next_lower, lower]);
+        }
+        Self { mesh, y: 0.0 }
+    }
+
+    fn draw(&mut self, face_y: f32) {
+        let delta = face_y - self.y;
+        for vertex in &mut self.mesh.vertices {
+            vertex.position.y += delta;
+        }
+        self.y = face_y;
+        draw_mesh(&self.mesh);
+    }
+}
+
+/// Colors distinguish the heated left cylinder from the cooled right one.
+pub struct ConnectedChamberVisual {
+    left: CylinderFrame,
+    right: CylinderFrame,
+    left_piston: PistonDisc,
+    right_piston: PistonDisc,
+    geometry: ChamberGeometry,
+}
+
+impl ConnectedChamberVisual {
+    pub fn new(geometry: ChamberGeometry) -> Self {
+        let dimensions = CylinderDimensions {
+            radius: geometry.cylinder_radius,
+            height: geometry.cylinder_height,
+        };
+        Self {
+            left: CylinderFrame::at_x(dimensions, LEFT_COLOR, -geometry.cylinder_offset),
+            right: CylinderFrame::at_x(dimensions, RIGHT_COLOR, geometry.cylinder_offset),
+            left_piston: PistonDisc::new(-geometry.cylinder_offset, geometry.cylinder_radius),
+            right_piston: PistonDisc::new(geometry.cylinder_offset, geometry.cylinder_radius),
+            geometry,
+        }
+    }
+
+    pub fn draw(&mut self, left_face_y: f32, right_face_y: f32) {
+        self.left.draw();
+        self.right.draw();
+        self.left_piston.draw(left_face_y);
+        self.right_piston.draw(right_face_y);
+
+        // Circular connecting tube, open to each bore and centered low
+        // enough for the two piston faces to travel above its upper edge.
+        const TUBE_SEGMENTS: usize = 24;
+        const LONGITUDINAL_STRIDE: usize = 3;
+        let geometry = self.geometry;
+        let start_x = -geometry.connector_half_length();
+        let end_x = geometry.connector_half_length();
+        let point = |x: f32, angle: f32| -> Vec3 {
+            vec3(
+                x,
+                geometry.connector_center_y + geometry.connector_radius * angle.cos(),
+                geometry.connector_radius * angle.sin(),
+            )
+        };
+        for segment in 0..TUBE_SEGMENTS {
+            let angle = TAU * segment as f32 / TUBE_SEGMENTS as f32;
+            let next = TAU * (segment + 1) as f32 / TUBE_SEGMENTS as f32;
+            for x in [start_x, end_x] {
+                draw_line_3d(point(x, angle), point(x, next), CONNECTOR_COLOR);
+            }
+            if segment % LONGITUDINAL_STRIDE == 0 {
+                draw_line_3d(point(start_x, angle), point(end_x, angle), CONNECTOR_COLOR);
+            }
+        }
+    }
+}
+
+const WHEEL_SEGMENTS: usize = 48;
+const WHEEL_RADIUS: f32 = 2.10;
+const SHAFT_COLOR: Color = Color::from_rgba(198, 202, 219, 255);
+const WHEEL_COLOR: Color = Color::from_rgba(223, 187, 112, 255);
+const HOT_ROD_COLOR: Color = Color::from_rgba(251, 167, 114, 255);
+const COLD_ROD_COLOR: Color = Color::from_rgba(135, 198, 246, 255);
+
+pub struct ShaftVisual {
+    geometry: ChamberGeometry,
+}
+
+impl ShaftVisual {
+    pub fn new(geometry: ChamberGeometry) -> Self {
+        Self { geometry }
+    }
+
+    /// Draws a common X-axis shaft, flywheel rim, and both phase-offset rods.
+    pub fn draw(&self, pistons: &PowerPistons) {
+        let geometry = self.geometry;
+        let shaft_y = pistons.shaft_height();
+        let radius = pistons.stroke() / 2.0;
+        let offset = geometry.cylinder_offset;
+        draw_line_3d(
+            vec3(-offset - 0.5, shaft_y, 0.0),
+            vec3(offset + 0.5, shaft_y, 0.0),
+            SHAFT_COLOR,
+        );
+
+        let wheel_center = vec3(0.0, shaft_y, 0.0);
+        for segment in 0..WHEEL_SEGMENTS {
+            let angle = TAU * segment as f32 / WHEEL_SEGMENTS as f32;
+            let next = TAU * (segment + 1) as f32 / WHEEL_SEGMENTS as f32;
+            let point = |theta: f32| -> Vec3 {
+                wheel_center + vec3(0.0, WHEEL_RADIUS * theta.cos(), WHEEL_RADIUS * theta.sin())
+            };
+            draw_line_3d(point(angle), point(next), WHEEL_COLOR);
+        }
+        for spoke in 0..4 {
+            let angle = pistons.angle() + TAU * spoke as f32 / 4.0;
+            draw_line_3d(
+                wheel_center,
+                wheel_center + vec3(0.0, WHEEL_RADIUS * angle.cos(), WHEEL_RADIUS * angle.sin()),
+                WHEEL_COLOR,
+            );
+        }
+
+        for (x, face_y, phase, color) in [
+            (-offset, pistons.left().face_y, 0.0, HOT_ROD_COLOR),
+            (offset, pistons.right().face_y, FRAC_PI_2, COLD_ROD_COLOR),
+        ] {
+            let crank_angle = pistons.angle() + phase;
+            let pin = vec3(
+                x,
+                shaft_y + radius * crank_angle.cos(),
+                radius * crank_angle.sin(),
+            );
+            let journal = vec3(x, shaft_y, 0.0);
+            let piston_joint = vec3(x, face_y, 0.0);
+            draw_line_3d(journal, pin, WHEEL_COLOR);
+            draw_line_3d(pin, piston_joint, color);
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "../tests/unit/render.rs"]
+mod tests_render;
+
+#[cfg(test)]
+#[path = "../tests/unit/cylinder_frame.rs"]
+mod tests_cylinder_frame;

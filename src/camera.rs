@@ -18,7 +18,7 @@ use macroquad::prelude::{
     vec3, //
 };
 
-const INITIAL_POSITION: Vec3 = Vec3::new(6.0, 4.0, 6.0);
+const INITIAL_POSITION: Vec3 = Vec3::new(8.4, 5.6, 8.4);
 const ORBIT_CENTER: Vec3 = Vec3::ZERO;
 
 const ORBIT_SENSITIVITY: f32 = 0.005;
@@ -35,6 +35,7 @@ const MAX_DISTANCE: f32 = 25.0;
 /// the viewport without changing the point around which the camera rotates.
 pub struct OrbitCamera {
     distance: f32,
+    view_scale: f32,
     yaw: f32,
     pitch: f32,
     pan_offset: Vec2,
@@ -43,13 +44,15 @@ pub struct OrbitCamera {
 }
 
 impl OrbitCamera {
-    /// Creates a camera with the initial chamber-centered view.
-    pub fn new() -> Self {
+    /// Frames a larger or smaller chamber and preserves that view on reset.
+    pub fn with_scale(view_scale: f32) -> Self {
+        assert!(view_scale.is_finite() && view_scale > 0.0);
         let offset = INITIAL_POSITION - ORBIT_CENTER;
         let distance = offset.length();
 
         Self {
-            distance,
+            distance: distance * view_scale,
+            view_scale,
             yaw: offset.x.atan2(offset.z),
             pitch: (offset.y / distance).asin(),
             pan_offset: Vec2::ZERO,
@@ -60,7 +63,7 @@ impl OrbitCamera {
 
     /// Restores the original orbit, framing, and zoom level.
     pub fn reset(&mut self) {
-        *self = Self::new();
+        *self = Self::with_scale(self.view_scale);
     }
 
     /// Applies keyboard and, when enabled, pointer input for one frame.
@@ -140,7 +143,10 @@ impl OrbitCamera {
         if scroll_y != 0.0 {
             let zoom_factor = (-scroll_y * ZOOM_SENSITIVITY).exp();
 
-            self.distance = (self.distance * zoom_factor).clamp(MIN_DISTANCE, MAX_DISTANCE);
+            self.distance = (self.distance * zoom_factor).clamp(
+                MIN_DISTANCE * self.view_scale,
+                MAX_DISTANCE * self.view_scale,
+            );
         }
     }
 
@@ -177,59 +183,5 @@ impl OrbitCamera {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    const TEST_PAN: Vec2 = Vec2::new(1.25, -0.75);
-    const TEST_YAW_CHANGE: f32 = 0.6;
-    const TEST_PITCH_CHANGE: f32 = 0.3;
-    const POSITION_TOLERANCE: f32 = 1e-4;
-
-    /// Coordinates of the chamber center in the camera's viewing frame.
-    fn chamber_view_position(camera: &Camera3D) -> Vec3 {
-        let forward = (camera.target - camera.position).normalize();
-        let right = forward.cross(camera.up).normalize();
-        let up = right.cross(forward).normalize();
-        let to_chamber = ORBIT_CENTER - camera.position;
-
-        vec3(
-            to_chamber.dot(right),
-            to_chamber.dot(up),
-            to_chamber.dot(forward),
-        )
-    }
-
-    #[test]
-    fn orbit_preserves_panned_chamber_framing() {
-        let mut camera = OrbitCamera::new();
-        camera.pan_offset = TEST_PAN;
-
-        let before = chamber_view_position(&camera.camera());
-
-        camera.yaw += TEST_YAW_CHANGE;
-        camera.pitch += TEST_PITCH_CHANGE;
-
-        let after = chamber_view_position(&camera.camera());
-
-        assert!((after - before).length() < POSITION_TOLERANCE);
-        assert!((after.x + TEST_PAN.x).abs() < POSITION_TOLERANCE);
-        assert!((after.y + TEST_PAN.y).abs() < POSITION_TOLERANCE);
-        assert!((after.z - camera.distance).abs() < POSITION_TOLERANCE);
-    }
-
-    #[test]
-    fn reset_clears_pan_and_restores_initial_view() {
-        let mut camera = OrbitCamera::new();
-        camera.pan_offset = TEST_PAN;
-        camera.yaw += TEST_YAW_CHANGE;
-
-        camera.reset();
-
-        let original = OrbitCamera::new().camera();
-        let actual = camera.camera();
-
-        assert!((actual.position - original.position).length() < POSITION_TOLERANCE);
-        assert!((actual.target - original.target).length() < POSITION_TOLERANCE);
-        assert_eq!(camera.pan_offset, Vec2::ZERO);
-    }
-}
+#[path = "../tests/unit/camera.rs"]
+mod tests;
