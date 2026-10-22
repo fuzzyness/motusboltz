@@ -30,8 +30,8 @@ fn local_temperature_excludes_uniform_drift() {
     let mut sample = KineticMoments::default();
     sample.record(vec3(DRIFT + 1.0, 0.0, 0.0));
     sample.record(vec3(DRIFT - 1.0, 0.0, 0.0));
-    // E_thermal = 1 reduced energy unit, N-1 = 1, T = 2/3 units.
-    let expected_kelvin = 2.0 * KELVIN_PER_UNIT / 3.0;
+    // E_thermal = particle mass, N-1 = 1, k_B = 1.
+    let expected_kelvin = 2.0 * PARTICLE_MASS as f64 * KELVIN_PER_UNIT / 3.0;
     assert!((sample.temperature_kelvin().unwrap() - expected_kelvin).abs() < TEST_TOLERANCE);
 }
 

@@ -82,3 +82,78 @@ fn visits_each_pair_in_the_same_cell_once() {
 
     assert_eq!(grid.resolve_collisions(&mut particles, |_, _| {}), 3);
 }
+
+#[test]
+fn every_neighbor_direction_is_checked_once() {
+    const BORDER_INSET: f32 = 0.01;
+    let mut grid = SpatialGrid::new(CHAMBER_DIAMETER, PARTICLE_RADIUS);
+    let cell = grid.cells_per_axis / 2;
+    let low = -grid.chamber_half_size + cell as f32 * grid.cell_size;
+    let high = low + grid.cell_size;
+    let center = (low + high) / 2.0;
+    for dx in -1..=1 {
+        for dy in -1..=1 {
+            for dz in -1..=1 {
+                if dx == 0 && dy == 0 && dz == 0 {
+                    continue;
+                }
+                let mut a = Vec3::ZERO;
+                let mut b = Vec3::ZERO;
+                for (axis, direction) in [dx, dy, dz].into_iter().enumerate() {
+                    (a[axis], b[axis]) = match direction {
+                        -1 => (low + BORDER_INSET, low - BORDER_INSET),
+                        1 => (high - BORDER_INSET, high + BORDER_INSET),
+                        _ => (center, center),
+                    };
+                }
+                let velocity = (b - a).normalize() * PARTICLE_SPEED;
+                let mut pair = [
+                    Particle {
+                        position: a,
+                        velocity,
+                    },
+                    Particle {
+                        position: b,
+                        velocity: -velocity,
+                    },
+                ];
+                let mut collisions = 0;
+                assert_eq!(
+                    grid.resolve_collisions(&mut pair, |_, _| collisions += 1),
+                    1
+                );
+                assert_eq!(collisions, 1, "missed direction {dx},{dy},{dz}");
+            }
+        }
+    }
+}
+
+#[test]
+fn halo_handles_all_corners_and_does_not_wrap_opposite_faces() {
+    const CORNER_INSET_RADII: f32 = 0.5;
+    let mut grid = SpatialGrid::new(CHAMBER_DIAMETER, PARTICLE_RADIUS);
+    let corner = grid.chamber_half_size - PARTICLE_RADIUS * CORNER_INSET_RADII;
+    for x in [-1.0, 1.0] {
+        for y in [-1.0, 1.0] {
+            for z in [-1.0, 1.0] {
+                let position = vec3(x, y, z) * corner;
+                let inward = -position.normalize();
+                let mut pair = [
+                    Particle {
+                        position,
+                        velocity: inward,
+                    },
+                    Particle {
+                        position: position + inward * PARTICLE_RADIUS,
+                        velocity: -inward,
+                    },
+                ];
+                let mut impacts = 0;
+                assert_eq!(grid.resolve_collisions(&mut pair, |_, _| impacts += 1), 1);
+                assert_eq!(impacts, 1);
+            }
+        }
+    }
+    let mut opposite = [particle(-corner, 0.0), particle(corner, 0.0)];
+    assert_eq!(grid.resolve_collisions(&mut opposite, |_, _| {}), 0);
+}

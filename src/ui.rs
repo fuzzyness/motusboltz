@@ -1,4 +1,5 @@
-//! User interface and real-time simulation loop.
+//! Main loop: input, simulation stepping, 3D scene, HUD text, buttons,
+//! sliders and charts.
 
 use macroquad::prelude::{
     Color,
@@ -21,11 +22,12 @@ use macroquad::prelude::{
 };
 
 use crate::camera::OrbitCamera;
+use crate::charts::LiveCharts;
 use crate::engine::{
     ChamberGeometry,
     ConnectedChambers,
     KickDirection,
-    MotionMode, //
+    //
 };
 use crate::gas::{
     DEFAULT_INITIAL_CONCENTRATION_MOL_PER_L,
@@ -36,8 +38,8 @@ use crate::gas::{
 use crate::graphics::{
     ConnectedChamberVisual,
     CylinderDimensions,
-    ParticleRenderer, //
-    ShaftVisual,
+    ParticleRenderer,
+    ShaftVisual, //
 };
 use crate::slider::Slider;
 
@@ -57,16 +59,24 @@ const BUTTON_GAP_X: f32 = 10.0;
 const BUTTON_FONT_SIZE: f32 = 18.0;
 const BUTTON_WIDTH: f32 = (CONTROL_WIDTH - BUTTON_GAP_X) / 2.0;
 #[cfg(test)]
-const BUTTON_ROWS: usize = 3;
+const BUTTON_ROWS: usize = 2;
 const HUD_X: f32 = 20.0;
 const TITLE_Y: f32 = 36.0;
 const STATS_START_Y: f32 = 75.0;
 const HUD_LINE_HEIGHT: f32 = 25.0;
 const HUD_FONT_SIZE: f32 = 19.0;
 const TITLE_FONT_SIZE: f32 = 28.0;
-const HELP_FONT_SIZE: f32 = 19.0;
+const HELP_FONT_SIZE: f32 = 16.0;
 const HELP_BOTTOM_Y: f32 = 24.0;
-/// Quick presets represent 256, 512, 1,024, 1,536 and 2,048 markers.
+const PASCALS_PER_BAR: f64 = 100_000.0;
+const HELP_TEXT: &str = "1-5: Fill | Space: Pause | A: Kick | T: Reset | R: Camera | G: Graphs";
+const TITLE_RUNNING: &str = "MotusBoltz | Particle dynamics";
+const TITLE_PAUSED: &str = "MotusBoltz | Paused";
+/// Seconds of wall time between HUD text refreshes.
+const STATS_REFRESH_SECONDS: f64 = 0.1;
+/// Clock resolution used for the startup seed, in ticks per second.
+const SEED_TICKS_PER_SECOND: f64 = 1.0e6;
+/// Keys 1 to 5: 256, 512, 1,024, 1,536 and 2,048 particles.
 const CONCENTRATION_PRESETS: [f32; 5] = [
     MIN_INITIAL_CONCENTRATION_MOL_PER_L,
     0.25,
@@ -82,32 +92,32 @@ const PRESET_KEYS: [KeyCode; CONCENTRATION_PRESETS.len()] = [
     KeyCode::Key5,
 ];
 
+/// On-screen button actions, in button order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DemoAction {
-    ToggleStats,
+enum Action {
     ResetGas,
-    TogglePistons,
-    ToggleMode,
-    KickPositive,
+    TogglePause,
     KickNegative,
 }
 
-/// Button positions are shared by pointer hit testing and drawing.
-const BUTTON_ACTIONS: [DemoAction; 6] = [
-    DemoAction::ToggleStats,
-    DemoAction::ResetGas,
-    DemoAction::TogglePistons,
-    DemoAction::ToggleMode,
-    DemoAction::KickNegative,
-    DemoAction::KickPositive,
-];
+const BUTTON_ACTIONS: [Action; 3] = [Action::ResetGas, Action::TogglePause, Action::KickNegative];
 
+/// Left edge, top edge and width of button `index`. Buttons fill a
+/// two-column grid; the third (Kick) spans the full width.
 fn button_rect(index: usize, screen_width: f32) -> (f32, f32, f32) {
     let col = (index % 2) as f32;
     let row = (index / 2) as f32;
     let x = screen_width - CONTROL_WIDTH - RIGHT_MARGIN + col * (BUTTON_WIDTH + BUTTON_GAP_X);
     let y = CONTROL_TOP + row * (BUTTON_HEIGHT + BUTTON_GAP);
-    (x, y, BUTTON_WIDTH)
+    (
+        x,
+        y,
+        if index == 2 {
+            CONTROL_WIDTH
+        } else {
+            BUTTON_WIDTH
+        },
+    )
 }
 
 fn button_at(x: f32, y: f32, bx: f32, by: f32, width: f32) -> bool {
@@ -115,7 +125,7 @@ fn button_at(x: f32, y: f32, bx: f32, by: f32, width: f32) -> bool {
 }
 
 /// Returns whether the pointer overlaps a button and its click action.
-fn demo_buttons() -> (bool, Option<DemoAction>) {
+fn buttons() -> (bool, Option<Action>) {
     let (x, y) = mouse_position();
     let hovered = BUTTON_ACTIONS
         .iter()
@@ -144,22 +154,15 @@ fn draw_button(x: f32, y: f32, width: f32, label: &str) {
     );
 }
 
-fn draw_buttons(show_stats: bool, pistons_running: bool, mode: MotionMode) {
+fn draw_buttons(paused: bool) {
     let labels = [
-        if show_stats {
-            "Hide stats"
+        "Reset (T)",
+        if paused {
+            "Resume (Space)"
         } else {
-            "Show stats"
+            "Pause (Space)"
         },
-        "Reset gas",
-        if pistons_running { "Pause" } else { "Resume" },
-        if mode == MotionMode::Free {
-            "Mode: Free"
-        } else {
-            "Mode: Fixed"
-        },
-        "Kick - (A)",
-        "Kick + (S)",
+        "Kick (A)",
     ];
     for (index, label) in labels.iter().enumerate() {
         let (x, y, width) = button_rect(index, screen_width());
@@ -167,14 +170,15 @@ fn draw_buttons(show_stats: bool, pistons_running: bool, mode: MotionMode) {
     }
 }
 
-/// Formats marker count, temperature, molarity, and estimated ideal-gas pressure.
+/// One HUD line for a cylinder: particle count, temperature, concentration
+/// (mol/L) and ideal-gas pressure estimate.
 fn region_stats(name: &str, sample: GasMeasurements) -> String {
     let temperature = sample
         .temperature_kelvin
         .map_or_else(|| "--".to_owned(), |value| format!("{value:.0}"));
     let pressure = sample.pressure_pa.map_or_else(
         || "--".to_owned(),
-        |value| format!("{:.1}", value / 100_000.0),
+        |value| format!("{:.1}", value / PASCALS_PER_BAR),
     );
     format!(
         "{name}: {} | {temperature} K | {:.2} M | ~{pressure} bar",
@@ -182,60 +186,71 @@ fn region_stats(name: &str, sample: GasMeasurements) -> String {
     )
 }
 
-/// Starts with an evenly spaced helium fill at 300 K in the connected volume.
+/// Extra zoom-out so the passage, crank and flywheel all fit the first view.
+const CAMERA_FRAMING_MARGIN: f32 = 1.25;
+fn initial_camera(geometry: ChamberGeometry) -> OrbitCamera {
+    OrbitCamera::with_scale(
+        CAMERA_FRAMING_MARGIN * geometry.cylinder_radius
+            / ChamberGeometry::scaled(1.0).cylinder_radius,
+    )
+}
+
+/// Seed from the wall clock, so every launch starts from a different gas.
+/// `miniquad::date::now` works natively and in the browser.
+fn clock_seed() -> u64 {
+    (macroquad::miniquad::date::now() * SEED_TICKS_PER_SECOND) as u64
+}
+
+/// Runs the application: a default fill at 300 K with both reservoirs at
+/// 300 K and the flywheel at rest until the first kick.
 pub async fn run() {
+    macroquad::rand::srand(clock_seed());
     let mut simulation =
         ConnectedChambers::with_initial_concentration(DEFAULT_INITIAL_CONCENTRATION_MOL_PER_L);
+    let mut paused = false;
+    let mut charts = LiveCharts::new();
+    let mut show_charts = true;
     let geometry = simulation.geometry();
-    let mut camera = OrbitCamera::with_scale(
-        geometry.cylinder_radius / ChamberGeometry::scaled(1.0).cylinder_radius,
-    );
+    let mut camera = initial_camera(geometry);
     let mut renderer = ParticleRenderer::new();
     let mut chamber = ConnectedChamberVisual::new(geometry);
     let shaft = ShaftVisual::new(geometry);
+    // A cylinder enclosing the whole apparatus, for the particle depth fade.
     let draw_dimensions = CylinderDimensions {
         radius: geometry.cylinder_offset + geometry.cylinder_radius,
-        height: geometry.cylinder_height,
+        height: geometry.grid_side(),
     };
-    let mut concentration_slider =
-        Slider::demo_concentration(DEFAULT_INITIAL_CONCENTRATION_MOL_PER_L);
-    let mut heater_slider = Slider::demo_heater(simulation.heater_percent());
-    let mut show_stats = true;
+    let mut concentration_slider = Slider::concentration(DEFAULT_INITIAL_CONCENTRATION_MOL_PER_L);
+    let mut hot_slider = Slider::hot_temperature(simulation.hot_kelvin());
+    let mut cold_slider = Slider::cold_temperature(simulation.cold_kelvin());
+    // True while a press that started on a button is held, so dragging off
+    // the button does not rotate the camera.
     let mut button_gesture = false;
+    let mut next_stats_refresh = 0.0;
+    let mut stats: Vec<String> = Vec::new();
+    let mut physics_limited_since_readout = false;
 
     loop {
-        let (over_buttons, action) = demo_buttons();
+        let (over_buttons, action) = buttons();
         if !is_mouse_button_down(MouseButton::Left) {
             button_gesture = false;
         }
         button_gesture |= action.is_some();
-        if is_key_pressed(KeyCode::T) || action == Some(DemoAction::ResetGas) {
+        if is_key_pressed(KeyCode::T) || action == Some(Action::ResetGas) {
             simulation.reset();
+            charts.clear();
         }
-        if action == Some(DemoAction::ToggleStats) {
-            show_stats = !show_stats;
+        if is_key_pressed(KeyCode::Space) || action == Some(Action::TogglePause) {
+            paused = !paused;
         }
-        if is_key_pressed(KeyCode::P) || action == Some(DemoAction::TogglePistons) {
-            simulation.set_pistons_running(!simulation.power_pistons().running());
-        }
-        if is_key_pressed(KeyCode::M) || action == Some(DemoAction::ToggleMode) {
-            let next = if simulation.power_pistons().mode() == MotionMode::Free {
-                MotionMode::Controlled
-            } else {
-                MotionMode::Free
-            };
-            simulation.set_piston_mode(next);
-        }
-        if is_key_pressed(KeyCode::S) || action == Some(DemoAction::KickPositive) {
-            simulation.kick_flywheel(KickDirection::Positive);
-        }
-        if is_key_pressed(KeyCode::A) || action == Some(DemoAction::KickNegative) {
+        if is_key_pressed(KeyCode::A) || action == Some(Action::KickNegative) {
             simulation.kick_flywheel(KickDirection::Negative);
         }
 
         for (&key, &concentration) in PRESET_KEYS.iter().zip(&CONCENTRATION_PRESETS) {
             if is_key_pressed(key) {
                 simulation.set_initial_concentration(concentration);
+                charts.clear();
                 concentration_slider.set_value(concentration);
                 break;
             }
@@ -243,19 +258,43 @@ pub async fn run() {
 
         if concentration_slider.update().released {
             simulation.set_initial_concentration(concentration_slider.value());
+            charts.clear();
         }
-        if heater_slider.update().changed {
-            simulation.set_heater_percent(heater_slider.value());
+        if hot_slider.update().changed {
+            simulation.set_hot_kelvin(hot_slider.value());
         }
 
-        simulation.update(get_frame_time());
+        if cold_slider.update().changed {
+            simulation.set_cold_kelvin(cold_slider.value());
+        }
+        if !paused {
+            physics_limited_since_readout |= simulation.update(get_frame_time());
+        }
+        charts.observe(&simulation);
+        if is_key_pressed(KeyCode::G) {
+            show_charts = !show_charts;
+        }
         camera.update(
             !(concentration_slider.blocks_camera()
-                || heater_slider.blocks_camera()
+                || hot_slider.blocks_camera()
+                || cold_slider.blocks_camera()
                 || over_buttons
-                || button_gesture),
+                || button_gesture
+                || (show_charts
+                    && charts.blocks_camera(macroquad::prelude::Vec2::from(mouse_position())))),
         );
-        let view_camera = camera.camera();
+        let mut view_camera = camera.camera();
+        if show_charts {
+            let scene_height =
+                (macroquad::prelude::screen_height() - LiveCharts::reserved_height()).max(1.0);
+            view_camera.viewport = Some((
+                0,
+                LiveCharts::reserved_height() as i32,
+                screen_width() as i32,
+                scene_height as i32,
+            ));
+            view_camera.aspect = Some(screen_width() / scene_height);
+        }
         clear_background(BACKGROUND_COLOR);
         set_camera(&view_camera);
         chamber.draw(
@@ -273,53 +312,63 @@ pub async fn run() {
         );
         set_default_camera();
 
-        draw_text("MotusBoltz", HUD_X, TITLE_Y, TITLE_FONT_SIZE, WHITE);
-        if show_stats {
+        draw_text(
+            if paused { TITLE_PAUSED } else { TITLE_RUNNING },
+            HUD_X,
+            TITLE_Y,
+            TITLE_FONT_SIZE,
+            WHITE,
+        );
+        let now = macroquad::time::get_time();
+        if now >= next_stats_refresh {
+            next_stats_refresh = now + STATS_REFRESH_SECONDS;
             let regions = simulation.measurements();
             let heat = simulation.heat();
             let pistons = simulation.power_pistons();
-            let crank_mode = match pistons.mode() {
-                MotionMode::Free => "Free",
-                MotionMode::Controlled => "Controlled",
-            };
-            let crank_status = if pistons.running() { "" } else { " (paused)" };
-            let stats = [
+            stats = vec![
                 format!(
-                    "Helium: {} markers | {:.4} mol | {} in tube",
+                    "Helium: {} particles | {:.4} mol | {} in passage",
                     simulation.particles.len(),
                     simulation.total_moles(),
                     regions.passage_markers,
                 ),
-                region_stats("Hot", regions.left),
-                region_stats("Cold", regions.right),
+                region_stats("Hot", regions.hot),
+                region_stats("Cold", regions.cold),
                 format!(
-                    "Crank: {crank_mode}{crank_status} | {:+.2} rpm | {:+.2} turns",
+                    "Crank: {:+.2} model rpm | {:+.2} turns",
                     pistons.angular_velocity() * 60.0 / std::f32::consts::TAU,
                     pistons.revolutions(),
                 ),
+                // Signed heat into the gas: negative means the gas lost heat.
                 format!(
-                    "Heat: hot {:+.2} J | cold {:+.2} J",
+                    "Heat into gas: hot {:+.2} J | cold {:+.2} J",
                     simulation.energy_joules(heat.hot),
                     simulation.energy_joules(heat.cold),
                 ),
                 format!(
-                    "Gas work: {:+.2} J | flywheel {:.2} J",
+                    "Gas work: {:+.2} J | flywheel: {:.2} J | kicks: {:+.2} J",
                     simulation.energy_joules(simulation.piston_work_by_gas()),
                     simulation.energy_joules(pistons.kinetic_energy()),
+                    simulation.energy_joules(pistons.starter_work()),
                 ),
-                if pistons.mode() == MotionMode::Free {
-                    format!(
-                        "Energy error: gas {:+.4} J | rotor {:+.4} J",
-                        simulation.energy_joules(simulation.energy_balance_error()),
-                        simulation.energy_joules(simulation.mechanical_balance_error()),
-                    )
-                } else {
-                    format!(
-                        "Energy error: gas {:+.4} J",
-                        simulation.energy_joules(simulation.energy_balance_error()),
-                    )
-                },
+                format!(
+                    "Energy balance error: gas {:+.4} J | shaft {:+.4} J",
+                    simulation.energy_joules(simulation.energy_balance_error()),
+                    simulation.energy_joules(simulation.mechanical_balance_error())
+                ),
+                format!(
+                    "Performance: {} fps{}",
+                    macroquad::time::get_fps(),
+                    if physics_limited_since_readout {
+                        " | physics time limited"
+                    } else {
+                        ""
+                    }
+                ),
             ];
+            physics_limited_since_readout = false;
+        }
+        {
             for (index, line) in stats.iter().enumerate() {
                 draw_text(
                     line,
@@ -332,19 +381,19 @@ pub async fn run() {
         }
 
         draw_text(
-            "1–5: Fill  |  P: Pause  |  M: Mode  |  A/S: Kick  |  T: Reset  |  R: Camera",
+            HELP_TEXT,
             HUD_X,
             macroquad::prelude::screen_height() - HELP_BOTTOM_Y,
             HELP_FONT_SIZE,
             WHITE,
         );
-        draw_buttons(
-            show_stats,
-            simulation.power_pistons().running(),
-            simulation.power_pistons().mode(),
-        );
+        if show_charts {
+            charts.draw();
+        }
+        draw_buttons(paused);
         concentration_slider.draw();
-        heater_slider.draw();
+        hot_slider.draw();
+        cold_slider.draw();
         next_frame().await;
     }
 }

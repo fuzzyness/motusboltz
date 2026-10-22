@@ -1,13 +1,14 @@
 //! Connected-chamber unit tests for `src/engine.rs`.
 
 use super::*;
+const TEST_WARM_KELVIN: f32 = 975.0;
 
 /// Counts in each region for initialization and transfer tests.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct RegionCounts {
-    left: usize,
-    connector: usize,
-    right: usize,
+    hot: usize,
+    passage: usize,
+    cold: usize,
 }
 
 impl ConnectedChambers {
@@ -16,10 +17,6 @@ impl ConnectedChambers {
     fn initial_concentration(&self) -> f64 {
         self.gas
             .initial_concentration(self.particles.len(), self.initial_volume_m3)
-    }
-
-    fn hot_temperature(&self) -> f32 {
-        self.thermal.hot_temperature()
     }
 
     fn contains(&self, position: Vec3) -> bool {
@@ -36,17 +33,13 @@ impl ConnectedChambers {
         let mut counts = RegionCounts::default();
         for particle in &self.particles {
             match self.region(particle.position) {
-                Region::Left => counts.left += 1,
-                Region::Connector => counts.connector += 1,
-                Region::Right => counts.right += 1,
+                Region::Hot => counts.hot += 1,
+                Region::Passage => counts.passage += 1,
+                Region::Cold => counts.cold += 1,
             }
         }
         counts
     }
-}
-
-fn to_kelvin(reduced_temperature: f32) -> f64 {
-    reduced_temperature as f64 * crate::gas::KELVIN_PER_UNIT
 }
 
 // Geometry references belong to the test suite, not the simulator.
@@ -77,9 +70,9 @@ fn initial_gas_is_distributed_without_overlaps() {
     for &count in &[TEST_COUNT, 256, 512, 1_024, 1_536, 2_048] {
         let simulation = insulated(count);
         let regions = simulation.counts();
-        assert!(regions.left > 0);
-        assert!(regions.right > 0);
-        assert_eq!(regions.left + regions.connector + regions.right, count);
+        assert!(regions.hot > 0);
+        assert!(regions.cold > 0);
+        assert_eq!(regions.hot + regions.passage + regions.cold, count);
         assert!(
             simulation
                 .particles
@@ -98,88 +91,93 @@ fn initial_gas_is_distributed_without_overlaps() {
 }
 
 #[test]
-fn connector_stops_just_inside_the_facing_cylinder_walls() {
-    let geometry = ChamberGeometry::default();
-    let inner_wall_x = geometry.cylinder_offset - geometry.cylinder_radius;
-    let tube_end_x = geometry.connector_half_length();
-    assert!(tube_end_x > inner_wall_x);
-    assert!(tube_end_x - inner_wall_x < geometry.connector_radius);
-    assert!(tube_end_x < geometry.cylinder_offset);
-    assert!(2.0 * tube_end_x < 2.0 * geometry.cylinder_offset);
-}
-
-#[test]
-fn shortened_connector_opens_into_both_cylinders() {
-    let geometry = ChamberGeometry::default();
-    let tube_end_x = geometry.connector_half_length();
-    let z = geometry.connector_radius - PARTICLE_RADIUS;
-    for x in [-tube_end_x, tube_end_x] {
-        let position = vec3(x, geometry.connector_center_y, z);
-        let bore_center = if x < 0.0 {
-            -geometry.cylinder_offset
-        } else {
-            geometry.cylinder_offset
-        };
+fn u_passage_connects_floor_openings_and_stays_within_grid() {
+    let geometry = DEFAULT_GEOMETRY;
+    let floor = -geometry.cylinder_height / 2.0;
+    for x in [-geometry.cylinder_offset, geometry.cylinder_offset] {
+        let junction = vec3(x, floor + PARTICLE_RADIUS, 0.0);
         assert!(ConnectedChambers::within_connector(
             geometry,
-            position,
+            junction,
             PARTICLE_RADIUS
         ));
         assert!(ConnectedChambers::within_cylinder(
             geometry,
-            position,
-            bore_center,
+            junction,
+            x,
             PARTICLE_RADIUS,
-            geometry.cylinder_height / 2.0,
+            geometry.cylinder_height / 2.0
         ));
+    }
+    const PATH_STEPS: usize = 100;
+    for (a, b) in geometry.connector_segments() {
+        for step in 0..=PATH_STEPS {
+            let point = a.lerp(b, step as f32 / PATH_STEPS as f32);
+            assert!(ConnectedChambers::within_connector(
+                geometry,
+                point,
+                PARTICLE_RADIUS
+            ));
+            assert!(
+                point.abs().max_element() + geometry.connector_radius
+                    <= geometry.grid_side() / 2.0 + POSITION_TOLERANCE
+            );
+        }
+    }
+    assert!(!ConnectedChambers::within_connector(
+        geometry,
+        Vec3::ZERO,
+        PARTICLE_RADIUS
+    ));
+}
+
+#[test]
+fn u_passage_projection_covers_legs_elbows_and_bottom() {
+    let geometry = DEFAULT_GEOMETRY;
+    for (a, b) in geometry.connector_segments() {
+        for center in [a, (a + b) / 2.0, b] {
+            for normal in [Vec3::X, Vec3::Y, Vec3::Z, -Vec3::X, -Vec3::Y, -Vec3::Z] {
+                let outside = center + normal * geometry.connector_radius * 2.0;
+                let projected =
+                    ConnectedChambers::project_to_connector(geometry, outside, PARTICLE_RADIUS);
+                assert!(ConnectedChambers::within_connector(
+                    geometry,
+                    projected,
+                    PARTICLE_RADIUS
+                ));
+            }
+        }
     }
 }
 
 #[test]
-fn connector_projection_respects_the_shortened_ends() {
-    let geometry = ChamberGeometry::default();
-    let tube_end_x = geometry.connector_half_length();
-    for x in [-geometry.cylinder_offset, geometry.cylinder_offset] {
-        let point = vec3(x, geometry.connector_center_y, 0.0);
-        let corrected = ConnectedChambers::project_to_connector(geometry, point, PARTICLE_RADIUS);
-        assert!((corrected.x.abs() - tube_end_x).abs() < 1e-5);
-        assert!(ConnectedChambers::within_connector(
-            geometry,
-            corrected,
-            PARTICLE_RADIUS,
-        ));
-        assert!(!ConnectedChambers::within_connector(
-            geometry,
-            point,
-            PARTICLE_RADIUS,
-        ));
-    }
-}
-
-#[test]
-fn a_particle_can_cross_from_left_to_right_through_the_connector() {
+fn a_particle_can_cross_from_hot_to_cold_through_the_passage() {
     let mut simulation = insulated(1);
-    simulation.particles[0].position = vec3(-CYLINDER_OFFSET, TRANSIT_HEIGHT, 0.0);
-    simulation.particles[0].velocity = vec3(TRANSIT_SPEED, 0.0, 0.0);
+    simulation.particles[0].position = vec3(
+        -CYLINDER_OFFSET,
+        -CYLINDER_HEIGHT / 2.0 + 2.0 * PARTICLE_RADIUS,
+        0.0,
+    );
+    simulation.particles[0].velocity = vec3(TRANSIT_SPEED, -TRANSIT_SPEED, 0.0);
 
     let original_energy = simulation.kinetic_energy();
     let mut saw_connector = false;
-    let mut reached_right = false;
+    let mut reached_cold = false;
     for _ in 0..TRANSFER_TEST_STEPS {
         simulation.update(FIXED_DT);
         let position = simulation.particles[0].position;
         assert!(simulation.contains(position));
-        saw_connector |= simulation.region(position) == Region::Connector;
-        if simulation.region(position) == Region::Right {
-            reached_right = true;
+        saw_connector |= simulation.region(position) == Region::Passage;
+        if simulation.region(position) == Region::Cold {
+            reached_cold = true;
             break;
         }
     }
 
     assert!(saw_connector);
     assert!(
-        reached_right,
-        "particle did not travel into the right chamber"
+        reached_cold,
+        "particle did not travel into the cold chamber"
     );
     assert!((simulation.kinetic_energy() - original_energy).abs() < ENERGY_TOLERANCE);
 }
@@ -188,29 +186,33 @@ fn a_particle_can_cross_from_left_to_right_through_the_connector() {
 fn connector_sits_below_center_with_clearance_for_rounded_bottoms() {
     let bottom = -CYLINDER_HEIGHT / 2.0;
     let top = CYLINDER_HEIGHT / 2.0;
-    assert!(bottom < CONNECTOR_CENTER_Y - CONNECTOR_RADIUS);
+    assert!(CONNECTOR_CENTER_Y + CONNECTOR_RADIUS < bottom);
     const {
         assert!(CONNECTOR_CENTER_Y + CONNECTOR_RADIUS < 0.0);
     }
     assert!(CONNECTOR_CENTER_Y + CONNECTOR_RADIUS < top);
-    assert!(CONNECTOR_CENTER_Y - CONNECTOR_RADIUS - bottom > MAX_PARTICLE_RADIUS);
+    assert!(bottom - CONNECTOR_CENTER_Y > MAX_PARTICLE_RADIUS);
 }
 
 #[test]
-fn travel_through_the_connector_works_in_both_directions() {
+fn travel_through_the_passage_works_in_both_directions() {
     let mut simulation = insulated(1);
-    simulation.particles[0].position = vec3(CYLINDER_OFFSET, TRANSIT_HEIGHT, 0.0);
-    simulation.particles[0].velocity = vec3(-TRANSIT_SPEED, 0.0, 0.0);
+    simulation.particles[0].position = vec3(
+        CYLINDER_OFFSET,
+        -CYLINDER_HEIGHT / 2.0 + 2.0 * PARTICLE_RADIUS,
+        0.0,
+    );
+    simulation.particles[0].velocity = vec3(-TRANSIT_SPEED, -TRANSIT_SPEED, 0.0);
 
-    let reached_left = (0..TRANSFER_TEST_STEPS).any(|_| {
+    let reached_hot = (0..TRANSFER_TEST_STEPS).any(|_| {
         simulation.update(FIXED_DT);
-        simulation.region(simulation.particles[0].position) == Region::Left
+        simulation.region(simulation.particles[0].position) == Region::Hot
     });
-    assert!(reached_left, "reverse passage must be open too");
+    assert!(reached_hot, "reverse passage must be open too");
 }
 
 #[test]
-fn cylinder_wall_is_closed_above_the_connector() {
+fn cylinder_wall_is_closed_above_the_passage() {
     const ABOVE_CONNECTOR_Y: f32 = 1.0;
     let mut simulation = insulated(1);
     simulation.particles[0].position = vec3(-CYLINDER_OFFSET, ABOVE_CONNECTOR_Y, 0.0);
@@ -221,13 +223,13 @@ fn cylinder_wall_is_closed_above_the_connector() {
         simulation.update(FIXED_DT);
         let position = simulation.particles[0].position;
         assert!(simulation.contains(position));
-        assert_eq!(simulation.region(position), Region::Left);
+        assert_eq!(simulation.region(position), Region::Hot);
     }
     assert!((simulation.kinetic_energy() - original_energy).abs() < ENERGY_TOLERANCE);
 }
 
 #[test]
-fn connector_walls_reflect_without_changing_energy() {
+fn passage_walls_reflect_without_changing_energy() {
     let mut simulation = insulated(1);
     simulation.particles[0].position = vec3(0.0, TRANSIT_HEIGHT, 0.0);
     simulation.particles[0].velocity = vec3(0.0, 0.0, TRANSIT_SPEED);
@@ -247,7 +249,7 @@ fn two_chamber_gas_conserves_particles_and_energy() {
         simulation.update(FIXED_DT);
     }
     let counts = simulation.counts();
-    assert_eq!(counts.left + counts.connector + counts.right, TEST_COUNT);
+    assert_eq!(counts.hot + counts.passage + counts.cold, TEST_COUNT);
     assert!(
         simulation
             .particles
@@ -263,7 +265,7 @@ fn thermal_reservoirs_exchange_energy_at_both_cylinder_walls() {
     const WALL_SPEED: f32 = 2.0;
     const ENERGY_BALANCE_TOLERANCE: f32 = 1e-4;
     let mut simulation = ConnectedChambers::new(2);
-    simulation.set_heater_percent(100.0);
+    simulation.set_hot_kelvin(crate::gas::MAX_HOT_KELVIN);
     simulation.thermal.set_accommodation(1.0);
     simulation.set_pistons_running(false);
     let x = CYLINDER_OFFSET + CYLINDER_RADIUS - simulation.particle_radius();
@@ -278,16 +280,19 @@ fn thermal_reservoirs_exchange_energy_at_both_cylinder_walls() {
     let heat = simulation.heat();
     assert_ne!(heat.hot, 0.0);
     assert_ne!(heat.cold, 0.0);
-    assert!((simulation.kinetic_energy() - before - heat.total()).abs() < ENERGY_BALANCE_TOLERANCE);
+    assert!(
+        ((simulation.kinetic_energy() - before) as f64 - heat.total()).abs()
+            < ENERGY_BALANCE_TOLERANCE as f64
+    );
 }
 
 #[test]
 fn fixed_chamber_first_law_holds_during_heating_and_cooling() {
     const THERMAL_TEST_STEPS: usize = 1_200;
-    const TEST_HEATER: f32 = 100.0;
+    const TEST_HOT_KELVIN: f32 = crate::gas::MAX_HOT_KELVIN;
     const RELATIVE_TOLERANCE: f32 = 2e-3;
     let mut simulation = ConnectedChambers::new(TEST_COUNT);
-    simulation.set_heater_percent(TEST_HEATER);
+    simulation.set_hot_kelvin(TEST_HOT_KELVIN);
     simulation.thermal.set_accommodation(1.0);
     simulation.set_pistons_running(false);
     let initial_energy = simulation.kinetic_energy();
@@ -297,19 +302,19 @@ fn fixed_chamber_first_law_holds_during_heating_and_cooling() {
     assert!(simulation.heat().hot != 0.0);
     assert!(
         simulation.energy_balance_error().abs()
-            < RELATIVE_TOLERANCE * initial_energy.max(simulation.kinetic_energy())
+            < (RELATIVE_TOLERANCE * initial_energy.max(simulation.kinetic_energy())) as f64
     );
 }
 
 #[test]
-fn heater_and_cumulative_heat_reset_with_new_gas() {
-    const TARGET_HEATER: f32 = 75.0;
+fn reservoir_settings_survive_refill_and_heat_resets() {
+    const TARGET_HOT_KELVIN: f32 = TEST_WARM_KELVIN;
     let mut simulation = ConnectedChambers::new(64);
-    simulation.set_heater_percent(TARGET_HEATER);
+    simulation.set_hot_kelvin(TARGET_HOT_KELVIN);
     simulation.set_particle_count(256);
-    assert_eq!(simulation.heater_percent(), TARGET_HEATER);
+    assert_eq!(simulation.hot_kelvin(), TARGET_HOT_KELVIN);
     simulation.reset();
-    assert_eq!(simulation.heater_percent(), TARGET_HEATER);
+    assert_eq!(simulation.hot_kelvin(), TARGET_HOT_KELVIN);
     assert_eq!(simulation.heat().total(), 0.0);
 }
 
@@ -318,7 +323,7 @@ fn passage_and_upper_caps_are_adiabatic() {
     const WALL_SPEED: f32 = 2.0;
     let mut simulation = ConnectedChambers::new(2);
     simulation.thermal.set_accommodation(1.0);
-    simulation.set_heater_percent(100.0);
+    simulation.set_hot_kelvin(crate::gas::MAX_HOT_KELVIN);
     simulation.set_pistons_running(false);
     let radius = simulation.particle_radius();
     simulation.particles[0].position = vec3(0.0, TRANSIT_HEIGHT, CONNECTOR_RADIUS - radius);
@@ -337,20 +342,20 @@ fn real_unit_measurements_conserve_helium_amount_on_transfer() {
     let mut simulation = insulated(MARKERS);
     let total_moles = simulation.total_moles();
     let first = simulation.measurements();
-    assert!(first.left.markers > 0);
-    assert!(first.right.markers > 0);
+    assert!(first.hot.markers > 0);
+    assert!(first.cold.markers > 0);
     assert_eq!(
-        first.left.markers + first.passage_markers + first.right.markers,
+        first.hot.markers + first.passage_markers + first.cold.markers,
         MARKERS
     );
-    assert!(first.left.temperature_kelvin.unwrap() > 0.0);
-    assert!(first.right.temperature_kelvin.unwrap() > 0.0);
+    assert!(first.hot.temperature_kelvin.unwrap() > 0.0);
+    assert!(first.cold.temperature_kelvin.unwrap() > 0.0);
     for _ in 0..TRANSFER_TEST_STEPS {
         simulation.update(FIXED_DT);
     }
     let readings = simulation.measurements();
     assert_eq!(
-        readings.left.markers + readings.passage_markers + readings.right.markers,
+        readings.hot.markers + readings.passage_markers + readings.cold.markers,
         MARKERS
     );
     assert_eq!(simulation.total_moles(), total_moles);
@@ -361,11 +366,11 @@ fn initial_gas_and_wall_temperatures_are_in_kelvin() {
     const ABSOLUTE_TOLERANCE_K: f64 = 0.02;
     let mut simulation = ConnectedChambers::new(TEST_COUNT);
     let readings = simulation.measurements();
-    assert!((readings.left.temperature_kelvin.unwrap() - 300.0).abs() < ABSOLUTE_TOLERANCE_K);
-    assert!((readings.right.temperature_kelvin.unwrap() - 300.0).abs() < ABSOLUTE_TOLERANCE_K);
-    assert_eq!(to_kelvin(simulation.hot_temperature()), 300.0);
-    simulation.set_heater_percent(100.0);
-    assert_eq!(to_kelvin(simulation.hot_temperature()), 1_200.0);
+    assert!((readings.hot.temperature_kelvin.unwrap() - 300.0).abs() < ABSOLUTE_TOLERANCE_K);
+    assert!((readings.cold.temperature_kelvin.unwrap() - 300.0).abs() < ABSOLUTE_TOLERANCE_K);
+    assert_eq!(simulation.hot_kelvin(), 300.0);
+    simulation.set_hot_kelvin(crate::gas::MAX_HOT_KELVIN);
+    assert_eq!(simulation.hot_kelvin(), 1_200.0);
 }
 
 #[test]
@@ -395,7 +400,7 @@ fn alternate_geometry_survives_reset_and_particle_count_changes() {
     const TEST_SCALE: f32 = 2.2;
     let geometry = ChamberGeometry::scaled(TEST_SCALE);
     let mut simulation = ConnectedChambers::with_geometry(TEST_COUNT, geometry);
-    simulation.set_heater_percent(75.0);
+    simulation.set_hot_kelvin(TEST_WARM_KELVIN);
     assert_eq!(
         simulation.geometry().cylinder_radius,
         geometry.cylinder_radius
@@ -406,7 +411,7 @@ fn alternate_geometry_survives_reset_and_particle_count_changes() {
         simulation.geometry().cylinder_height,
         geometry.cylinder_height
     );
-    assert_eq!(simulation.heater_percent(), 75.0);
+    assert_eq!(simulation.hot_kelvin(), TEST_WARM_KELVIN);
     assert_eq!(simulation.particle_radius(), PARTICLE_RADIUS);
 }
 
@@ -433,8 +438,11 @@ fn helium_fill_and_volume_scale_together() {
 fn taller_chambers_expand_collision_grid_bounds() {
     let mut geometry = ChamberGeometry::default();
     geometry.cylinder_height = geometry.grid_side() * 1.1;
+    geometry.connector_center_y =
+        -geometry.cylinder_height / 2.0 - CONNECTOR_DROP_RADII * geometry.connector_radius;
     let simulation = ConnectedChambers::with_geometry(TEST_COUNT, geometry);
-    assert_eq!(simulation.geometry().grid_side(), geometry.cylinder_height);
+    assert!(simulation.geometry().grid_side() > geometry.cylinder_height);
+    assert!(simulation.geometry().grid_side() / 2.0 >= -geometry.bottom());
     assert!(
         simulation
             .particles
@@ -450,8 +458,8 @@ fn initial_concentration_is_bounded_by_one_molar_across_the_system() {
     let initial = full.measurements();
     assert_eq!(full.particles.len(), crate::gas::MAX_SIMULATED_MARKERS);
     assert!((full.initial_concentration() - 1.0).abs() < 1e-12);
-    assert!((initial.left.concentration_mol_per_l - 1.0).abs() < LOCAL_CONCENTRATION_TOLERANCE);
-    assert!((initial.right.concentration_mol_per_l - 1.0).abs() < LOCAL_CONCENTRATION_TOLERANCE);
+    assert!((initial.hot.concentration_mol_per_l - 1.0).abs() < LOCAL_CONCENTRATION_TOLERANCE);
+    assert!((initial.cold.concentration_mol_per_l - 1.0).abs() < LOCAL_CONCENTRATION_TOLERANCE);
     assert!((full.total_moles() - full.volume_m3() * 1_000.0).abs() < 1e-10);
 }
 
@@ -464,12 +472,12 @@ fn concentration_controls_gas_amount_and_reset_preserves_it() {
             <= 0.5 / crate::gas::MAX_SIMULATED_MARKERS as f64
     );
     let initial_moles = simulation.total_moles();
-    simulation.set_heater_percent(75.0);
+    simulation.set_hot_kelvin(TEST_WARM_KELVIN);
     simulation.reset();
     assert_eq!(simulation.total_moles(), initial_moles);
     simulation.set_initial_concentration(0.50);
     assert_eq!(simulation.total_moles(), 2.0 * initial_moles);
-    assert_eq!(simulation.heater_percent(), 75.0);
+    assert_eq!(simulation.hot_kelvin(), TEST_WARM_KELVIN);
 }
 
 #[test]
@@ -477,6 +485,8 @@ fn concentration_scaling_is_independent_of_geometry_size() {
     const INITIAL_CONCENTRATION: f32 = 0.50;
     let mut large_geometry = ChamberGeometry::default();
     large_geometry.cylinder_height *= 1.25;
+    large_geometry.connector_center_y = -large_geometry.cylinder_height / 2.0
+        - CONNECTOR_DROP_RADII * large_geometry.connector_radius;
     let marker_count = ConnectedChambers::markers_for_concentration(INITIAL_CONCENTRATION);
     let original = ConnectedChambers::with_geometry(marker_count, ChamberGeometry::default());
     let larger = ConnectedChambers::with_geometry(marker_count, large_geometry);
@@ -491,8 +501,8 @@ fn maximum_initial_concentration_gives_near_equal_ideal_pressures() {
     let simulation = ConnectedChambers::with_initial_concentration(1.0);
     let readings = simulation.measurements();
     for pressure in [
-        readings.left.pressure_pa.unwrap(),
-        readings.right.pressure_pa.unwrap(),
+        readings.hot.pressure_pa.unwrap(),
+        readings.cold.pressure_pa.unwrap(),
     ] {
         assert!(
             ((pressure - EXPECTED_PRESSURE_PA) / EXPECTED_PRESSURE_PA).abs() < RELATIVE_TOLERANCE
@@ -512,8 +522,8 @@ fn default_fill_uses_1024_markers_at_half_molar() {
         crate::gas::DEFAULT_CONNECTED_MARKERS
     );
     assert!((simulation.initial_concentration() - 0.5).abs() < CONCENTRATION_TOLERANCE);
-    assert!(regions.left.markers > 0);
-    assert!(regions.right.markers > 0);
+    assert!(regions.hot.markers > 0);
+    assert!(regions.cold.markers > 0);
     assert!(regions.passage_markers > 0);
 }
 
@@ -530,16 +540,16 @@ fn minimum_fill_represents_256_markers() {
 fn resetting_refills_both_cylinders_at_the_same_temperature() {
     const TEMPERATURE_TOLERANCE_K: f64 = 0.02;
     let mut simulation = ConnectedChambers::with_initial_concentration(0.5);
-    simulation.set_heater_percent(100.0);
+    simulation.set_hot_kelvin(crate::gas::MAX_HOT_KELVIN);
     for _ in 0..100 {
         simulation.update(FIXED_DT);
     }
     simulation.reset();
     let readings = simulation.measurements();
-    assert_eq!(simulation.heater_percent(), 100.0);
-    assert!((readings.left.temperature_kelvin.unwrap() - 300.0).abs() < TEMPERATURE_TOLERANCE_K);
-    assert!((readings.right.temperature_kelvin.unwrap() - 300.0).abs() < TEMPERATURE_TOLERANCE_K);
-    assert!(readings.left.markers > 0 && readings.right.markers > 0);
+    assert_eq!(simulation.hot_kelvin(), crate::gas::MAX_HOT_KELVIN);
+    assert!((readings.hot.temperature_kelvin.unwrap() - 300.0).abs() < TEMPERATURE_TOLERANCE_K);
+    assert!((readings.cold.temperature_kelvin.unwrap() - 300.0).abs() < TEMPERATURE_TOLERANCE_K);
+    assert!(readings.hot.markers > 0 && readings.cold.markers > 0);
     assert_eq!(simulation.heat().total(), 0.0);
 }
 
@@ -547,7 +557,8 @@ fn resetting_refills_both_cylinders_at_the_same_temperature() {
 fn moving_pistons_keep_every_sphere_below_their_faces() {
     const TEST_STEPS: usize = 1_000;
     let mut simulation = insulated(256);
-    simulation.set_piston_mode(MotionMode::Controlled);
+    simulation.kick_flywheel(KickDirection::Positive);
+    simulation.set_pistons_running(true);
     simulation.thermal.set_accommodation(0.0);
     for step in 0..TEST_STEPS {
         simulation.update(FIXED_DT);
@@ -567,7 +578,7 @@ fn piston_collision_exchanges_equal_and_opposite_energy() {
     const TEST_PARTICLE_SPEED: f32 = 1.0;
     let geometry = ChamberGeometry::default();
     let mut pistons = PowerPistons::new(geometry, PARTICLE_RADIUS);
-    pistons.set_mode(MotionMode::Controlled);
+    pistons.kick(KickDirection::Positive);
     for _ in 0..200 {
         pistons.advance(FIXED_DT);
     }
@@ -598,7 +609,8 @@ fn moving_insulated_pistons_obey_first_law() {
     const TEST_STEPS: usize = 1_000;
     const RELATIVE_TOLERANCE: f32 = 5e-3;
     let mut simulation = insulated(256);
-    simulation.set_piston_mode(MotionMode::Controlled);
+    simulation.kick_flywheel(KickDirection::Positive);
+    simulation.set_pistons_running(true);
     simulation.thermal.set_accommodation(0.0);
     let reference = simulation.kinetic_energy();
     for _ in 0..TEST_STEPS {
@@ -606,7 +618,7 @@ fn moving_insulated_pistons_obey_first_law() {
     }
     assert_eq!(simulation.heat().total(), 0.0);
     assert!(simulation.piston_work_by_gas().abs() > 0.0);
-    assert!(simulation.energy_balance_error().abs() < RELATIVE_TOLERANCE * reference);
+    assert!(simulation.energy_balance_error().abs() < (RELATIVE_TOLERANCE * reference) as f64);
 }
 
 #[test]
@@ -615,16 +627,15 @@ fn heating_and_piston_motion_track_heat_and_work_separately() {
     const RELATIVE_TOLERANCE: f32 = 5e-3;
     let mut simulation = ConnectedChambers::new(256);
     simulation.thermal.set_accommodation(1.0);
-    simulation.set_heater_percent(100.0);
-    simulation.set_piston_mode(MotionMode::Controlled);
-    simulation.thermal.set_accommodation(1.0);
+    simulation.set_hot_kelvin(crate::gas::MAX_HOT_KELVIN);
+    simulation.kick_flywheel(KickDirection::Positive);
     let reference = simulation.kinetic_energy();
     for _ in 0..TEST_STEPS {
         simulation.update(FIXED_DT);
     }
     assert!(simulation.heat().hot != 0.0);
     assert!(simulation.piston_work_by_gas().abs() > 0.0);
-    assert!(simulation.energy_balance_error().abs() < RELATIVE_TOLERANCE * reference);
+    assert!(simulation.energy_balance_error().abs() < (RELATIVE_TOLERANCE * reference) as f64);
 }
 
 #[test]
@@ -676,26 +687,15 @@ fn free_flywheel_tracks_gas_and_mechanical_energy_separately() {
     const TEST_STEPS: usize = 400;
     const RELATIVE_TOLERANCE: f32 = 0.015;
     let mut simulation = insulated(256);
-    assert_eq!(simulation.power_pistons().mode(), MotionMode::Free);
     simulation.set_pistons_running(true);
     let gas_reference = simulation.kinetic_energy();
     for _ in 0..TEST_STEPS {
         simulation.update(FIXED_DT);
     }
-    assert!(simulation.energy_balance_error().abs() < RELATIVE_TOLERANCE * gas_reference);
-    assert!(simulation.mechanical_balance_error().abs() < RELATIVE_TOLERANCE * gas_reference);
-}
-
-#[test]
-fn reset_preserves_free_or_controlled_piston_mode() {
-    let mut simulation = ConnectedChambers::new(256);
-    simulation.set_piston_mode(MotionMode::Controlled);
-    simulation.reset();
-    assert_eq!(simulation.power_pistons().mode(), MotionMode::Controlled);
-    simulation.set_piston_mode(MotionMode::Free);
-    simulation.reset();
-    assert_eq!(simulation.power_pistons().mode(), MotionMode::Free);
-    assert_eq!(simulation.power_pistons().starter_work(), 0.0);
+    assert!(simulation.energy_balance_error().abs() < (RELATIVE_TOLERANCE * gas_reference) as f64);
+    assert!(
+        simulation.mechanical_balance_error().abs() < (RELATIVE_TOLERANCE * gas_reference) as f64
+    );
 }
 
 #[test]
@@ -738,10 +738,299 @@ fn circular_passage_projection_stays_inside_for_all_wall_angles() {
 #[test]
 fn tube_volume_uses_circular_cross_section() {
     let geometry = DEFAULT_GEOMETRY;
-    let gap = 2.0 * (geometry.cylinder_offset - geometry.cylinder_radius) as f64;
-    let expected = gap
-        * std::f64::consts::PI
-        * (geometry.connector_radius as f64).powi(2)
-        * METERS_PER_UNIT.powi(3);
-    assert!((geometry.connector_volume_m3() - expected).abs() < 1e-15);
+    // Independent midpoint integration of the exposed union cross sections.
+    const SLICES: usize = 20_000;
+    let radius = geometry.connector_radius as f64;
+    let offset = geometry.cylinder_offset as f64;
+    let lower = (geometry.connector_center_y - geometry.connector_radius) as f64;
+    let upper = -geometry.cylinder_height as f64 / 2.0;
+    let dy = (upper - lower) / SLICES as f64;
+    let pi = std::f64::consts::PI;
+    let mut volume = 0.0;
+    for slice in 0..SLICES {
+        let y = lower + (slice as f64 + 0.5) * dy - geometry.connector_center_y as f64;
+        let h = (radius * radius - y * y).max(0.0).sqrt();
+        let area = if y < 0.0 {
+            4.0 * offset * h + pi * h * h
+        } else {
+            let overlap = h * (radius * radius - h * h).max(0.0).sqrt()
+                + radius * radius * (h / radius).asin();
+            4.0 * offset * h + 2.0 * pi * radius * radius - 2.0 * overlap
+        };
+        volume += area * dy;
+    }
+    let expected = volume * METERS_PER_UNIT.powi(3);
+    assert!((geometry.connector_volume_m3() / expected - 1.0).abs() < 1e-5);
+}
+
+#[test]
+fn seeded_simulations_remain_identical_when_interleaved() {
+    const SEED: u64 = 42;
+    const STEPS: usize = 200;
+    let mut first = ConnectedChambers::with_geometry_seed(TEST_COUNT, DEFAULT_GEOMETRY, SEED);
+    let mut second = ConnectedChambers::with_geometry_seed(TEST_COUNT, DEFAULT_GEOMETRY, SEED);
+    first.set_hot_kelvin(crate::gas::MAX_HOT_KELVIN);
+    second.set_hot_kelvin(crate::gas::MAX_HOT_KELVIN);
+    for _ in 0..STEPS {
+        first.update(FIXED_DT);
+        second.update(FIXED_DT);
+    }
+    for (a, b) in first.particles.iter().zip(&second.particles) {
+        assert_eq!(a.position, b.position);
+        assert_eq!(a.velocity, b.velocity);
+    }
+    assert_eq!(first.heat().hot, second.heat().hot);
+}
+
+#[test]
+fn reservoir_controls_change_no_particles_until_an_impact() {
+    const SEED: u64 = 42;
+    let mut simulation = ConnectedChambers::with_geometry_seed(TEST_COUNT, DEFAULT_GEOMETRY, SEED);
+    let before: Vec<_> = simulation.particles.iter().map(|p| p.velocity).collect();
+    simulation.set_cold_kelvin(crate::gas::MIN_COLD_KELVIN);
+    simulation.set_hot_kelvin(crate::gas::MAX_HOT_KELVIN);
+    assert_eq!(simulation.heat().total(), 0.0);
+    for (particle, velocity) in simulation.particles.iter().zip(before) {
+        assert_eq!(particle.velocity, velocity);
+    }
+    simulation.reset();
+    assert_eq!(simulation.cold_kelvin(), crate::gas::MIN_COLD_KELVIN);
+    assert_eq!(simulation.hot_kelvin(), crate::gas::MAX_HOT_KELVIN);
+    assert_eq!(simulation.power_pistons().starter_work(), 0.0);
+}
+
+#[test]
+fn fast_head_on_particles_do_not_tunnel_past_each_other() {
+    const SPEED: f32 = 120.0;
+    const HALF_SEPARATION: f32 = 0.5;
+    let mut simulation = insulated(2);
+    let center = -simulation.geometry.cylinder_offset;
+    simulation.particles[0].position = vec3(center - HALF_SEPARATION, 0.0, 0.0);
+    simulation.particles[1].position = vec3(center + HALF_SEPARATION, 0.0, 0.0);
+    simulation.particles[0].velocity = vec3(SPEED, 0.0, 0.0);
+    simulation.particles[1].velocity = vec3(-SPEED, 0.0, 0.0);
+    let before = simulation.kinetic_energy();
+    simulation.step(FIXED_DT);
+    assert!(simulation.particles[0].velocity.x < 0.0);
+    assert!(simulation.particles[1].velocity.x > 0.0);
+    assert!((simulation.kinetic_energy() - before).abs() < ENERGY_TOLERANCE);
+}
+
+/// Result of one kicked run, sampled at the last completed revolution.
+struct CycleOutcome {
+    completed_turns: usize,
+    starter_energy: f64,
+    phase_energy: f64,
+    phase_gas_work: f64,
+    final_starter_work: f64,
+    heat: HeatTransfer,
+    gas_residual: f64,
+    shaft_residual: f64,
+}
+
+/// Default fill, one kick, cold reservoir at 300 K. Energy is sampled at
+/// completed revolutions because compression and back-pressure work make
+/// arbitrary crank phases incomparable.
+fn kicked_run(seed: u64, hot_kelvin: f32, dt: f32, duration: f32) -> CycleOutcome {
+    let mut simulation = ConnectedChambers::with_geometry_seed(
+        crate::gas::DEFAULT_CONNECTED_MARKERS,
+        DEFAULT_GEOMETRY,
+        seed,
+    );
+    simulation.set_hot_kelvin(hot_kelvin);
+    simulation.set_cold_kelvin(crate::gas::MAX_COLD_KELVIN);
+    simulation.kick_flywheel(KickDirection::Negative);
+    let starter_energy = simulation.pistons.starter_work();
+    let mut completed_turns = 0;
+    let mut phase_energy = starter_energy;
+    let mut phase_gas_work = 0.0;
+    for _ in 0..(duration / dt) as usize {
+        simulation.step(dt);
+        let turns = (-simulation.pistons.revolutions()).max(0.0) as usize;
+        if turns > completed_turns {
+            completed_turns = turns;
+            phase_energy = simulation.pistons.kinetic_energy();
+            phase_gas_work = simulation.piston_work_by_gas();
+        }
+    }
+    CycleOutcome {
+        completed_turns,
+        starter_energy,
+        phase_energy,
+        phase_gas_work,
+        final_starter_work: simulation.pistons.starter_work(),
+        heat: simulation.heat(),
+        gas_residual: simulation.energy_balance_error(),
+        shaft_residual: simulation.mechanical_balance_error(),
+    }
+}
+
+// Shared acceptance criteria for the kicked-engine regressions.
+const ROTATION_DURATION: f32 = 120.0 * DYNAMICS_TIME_SCALE;
+const MIN_TURNS: usize = 4;
+const BALANCE_TOLERANCE: f64 = 0.05;
+const HOT_GAIN_RATIO: f64 = 1.5;
+const EQUILIBRIUM_REMAINING_RATIO: f64 = 0.6;
+
+/// Panics with the seed in the message if a run misses the criteria: a
+/// heated engine must gain energy from gas work, an equilibrium engine
+/// must lose it, and both energy balances must close.
+fn check_kicked_run(seed: u64, hot_kelvin: f32, dt: f32, outcome: &CycleOutcome) {
+    let o = outcome;
+    println!(
+        "seed={seed}, hot={hot_kelvin} K, dt={dt}: turns={}, phase energy={:.3}, gas work={:.3}, gas residual={:.6}, shaft residual={:.6}",
+        o.completed_turns, o.phase_energy, o.phase_gas_work, o.gas_residual, o.shaft_residual
+    );
+    let context = format!("seed {seed}, hot {hot_kelvin} K, dt {dt}");
+    assert!(o.completed_turns >= MIN_TURNS, "too few turns: {context}");
+    assert_eq!(o.final_starter_work, o.starter_energy, "{context}");
+    assert!(o.gas_residual.abs() < BALANCE_TOLERANCE, "{context}");
+    assert!(o.shaft_residual.abs() < BALANCE_TOLERANCE, "{context}");
+    if hot_kelvin > crate::gas::MAX_COLD_KELVIN {
+        assert!(
+            o.phase_energy > HOT_GAIN_RATIO * o.starter_energy,
+            "heated engine did not gain energy: {context}"
+        );
+        assert!(o.phase_gas_work > 0.0, "{context}");
+        assert!(o.heat.hot > 0.0 && o.heat.cold < 0.0, "{context}");
+    } else {
+        assert!(
+            o.phase_energy < EQUILIBRIUM_REMAINING_RATIO * o.starter_energy,
+            "equilibrium engine did not lose energy: {context}"
+        );
+        assert!(o.phase_gas_work < 0.0, "{context}");
+    }
+}
+
+/// Fixed-seed regression, including a halved timestep.
+/// Run with `cargo test --release sustained_rotation -- --ignored --nocapture`.
+#[test]
+#[ignore = "long particle-driven cycle regression; run in release mode"]
+fn sustained_rotation_requires_a_temperature_difference() {
+    let cases = [
+        (42, crate::gas::MAX_HOT_KELVIN, FIXED_DT),
+        (7, crate::gas::MAX_HOT_KELVIN, FIXED_DT),
+        (42, crate::gas::MAX_HOT_KELVIN, FIXED_DT / 2.0),
+        (42, crate::gas::MIN_HOT_KELVIN, FIXED_DT),
+        (7, crate::gas::MIN_HOT_KELVIN, FIXED_DT),
+    ];
+    for (seed, hot_kelvin, dt) in cases {
+        check_kicked_run(
+            seed,
+            hot_kelvin,
+            dt,
+            &kicked_run(seed, hot_kelvin, dt, ROTATION_DURATION),
+        );
+    }
+}
+
+/// The same criteria on seeds drawn fresh from the clock each run, so the
+/// result does not depend on a few hand-picked seeds. A failure prints its
+/// seed, which can then be added to the fixed-seed test.
+/// Run with `cargo test --release rotation_holds -- --ignored --nocapture`.
+#[test]
+#[ignore = "long random-seed cycle sweep; run in release mode"]
+fn rotation_holds_for_random_seeds() {
+    const HEATED_SEEDS: usize = 8;
+    const EQUILIBRIUM_SEEDS: usize = 4;
+    let clock = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as u64;
+    let random = RandGenerator::new();
+    random.srand(clock);
+    let cases: Vec<(u64, f32)> = (0..HEATED_SEEDS + EQUILIBRIUM_SEEDS)
+        .map(|index| {
+            let hot = if index < HEATED_SEEDS {
+                crate::gas::MAX_HOT_KELVIN
+            } else {
+                crate::gas::MIN_HOT_KELVIN
+            };
+            (random.gen_range(0, u64::MAX), hot)
+        })
+        .collect();
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let results: Vec<_> = std::thread::scope(|scope| {
+        let handles: Vec<_> = cases
+            .chunks(cases.len().div_ceil(threads))
+            .map(|chunk| {
+                scope.spawn(move || {
+                    chunk
+                        .iter()
+                        .map(|&(seed, hot)| {
+                            (
+                                seed,
+                                hot,
+                                kicked_run(seed, hot, FIXED_DT, ROTATION_DURATION),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().unwrap())
+            .collect()
+    });
+    for (seed, hot, outcome) in &results {
+        check_kicked_run(*seed, *hot, FIXED_DT, outcome);
+    }
+}
+
+#[test]
+fn reset_draws_a_new_random_gas() {
+    let mut simulation = ConnectedChambers::new(TEST_COUNT);
+    let before: Vec<_> = simulation.particles.iter().map(|p| p.velocity).collect();
+    simulation.reset();
+    let after: Vec<_> = simulation.particles.iter().map(|p| p.velocity).collect();
+    assert_ne!(before, after);
+    assert_eq!(simulation.particles.len(), TEST_COUNT);
+}
+
+#[test]
+#[ignore = "release-mode maximum-fill performance measurement"]
+fn maximum_fill_benchmark() {
+    const SEED: u64 = 42;
+    const WARMUP_SECONDS: f32 = 2.0;
+    const SAMPLE_SECONDS: f32 = 8.0;
+    let mut simulation = ConnectedChambers::with_geometry_seed(
+        crate::gas::MAX_SIMULATED_MARKERS,
+        DEFAULT_GEOMETRY,
+        SEED,
+    );
+    simulation.set_hot_kelvin(crate::gas::MAX_HOT_KELVIN);
+    simulation.kick_flywheel(KickDirection::Negative);
+    for _ in 0..(WARMUP_SECONDS / FIXED_DT) as usize {
+        simulation.step(FIXED_DT);
+    }
+    let start = std::time::Instant::now();
+    for _ in 0..(SAMPLE_SECONDS / FIXED_DT) as usize {
+        simulation.step(FIXED_DT);
+    }
+    println!(
+        "max-fill: {:.3} ms/model-second; gas residual={:.6}; shaft residual={:.6}",
+        start.elapsed().as_secs_f64() * 1000.0 / SAMPLE_SECONDS as f64,
+        simulation.energy_balance_error(),
+        simulation.mechanical_balance_error()
+    );
+    std::hint::black_box(simulation);
+}
+
+#[test]
+fn slow_frame_caps_catchup_without_larger_physics_steps() {
+    const SEED: u64 = 42;
+    let mut capped = ConnectedChambers::with_geometry_seed(TEST_COUNT, DEFAULT_GEOMETRY, SEED);
+    let mut reference = ConnectedChambers::with_geometry_seed(TEST_COUNT, DEFAULT_GEOMETRY, SEED);
+    assert!(capped.update(MAX_FRAME_TIME));
+    for _ in 0..MAX_FIXED_STEPS_PER_FRAME {
+        reference.step(FIXED_DT);
+    }
+    for (actual, expected) in capped.particles.iter().zip(&reference.particles) {
+        assert_eq!(actual.position, expected.position);
+        assert_eq!(actual.velocity, expected.velocity);
+    }
+    assert!(capped.accumulator < FIXED_DT);
+    assert!(!capped.update(0.0));
+    assert!(!reference.update(FIXED_DT));
 }

@@ -179,3 +179,76 @@ fn resizing_rebuilds_only_the_batch_layout() {
     assert_eq!(renderer.batches.len(), 2);
     assert_eq!(renderer.particle_count, PARTICLES_PER_BATCH + 1);
 }
+
+#[test]
+#[ignore = "release-mode maximum-fill CPU mesh benchmark (excludes GPU)"]
+fn maximum_fill_mesh_benchmark() {
+    const SAMPLE_FRAMES: usize = 1_000;
+    const SEED: u64 = 42;
+    let simulation = crate::engine::ConnectedChambers::with_geometry_seed(
+        MAX_SIMULATED_MARKERS,
+        crate::engine::DEFAULT_GEOMETRY,
+        SEED,
+    );
+    let mut renderer = ParticleRenderer::new();
+    let camera = test_camera();
+    let chamber = CylinderDimensions {
+        radius: CHAMBER_RADIUS,
+        height: CHAMBER_HEIGHT,
+    };
+    renderer.resize_batches(MAX_SIMULATED_MARKERS);
+    let start = std::time::Instant::now();
+    for _ in 0..SAMPLE_FRAMES {
+        renderer.prepare(
+            &simulation.particles,
+            simulation.collision_flashes(),
+            simulation.particle_radius(),
+            &camera,
+            chamber,
+            TEST_BACKGROUND,
+        );
+        std::hint::black_box(&renderer.batches);
+    }
+    println!(
+        "mesh CPU: {:.3} ms/frame; vertices={}; indices={}",
+        start.elapsed().as_secs_f64() * 1000.0 / SAMPLE_FRAMES as f64,
+        renderer
+            .batches
+            .iter()
+            .map(|m| m.vertices.len())
+            .sum::<usize>(),
+        renderer
+            .batches
+            .iter()
+            .map(|m| m.indices.len())
+            .sum::<usize>()
+    );
+}
+
+#[test]
+fn high_fill_detail_reduction_preserves_particles_and_valid_geometry() {
+    let mut renderer = ParticleRenderer::new();
+    renderer.resize_batches(MAX_SIMULATED_MARKERS);
+    assert!(renderer.low_detail);
+    let low_vertices = renderer.template.positions.len();
+    for triangle in renderer
+        .template
+        .indices
+        .as_chunks::<VERTICES_PER_TRIANGLE>()
+        .0
+    {
+        let a = renderer.template.positions[triangle[0] as usize];
+        let b = renderer.template.positions[triangle[1] as usize];
+        let c = renderer.template.positions[triangle[2] as usize];
+        assert!((b - a).cross(c - a).dot(a + b + c) > 0.0);
+    }
+    renderer.resize_batches(crate::gas::DEFAULT_CONNECTED_MARKERS);
+    assert!(!renderer.low_detail);
+    assert!(renderer.template.positions.len() > low_vertices);
+    let represented: usize = renderer
+        .batches
+        .iter()
+        .map(|mesh| mesh.vertices.len() / renderer.template.positions.len())
+        .sum();
+    assert_eq!(represented, crate::gas::DEFAULT_CONNECTED_MARKERS);
+}

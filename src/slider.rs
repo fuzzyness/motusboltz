@@ -1,4 +1,5 @@
-//! Heater and helium concentration sliders.
+//! Hot and cold reservoir temperature sliders and the helium concentration
+//! slider.
 
 use macroquad::prelude::{
     Color,
@@ -16,8 +17,9 @@ use macroquad::prelude::{
 };
 
 use crate::gas::{
-    MAX_HEATER_PERCENT,
+    MAX_HOT_KELVIN,
     MAX_INITIAL_CONCENTRATION_MOL_PER_L,
+    MIN_HOT_KELVIN,
     MIN_INITIAL_CONCENTRATION_MOL_PER_L, //
 };
 
@@ -30,20 +32,23 @@ const SLIDER_HIT_MARGIN_X: f32 = 14.0;
 const PANEL_PADDING_X: f32 = 18.0;
 pub(crate) const PANEL_PADDING_TOP: f32 = 52.0;
 const PANEL_PADDING_BOTTOM: f32 = 43.0;
-pub(crate) const HEATER_Y: f32 = 252.0;
-const CONCENTRATION_Y: f32 = HEATER_Y + 120.0;
+pub(crate) const HOT_Y: f32 = 200.0;
+const COLD_Y: f32 = HOT_Y + 120.0;
+const CONCENTRATION_Y: f32 = COLD_Y + 120.0;
 const MOLARITY_INCREMENT: f32 = 0.005;
 const PANEL_COLOR: Color = Color::new(0.035, 0.060, 0.105, 0.88);
 const TRACK_COLOR: Color = Color::new(0.27, 0.33, 0.40, 1.0);
 const RANGE_TEXT_COLOR: Color = Color::new(0.72, 0.78, 0.85, 1.0);
 
+/// What happened to a slider this frame.
 #[derive(Default)]
 pub struct SliderUpdate {
     pub changed: bool,
     pub released: bool,
 }
 
-/// Pointer-controlled value quantized using the configured step size.
+/// Horizontal slider dragged with the left mouse button; values snap to
+/// multiples of `step` above `min`.
 pub struct Slider {
     label: &'static str,
     min: f32,
@@ -56,19 +61,32 @@ pub struct Slider {
 }
 
 impl Slider {
-    pub fn demo_heater(value: f32) -> Self {
+    pub fn hot_temperature(value: f32) -> Self {
         Self::new(
-            "Flame intensity (%)",
-            0.0,
-            MAX_HEATER_PERCENT,
+            "Hot reservoir (K)",
+            MIN_HOT_KELVIN,
+            MAX_HOT_KELVIN,
             1.0,
             0,
-            HEATER_Y,
+            HOT_Y,
             value,
         )
     }
 
-    pub fn demo_concentration(value: f32) -> Self {
+    pub fn cold_temperature(value: f32) -> Self {
+        const KELVIN_STEP: f32 = 1.0;
+        Self::new(
+            "Cold reservoir (K)",
+            crate::gas::MIN_COLD_KELVIN,
+            crate::gas::MAX_COLD_KELVIN,
+            KELVIN_STEP,
+            0,
+            COLD_Y,
+            value,
+        )
+    }
+
+    pub fn concentration(value: f32) -> Self {
         Self::new(
             "Helium (mol/L)",
             MIN_INITIAL_CONCENTRATION_MOL_PER_L,
@@ -142,6 +160,8 @@ impl Slider {
         )
     }
 
+    /// Handles mouse input. A drag starts only on the track; the value
+    /// follows the pointer until the button is released.
     pub fn update(&mut self) -> SliderUpdate {
         if !is_mouse_button_down(MouseButton::Left) {
             let released = self.dragging;
@@ -167,6 +187,8 @@ impl Slider {
         }
     }
 
+    /// Whether the camera should ignore the mouse: dragging, or pointer over
+    /// this slider's panel.
     pub fn blocks_camera(&self) -> bool {
         self.dragging || self.pointer_over_panel()
     }

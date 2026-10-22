@@ -1,4 +1,4 @@
-//! Controlled and free-crankshaft tests for `src/engine.rs`.
+//! Particle-driven crankshaft tests for `src/engine.rs`.
 
 use super::*;
 
@@ -27,7 +27,7 @@ fn initial_pistons_are_a_quarter_cycle_out_of_phase() {
     assert!((pistons.right().face_y - pistons.position_at(FRAC_PI_2)).abs() < EPSILON);
     assert!(pistons.stroke() <= (STROKE_METERS / METERS_PER_UNIT) as f32);
     assert!(
-        geometry.connector_center_y + geometry.connector_radius + PARTICLE_RADIUS
+        -geometry.cylinder_height / 2.0 + geometry.connector_radius + PARTICLE_RADIUS
             < geometry.cylinder_height / 2.0 - pistons.stroke()
     );
 }
@@ -36,23 +36,20 @@ fn initial_pistons_are_a_quarter_cycle_out_of_phase() {
 fn a_full_revolution_restores_piston_positions() {
     let geometry = ChamberGeometry::default();
     let mut pistons = PowerPistons::new(geometry, PARTICLE_RADIUS);
-    pistons.set_mode(MotionMode::Controlled);
+    pistons.kick(KickDirection::Positive);
     let before_left = pistons.left().face_y;
     let before_right = pistons.right().face_y;
-    let steps = (TAU / (DRIVE_ANGULAR_SPEED * TEST_DT)).round() as usize;
-    for _ in 0..steps {
-        pistons.advance(TEST_DT);
-    }
-    let step_displacement_bound = pistons.stroke() * DRIVE_ANGULAR_SPEED * TEST_DT;
-    assert!((pistons.left().face_y - before_left).abs() < step_displacement_bound);
-    assert!((pistons.right().face_y - before_right).abs() < step_displacement_bound);
+    pistons.angle = TAU;
+    pistons.update_faces(TEST_DT);
+    assert!((pistons.left().face_y - before_left).abs() < EPSILON);
+    assert!((pistons.right().face_y - before_right).abs() < EPSILON);
 }
 
 #[test]
 fn pausing_stops_motion_without_teleporting_pistons() {
     let geometry = ChamberGeometry::default();
     let mut pistons = PowerPistons::new(geometry, PARTICLE_RADIUS);
-    pistons.set_mode(MotionMode::Controlled);
+    pistons.kick(KickDirection::Positive);
     pistons.advance(TEST_DT);
     let before = (pistons.left().face_y, pistons.right().face_y);
     pistons.set_running(false);
@@ -63,10 +60,10 @@ fn pausing_stops_motion_without_teleporting_pistons() {
 }
 
 #[test]
-fn prescribed_motion_changes_total_working_volume() {
+fn kicked_motion_changes_total_working_volume() {
     let geometry = ChamberGeometry::default();
     let mut pistons = PowerPistons::new(geometry, PARTICLE_RADIUS);
-    pistons.set_mode(MotionMode::Controlled);
+    pistons.kick(KickDirection::Positive);
     let start = pistons.volume_m3(geometry);
     for _ in 0..400 {
         pistons.advance(TEST_DT);
@@ -78,7 +75,6 @@ fn prescribed_motion_changes_total_working_volume() {
 #[test]
 fn free_flywheel_starts_at_rest_without_a_starter() {
     let pistons = PowerPistons::new(ChamberGeometry::default(), PARTICLE_RADIUS);
-    assert_eq!(pistons.mode(), MotionMode::Free);
     assert_eq!(pistons.angular_velocity(), 0.0);
     assert_eq!(pistons.starter_work(), 0.0);
     assert_eq!(pistons.kinetic_energy(), 0.0);
@@ -95,7 +91,7 @@ fn free_collision_conserves_particle_plus_rotor_energy() {
     let rotor_work = pistons.kinetic_energy();
     assert!(rotor_work > 0.0);
     assert!(pistons.angular_velocity() < 0.0);
-    assert!((gas_after - gas_before + rotor_work).abs() < EPSILON);
+    assert!(((gas_after - gas_before) as f64 + rotor_work).abs() < EPSILON as f64);
 }
 
 #[test]
@@ -111,10 +107,11 @@ fn cold_piston_impulse_affects_the_same_rotor() {
 fn increased_stroke_preserves_open_passage() {
     let geometry = ChamberGeometry::default();
     let pistons = PowerPistons::new(geometry, PARTICLE_RADIUS);
-    assert!((pistons.stroke() - 3.8).abs() < EPSILON);
+    const EXPECTED_SAFE_STROKE: f32 = 4.8;
+    assert!((pistons.stroke() - EXPECTED_SAFE_STROKE).abs() < EPSILON);
     assert!(
         geometry.cylinder_height / 2.0 - pistons.stroke() - PARTICLE_RADIUS
-            > geometry.connector_center_y + geometry.connector_radius
+            > -geometry.cylinder_height / 2.0 + geometry.connector_radius
     );
 }
 
@@ -123,7 +120,7 @@ fn optional_kick_is_booked_as_external_energy() {
     let mut pistons = PowerPistons::new(ChamberGeometry::default(), PARTICLE_RADIUS);
     pistons.kick(KickDirection::Positive);
     assert!(pistons.angular_velocity() > 0.0);
-    assert!((pistons.starter_work() - pistons.kinetic_energy()).abs() < EPSILON);
+    assert!((pistons.starter_work() - pistons.kinetic_energy()).abs() < EPSILON as f64);
 }
 
 #[test]
@@ -140,7 +137,7 @@ fn stationary_crank_stays_still_without_forces() {
 #[test]
 fn finite_connecting_rod_reaches_the_piston_at_every_angle() {
     let mut pistons = PowerPistons::new(ChamberGeometry::default(), PARTICLE_RADIUS);
-    pistons.set_mode(MotionMode::Controlled);
+    pistons.kick(KickDirection::Positive);
     for _ in 0..360 {
         pistons.advance(TEST_DT);
         for side in [PistonSide::Hot, PistonSide::Cold] {
@@ -164,7 +161,7 @@ fn diagnostic_kick_supports_both_directions() {
         let mut pistons = PowerPistons::new(ChamberGeometry::default(), PARTICLE_RADIUS);
         pistons.kick(direction);
         assert_eq!(pistons.angular_velocity().signum(), sign);
-        assert!((pistons.starter_work() - pistons.kinetic_energy()).abs() < EPSILON);
+        assert!((pistons.starter_work() - pistons.kinetic_energy()).abs() < EPSILON as f64);
     }
 }
 
@@ -177,10 +174,37 @@ fn gas_impulse_sets_the_expected_rotation_direction() {
 }
 
 #[test]
-fn mode_changes_reset_angular_speed() {
+fn back_pressure_work_matches_displaced_volume_independently() {
+    const TEST_PRESSURE: f32 = 2.0;
+    const TEST_STEPS: usize = 2_000;
+    const WORK_TOLERANCE: f64 = 1e-7;
+    let mut rotor = PowerPistons::new(ChamberGeometry::default(), PARTICLE_RADIUS);
+    rotor.set_reference_pressure(TEST_PRESSURE);
+    rotor.kick(KickDirection::Negative);
+    let volume = |rotor: &PowerPistons| {
+        (rotor.area * (rotor.position_at(rotor.angle) + rotor.position_at(rotor.angle + FRAC_PI_2)))
+            as f64
+    };
+    let initial_volume = volume(&rotor);
+    for _ in 0..TEST_STEPS {
+        rotor.advance(TEST_DT);
+    }
+    let expected = -TEST_PRESSURE as f64 * (volume(&rotor) - initial_volume);
+    assert!((rotor.back_pressure_work() - expected).abs() < WORK_TOLERANCE);
+}
+
+#[test]
+fn drag_loss_accounts_for_lost_flywheel_energy() {
     let mut pistons = PowerPistons::new(ChamberGeometry::default(), PARTICLE_RADIUS);
+    pistons.set_reference_pressure(0.0);
     pistons.kick(KickDirection::Negative);
-    pistons.set_mode(MotionMode::Controlled);
-    pistons.set_mode(MotionMode::Free);
-    assert_eq!(pistons.angular_velocity(), 0.0);
+    for _ in 0..120 {
+        pistons.advance(TEST_DT);
+    }
+    assert!(pistons.drag_loss() > 0.0);
+    assert!(pistons.kinetic_energy() < pistons.starter_work());
+    assert!(
+        (pistons.kinetic_energy() + pistons.drag_loss() - pistons.starter_work()).abs()
+            < EPSILON as f64
+    );
 }

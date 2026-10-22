@@ -1,4 +1,5 @@
-//! Batched particles and 3D visualization of the Stirling mechanism.
+//! 3D drawing of the particles, cylinders, passage, pistons, crank and
+//! flywheel. Drawing only; nothing here affects the physics.
 
 use std::f32::consts::{
     FRAC_PI_2,
@@ -28,25 +29,28 @@ use crate::engine::{
 use crate::gas as physics;
 use crate::gas::{
     COLLISION_FLASH_DURATION,
-    INITIAL_SPEED_LIMIT,
-    PARTICLE_MASS, //
-    Particle,
+    INITIAL_TEMPERATURE,
+    Particle, //
 };
 
 // Keep each batch within Macroquad's vertex and index buffer limits.
 const PARTICLES_PER_BATCH: usize = 256;
 const SPHERE_LATITUDE_SEGMENTS: usize = 4;
 const SPHERE_LONGITUDE_SEGMENTS: usize = 6;
+// At high fill, use coarser spheres to reduce vertex work; every particle is
+// still drawn.
+const LOW_DETAIL_PARTICLE_THRESHOLD: usize = 1_536;
+const LOW_DETAIL_LATITUDE_SEGMENTS: usize = 3;
+const LOW_DETAIL_LONGITUDE_SEGMENTS: usize = 4;
 
-// These are kinetic-energy colors, not temperatures of individual particles.
+// Colors encode each particle's kinetic energy. A single particle has no
+// temperature; temperature is a property of many particles.
 const COLD_COLOR: Color = Color::from_rgba(60, 151, 255, 255);
 const NORMAL_COLOR: Color = ORANGE;
 const HOT_COLOR: Color = Color::from_rgba(255, 67, 62, 255);
 
-// For independent velocities uniform in [-v_max, v_max], the expected
-// kinetic energy in 3D is m * v_max^2 / 2. Keep this scale independent of
-// the heater control, so heating the gas changes its color distribution.
-const NORMAL_PARTICLE_ENERGY: f32 = PARTICLE_MASS * INITIAL_SPEED_LIMIT * INITIAL_SPEED_LIMIT / 2.0;
+// Mean kinetic energy per particle at 300 K: 3 kT / 2 in reduced units.
+const NORMAL_PARTICLE_ENERGY: f32 = 1.5 * INITIAL_TEMPERATURE;
 const HOT_ENERGY_MULTIPLIER: f32 = 3.0;
 
 // Camera-space light components: right, up, and toward the viewer.
@@ -55,16 +59,15 @@ const AMBIENT_LIGHT: f32 = 0.35;
 const DIFFUSE_LIGHT: f32 = 0.65;
 const DEPTH_FADE_STRENGTH: f32 = 0.8;
 
-// Impact markers are visual feedback, not extra heat or lost/gained energy.
+// Brief collision highlight; purely visual, it changes no energy.
 const COLLISION_FLASH_COLOR: Color = Color::from_rgba(255, 252, 226, 255);
 const COLLISION_FLASH_STRENGTH: f32 = 0.3;
 
 pub const DRAW_CALL_VERTEX_CAPACITY: usize = 16_384;
 pub const DRAW_CALL_INDEX_CAPACITY: usize = 60_000;
 
-/// Radius and height of the cylindrical chamber in simulation units.
-///
-/// Both values are positive and refer to the chamber's inner dimensions.
+/// Radius and height, in model units, of a vertical cylinder centered on
+/// the origin. Used for cylinder frames and for the depth-fade extent.
 #[derive(Clone, Copy)]
 pub struct CylinderDimensions {
     pub radius: f32,
@@ -83,7 +86,8 @@ fn mix_color(first: Color, second: Color, amount: f32) -> Color {
     }
 }
 
-/// Maps each marker's thermal kinetic energy to a fixed blue/orange/red scale.
+/// Maps a particle's kinetic energy (reduced units) to blue, orange or red on
+/// a fixed scale: blue below the 300 K average, orange at it, red at 3x.
 fn kinetic_energy_color(energy: f32) -> Color {
     if energy <= NORMAL_PARTICLE_ENERGY {
         mix_color(COLD_COLOR, NORMAL_COLOR, energy / NORMAL_PARTICLE_ENERGY)
@@ -165,6 +169,10 @@ struct SphereTemplate {
 
 impl SphereTemplate {
     fn new() -> Self {
+        Self::with_segments(SPHERE_LATITUDE_SEGMENTS, SPHERE_LONGITUDE_SEGMENTS)
+    }
+
+    fn with_segments(latitude_segments: usize, longitude_segments: usize) -> Self {
         let mut positions = Vec::new();
         let mut indices = Vec::new();
 
@@ -172,12 +180,12 @@ impl SphereTemplate {
         let north = 0;
         positions.push(Vec3::Y);
 
-        for latitude in 1..SPHERE_LATITUDE_SEGMENTS {
-            let theta = PI * latitude as f32 / SPHERE_LATITUDE_SEGMENTS as f32;
+        for latitude in 1..latitude_segments {
+            let theta = PI * latitude as f32 / latitude_segments as f32;
             let (sin_theta, cos_theta) = theta.sin_cos();
 
-            for longitude in 0..SPHERE_LONGITUDE_SEGMENTS {
-                let phi = TAU * longitude as f32 / SPHERE_LONGITUDE_SEGMENTS as f32;
+            for longitude in 0..longitude_segments {
+                let phi = TAU * longitude as f32 / longitude_segments as f32;
                 let (sin_phi, cos_phi) = phi.sin_cos();
 
                 positions.push(vec3(sin_theta * cos_phi, cos_theta, sin_theta * sin_phi));
@@ -189,11 +197,11 @@ impl SphereTemplate {
 
         // Ring indices exclude the two pole vertices.
         let ring_vertex = |latitude: usize, longitude: usize| -> usize {
-            1 + (latitude - 1) * SPHERE_LONGITUDE_SEGMENTS + longitude
+            1 + (latitude - 1) * longitude_segments + longitude
         };
 
-        for longitude in 0..SPHERE_LONGITUDE_SEGMENTS {
-            let next = (longitude + 1) % SPHERE_LONGITUDE_SEGMENTS;
+        for longitude in 0..longitude_segments {
+            let next = (longitude + 1) % longitude_segments;
 
             indices.extend([
                 north as u16,
@@ -202,9 +210,9 @@ impl SphereTemplate {
             ]);
         }
 
-        for latitude in 1..SPHERE_LATITUDE_SEGMENTS - 1 {
-            for longitude in 0..SPHERE_LONGITUDE_SEGMENTS {
-                let next = (longitude + 1) % SPHERE_LONGITUDE_SEGMENTS;
+        for latitude in 1..latitude_segments - 1 {
+            for longitude in 0..longitude_segments {
+                let next = (longitude + 1) % longitude_segments;
                 let upper = ring_vertex(latitude, longitude) as u16;
                 let upper_next = ring_vertex(latitude, next) as u16;
                 let lower = ring_vertex(latitude + 1, longitude) as u16;
@@ -215,13 +223,13 @@ impl SphereTemplate {
             }
         }
 
-        for longitude in 0..SPHERE_LONGITUDE_SEGMENTS {
-            let next = (longitude + 1) % SPHERE_LONGITUDE_SEGMENTS;
+        for longitude in 0..longitude_segments {
+            let next = (longitude + 1) % longitude_segments;
 
             indices.extend([
                 south as u16,
-                ring_vertex(SPHERE_LATITUDE_SEGMENTS - 1, longitude) as u16,
-                ring_vertex(SPHERE_LATITUDE_SEGMENTS - 1, next) as u16,
+                ring_vertex(latitude_segments - 1, longitude) as u16,
+                ring_vertex(latitude_segments - 1, next) as u16,
             ]);
         }
 
@@ -245,15 +253,17 @@ impl SphereTemplate {
     }
 }
 
-/// Renders opaque spheres with reusable batched geometry.
+/// Draws every particle as a small shaded sphere, 256 per mesh.
 ///
-/// Each frame updates particle color from thermal kinetic energy and impacts,
-/// then applies camera-relative lighting and depth fading. The mesh buffers
-/// are reused; the number of mesh submissions is unchanged.
+/// Each frame rewrites vertex positions and colors in place: color from the
+/// particle's energy relative to the gas's mean motion, plus collision
+/// highlight, camera-relative lighting and depth fade. Meshes are rebuilt
+/// only when the particle count changes.
 pub struct ParticleRenderer {
     template: SphereTemplate,
     batches: Vec<Mesh>,
     particle_count: usize,
+    low_detail: bool,
 }
 
 impl ParticleRenderer {
@@ -278,6 +288,7 @@ impl ParticleRenderer {
             template,
             batches: Vec::new(),
             particle_count: 0,
+            low_detail: false,
         }
     }
 
@@ -286,6 +297,18 @@ impl ParticleRenderer {
             return;
         }
 
+        let low_detail = particle_count >= LOW_DETAIL_PARTICLE_THRESHOLD;
+        if low_detail != self.low_detail {
+            self.template = if low_detail {
+                SphereTemplate::with_segments(
+                    LOW_DETAIL_LATITUDE_SEGMENTS,
+                    LOW_DETAIL_LONGITUDE_SEGMENTS,
+                )
+            } else {
+                SphereTemplate::new()
+            };
+            self.low_detail = low_detail;
+        }
         self.batches.clear();
         let mut remaining = particle_count;
 
@@ -296,7 +319,7 @@ impl ParticleRenderer {
             let mut indices = Vec::with_capacity(count * self.template.indices.len());
 
             for particle_index in 0..count {
-                // Colors and positions are overwritten in draw().
+                // Colors and positions are overwritten in prepare().
                 for &position in &self.template.positions {
                     vertices.push(Vertex::new2(position, Vec2::ZERO, NORMAL_COLOR));
                 }
@@ -319,6 +342,29 @@ impl ParticleRenderer {
 
     /// Updates vertex coordinates and colors, then submits each mesh batch.
     pub fn draw(
+        &mut self,
+        particles: &[Particle],
+        collision_flashes: &[f32],
+        radius: f32,
+        camera: &Camera3D,
+        chamber: CylinderDimensions,
+        background: Color,
+    ) {
+        self.prepare(
+            particles,
+            collision_flashes,
+            radius,
+            camera,
+            chamber,
+            background,
+        );
+        for batch in &self.batches {
+            draw_mesh(batch);
+        }
+    }
+
+    /// Updates reusable CPU buffers separately from GPU submission.
+    fn prepare(
         &mut self,
         particles: &[Particle],
         collision_flashes: &[f32],
@@ -373,8 +419,6 @@ impl ParticleRenderer {
                     vertex.color = mix_color(shaded, background, fade).into();
                 }
             }
-
-            draw_mesh(batch);
         }
     }
 }
@@ -441,10 +485,9 @@ pub(crate) fn append_tube(
     }
 }
 
-/// Static cylindrical wireframe with small, shaded, three-dimensional tubes.
-///
-/// Constructed once and submitted as one mesh each frame. The frame is only
-/// visual; the collision boundary still uses the dimensions of the cylinder.
+/// Cylinder outline made of thin shaded tubes: top and bottom rims plus
+/// vertical guides. Built once and drawn as one mesh each frame. Visual
+/// only; collisions use `ChamberGeometry`.
 pub struct CylinderFrame {
     mesh: Mesh,
 }
@@ -518,7 +561,8 @@ const PISTON_BOTTOM_COLOR: Color = Color::from_rgba(108, 132, 158, 255);
 const PISTON_THICKNESS: f32 = 0.10;
 const PISTON_EDGE_CLEARANCE: f32 = 0.04;
 
-/// Reusable disk translated vertically without rebuilding its mesh.
+/// Piston disc built once; each frame shifts its vertices to the face
+/// height instead of rebuilding the mesh.
 struct PistonDisc {
     mesh: Mesh,
     y: f32,
@@ -577,13 +621,14 @@ impl PistonDisc {
     }
 }
 
-/// Colors distinguish the heated left cylinder from the cooled right one.
+/// Both cylinder frames (orange hot, blue cold), the pistons and the
+/// passage outline.
 pub struct ConnectedChamberVisual {
     left: CylinderFrame,
     right: CylinderFrame,
     left_piston: PistonDisc,
     right_piston: PistonDisc,
-    geometry: ChamberGeometry,
+    passage_lines: Vec<(Vec3, Vec3)>,
 }
 
 impl ConnectedChamberVisual {
@@ -597,7 +642,7 @@ impl ConnectedChamberVisual {
             right: CylinderFrame::at_x(dimensions, RIGHT_COLOR, geometry.cylinder_offset),
             left_piston: PistonDisc::new(-geometry.cylinder_offset, geometry.cylinder_radius),
             right_piston: PistonDisc::new(geometry.cylinder_offset, geometry.cylinder_radius),
-            geometry,
+            passage_lines: passage_wireframe(geometry),
         }
     }
 
@@ -607,31 +652,71 @@ impl ConnectedChamberVisual {
         self.left_piston.draw(left_face_y);
         self.right_piston.draw(right_face_y);
 
-        // Circular connecting tube, open to each bore and centered low
-        // enough for the two piston faces to travel above its upper edge.
-        const TUBE_SEGMENTS: usize = 24;
-        const LONGITUDINAL_STRIDE: usize = 3;
-        let geometry = self.geometry;
-        let start_x = -geometry.connector_half_length();
-        let end_x = geometry.connector_half_length();
-        let point = |x: f32, angle: f32| -> Vec3 {
-            vec3(
-                x,
-                geometry.connector_center_y + geometry.connector_radius * angle.cos(),
-                geometry.connector_radius * angle.sin(),
-            )
-        };
-        for segment in 0..TUBE_SEGMENTS {
-            let angle = TAU * segment as f32 / TUBE_SEGMENTS as f32;
-            let next = TAU * (segment + 1) as f32 / TUBE_SEGMENTS as f32;
-            for x in [start_x, end_x] {
-                draw_line_3d(point(x, angle), point(x, next), CONNECTOR_COLOR);
+        for &(a, b) in &self.passage_lines {
+            draw_line_3d(a, b, CONNECTOR_COLOR);
+        }
+    }
+}
+
+/// Line segments outlining the passage capsules, computed once. Edges inside
+/// another capsule or above the cylinder floors are left out, so elbows and
+/// floor openings do not look like closed internal walls.
+fn passage_wireframe(geometry: ChamberGeometry) -> Vec<(Vec3, Vec3)> {
+    const RING_SEGMENTS: usize = 24;
+    const CAP_STEPS: usize = 6;
+    const LONGITUDINAL_STRIDE: usize = 3;
+    const SURFACE_TOLERANCE: f32 = 0.999;
+    let sections = geometry.connector_segments();
+    let radius = geometry.connector_radius;
+    let mut lines = Vec::new();
+    for (section, &(start, end)) in sections.iter().enumerate() {
+        let direction = (end - start).normalize();
+        let across = direction.cross(Vec3::Z);
+        let mut add = |a: Vec3, b: Vec3| {
+            let middle = (a + b) / 2.0;
+            if middle.y > -geometry.cylinder_height / 2.0 {
+                return;
             }
+            let hidden = sections.iter().enumerate().any(|(other, &(c, d))| {
+                if other == section {
+                    return false;
+                }
+                let axis = d - c;
+                let nearest =
+                    c + axis * ((middle - c).dot(axis) / axis.length_squared()).clamp(0.0, 1.0);
+                middle.distance_squared(nearest) < radius * radius * SURFACE_TOLERANCE
+            });
+            if !hidden {
+                lines.push((a, b));
+            }
+        };
+        for segment in 0..RING_SEGMENTS {
+            let angle = TAU * segment as f32 / RING_SEGMENTS as f32;
+            let next = TAU * (segment + 1) as f32 / RING_SEGMENTS as f32;
+            let radial = |angle: f32| across * angle.cos() + Vec3::Z * angle.sin();
             if segment % LONGITUDINAL_STRIDE == 0 {
-                draw_line_3d(point(start_x, angle), point(end_x, angle), CONNECTOR_COLOR);
+                add(start + radial(angle) * radius, end + radial(angle) * radius);
+            }
+            for (center, sign) in [(start, -1.0), (end, 1.0)] {
+                for step in 0..CAP_STEPS {
+                    let latitude = std::f32::consts::FRAC_PI_2 * step as f32 / CAP_STEPS as f32;
+                    let next_latitude =
+                        std::f32::consts::FRAC_PI_2 * (step + 1) as f32 / CAP_STEPS as f32;
+                    let point = |angle: f32, latitude: f32| {
+                        center
+                            + radius
+                                * (radial(angle) * latitude.cos()
+                                    + direction * sign * latitude.sin())
+                    };
+                    add(point(angle, latitude), point(next, latitude));
+                    if segment % LONGITUDINAL_STRIDE == 0 {
+                        add(point(angle, latitude), point(angle, next_latitude));
+                    }
+                }
             }
         }
     }
+    lines
 }
 
 const WHEEL_SEGMENTS: usize = 48;
@@ -641,6 +726,7 @@ const WHEEL_COLOR: Color = Color::from_rgba(223, 187, 112, 255);
 const HOT_ROD_COLOR: Color = Color::from_rgba(251, 167, 114, 255);
 const COLD_ROD_COLOR: Color = Color::from_rgba(135, 198, 246, 255);
 
+/// Crankshaft, flywheel rim with spokes, cranks and connecting rods.
 pub struct ShaftVisual {
     geometry: ChamberGeometry,
 }
@@ -650,7 +736,8 @@ impl ShaftVisual {
         Self { geometry }
     }
 
-    /// Draws a common X-axis shaft, flywheel rim, and both phase-offset rods.
+    /// Draws the shaft along x, the flywheel at its center, and each
+    /// cylinder's crank and connecting rod at the current angle.
     pub fn draw(&self, pistons: &PowerPistons) {
         let geometry = self.geometry;
         let shaft_y = pistons.shaft_height();

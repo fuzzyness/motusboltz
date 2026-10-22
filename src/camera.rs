@@ -73,7 +73,8 @@ impl OrbitCamera {
             return;
         }
 
-        // Do not let a slider gesture become a camera drag.
+        // The mouse is over a control or chart, or a control drag is in
+        // progress; drop any drag so the camera does not jump afterward.
         if !pointer_enabled {
             self.previous_orbit_mouse = None;
             self.previous_pan_mouse = None;
@@ -98,7 +99,8 @@ impl OrbitCamera {
             self.previous_pan_mouse = None;
         }
 
-        // Some trackpads report scroll events during drag gestures.
+        // Zoom only when no button is held: some trackpads report scroll
+        // events during drag gestures.
         if !left_down && !right_down {
             self.update_zoom();
         }

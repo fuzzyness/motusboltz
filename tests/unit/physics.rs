@@ -83,14 +83,14 @@ fn temperature_adjustment_preserves_bulk_motion() {
     ];
     let momentum_before = particles
         .iter()
-        .map(|particle| particle.velocity)
+        .map(|particle| particle.velocity * PARTICLE_MASS)
         .sum::<Vec3>();
 
     rescale_thermal_velocities(&mut particles, TARGET_TEST_TEMPERATURE);
 
     let momentum_after = particles
         .iter()
-        .map(|particle| particle.velocity)
+        .map(|particle| particle.velocity * PARTICLE_MASS)
         .sum::<Vec3>();
     assert!((momentum_before - momentum_after).length() < TOLERANCE);
     assert!((temperature(&particles) - TARGET_TEST_TEMPERATURE).abs() < TOLERANCE);
