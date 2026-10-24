@@ -93,11 +93,31 @@ fn initial_camera_frames_lower_passage_and_longer_linkage() {
     }
 }
 
+#[test]
+fn scene_viewport_counts_physical_pixels() {
+    const RETINA_SCALE: f32 = 2.0;
+    for (width, height) in WINDOWS {
+        let (left, scene) = scene_span(width, true);
+        let standard = scene_viewport(width, height, true, 1.0);
+        assert_eq!(standard, (left as i32, 0, scene as i32, height as i32));
+        let (x, y, w, h) = scene_viewport(width, height, true, RETINA_SCALE);
+        assert_eq!((x, y), (2 * standard.0, 0));
+        assert!((w - 2 * standard.2).abs() <= 1 && (h - 2 * standard.3).abs() <= 1);
+    }
+}
+
+#[test]
+fn build_label_names_this_version() {
+    assert!(BUILD_LABEL.starts_with(concat!("v", env!("CARGO_PKG_VERSION"), " (")));
+    assert!(BUILD_LABEL.ends_with(')'));
+}
+
 /// Macroquad's built-in font is only relied on for ASCII.
 #[test]
 fn fixed_canvas_text_is_ascii() {
     for text in [
         HELP_TEXT,
+        BUILD_LABEL,
         TITLE,
         "Reset (T)",
         "Pause (Space)",

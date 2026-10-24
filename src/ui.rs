@@ -18,6 +18,7 @@ use macroquad::prelude::{
     measure_text,
     mouse_position,
     next_frame,
+    screen_dpi_scale,
     screen_height,
     screen_width,
     set_camera,
@@ -74,6 +75,17 @@ const TITLE_Y: f32 = 36.0;
 const TITLE_FONT_SIZE: f32 = 28.0;
 const HELP_FONT_SIZE: f32 = 16.0;
 const HELP_BOTTOM_Y: f32 = 24.0;
+/// Version and Git revision of this build (see build.rs), shown in the
+/// bottom-right corner so it is always clear which build is running.
+const BUILD_LABEL: &str = concat!(
+    "v",
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("MOTUSBOLTZ_REVISION"),
+    ")"
+);
+const BUILD_LABEL_FONT_SIZE: f32 = 14.0;
+const BUILD_LABEL_COLOR: Color = Color::from_rgba(120, 140, 160, 255);
 const HELP_TEXT: &str =
     "1-5: Fill | Space: Pause | A: Kick | T: Reset | R: Camera | D: Details | G: Panel";
 /// Clock resolution used for the startup seed, in ticks per second.
@@ -177,6 +189,26 @@ fn scene_span(screen_width: f32, show_panel: bool) -> (f32, f32) {
     (left, (screen_width - left - CONTROL_COLUMN_WIDTH).max(1.0))
 }
 
+/// The scene's viewport in framebuffer pixels. Screen sizes are in logical
+/// points, but Macroquad hands a camera viewport straight to OpenGL, which
+/// counts physical pixels, so it is scaled by the display's DPI factor
+/// (2 on a Retina screen with `high_dpi`).
+fn scene_viewport(
+    screen_width: f32,
+    screen_height: f32,
+    show_panel: bool,
+    dpi_scale: f32,
+) -> (i32, i32, i32, i32) {
+    let (left, width) = scene_span(screen_width, show_panel);
+    let pixels = |points: f32| (points * dpi_scale).round() as i32;
+    (
+        pixels(left),
+        0,
+        pixels(width),
+        pixels(screen_height.max(1.0)),
+    )
+}
+
 /// Extra zoom-out so the passage, crank and flywheel all fit the first view.
 const CAMERA_FRAMING_MARGIN: f32 = 1.25;
 fn initial_camera(geometry: ChamberGeometry) -> OrbitCamera {
@@ -273,11 +305,11 @@ pub async fn run() {
         let mut view_camera = camera.camera();
         let (scene_left, scene_width) = scene_span(screen_width(), show_panel);
         let scene_height = screen_height().max(1.0);
-        view_camera.viewport = Some((
-            scene_left as i32,
-            0,
-            scene_width as i32,
-            scene_height as i32,
+        view_camera.viewport = Some(scene_viewport(
+            screen_width(),
+            scene_height,
+            show_panel,
+            screen_dpi_scale(),
         ));
         view_camera.aspect = Some(scene_width / scene_height);
         clear_background(BACKGROUND_COLOR);
@@ -309,6 +341,14 @@ pub async fn run() {
             scene_width - 2.0 * SCENE_TEXT_MARGIN,
             HELP_FONT_SIZE,
             WHITE,
+        );
+        let label_width = measure_text(BUILD_LABEL, None, BUILD_LABEL_FONT_SIZE as u16, 1.0).width;
+        draw_text(
+            BUILD_LABEL,
+            screen_width() - RIGHT_MARGIN - label_width,
+            screen_height() - HELP_BOTTOM_Y,
+            BUILD_LABEL_FONT_SIZE,
+            BUILD_LABEL_COLOR,
         );
         draw_buttons(paused, panel.details_shown());
         concentration_slider.draw();

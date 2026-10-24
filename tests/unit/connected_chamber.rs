@@ -1087,9 +1087,10 @@ fn maximum_fill_benchmark() {
 #[test]
 fn slow_frame_caps_catchup_without_larger_physics_steps() {
     const SEED: u64 = 42;
+    const SLOW_FRAME: f32 = 4.0 * MAX_FRAME_TIME;
     let mut capped = ConnectedChambers::with_geometry_seed(TEST_COUNT, DEFAULT_GEOMETRY, SEED);
     let mut reference = ConnectedChambers::with_geometry_seed(TEST_COUNT, DEFAULT_GEOMETRY, SEED);
-    assert!(capped.update(MAX_FRAME_TIME));
+    assert!(capped.update(SLOW_FRAME));
     for _ in 0..MAX_FIXED_STEPS_PER_FRAME {
         reference.step(FIXED_DT);
     }
@@ -1100,4 +1101,21 @@ fn slow_frame_caps_catchup_without_larger_physics_steps() {
     assert!(capped.accumulator < FIXED_DT);
     assert!(!capped.update(0.0));
     assert!(!reference.update(FIXED_DT));
+}
+
+/// A display held at 30 FPS delivers frames of about 33 ms that arrive
+/// unevenly. None of that time may be dropped: the budget must absorb the
+/// late frames and leave no backlog. With the old budget of 4 steps, these
+/// frames dropped time and flashed the warning.
+#[test]
+fn uneven_thirty_fps_frames_keep_real_time() {
+    const SEED: u64 = 42;
+    const FRAMES: usize = 240;
+    const FRAME_TIMES: [f32; 6] = [1.0 / 30.0, 0.029, 0.0375, 0.0333, 0.041, 0.026];
+    let mut simulation = ConnectedChambers::with_geometry_seed(TEST_COUNT, DEFAULT_GEOMETRY, SEED);
+    for frame in 0..FRAMES {
+        let limited = simulation.update(FRAME_TIMES[frame % FRAME_TIMES.len()]);
+        assert!(!limited, "frame {frame} dropped time");
+        assert!(simulation.accumulator < FIXED_DT);
+    }
 }

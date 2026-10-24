@@ -515,10 +515,14 @@ const PARTICLE_RADIUS: f32 = 0.13;
 const PARTICLE_RADIUS_TO_SPACING: f32 = 0.4;
 const FIXED_STEPS_PER_SECOND: u32 = 120;
 const FIXED_DT: f32 = 1.0 / FIXED_STEPS_PER_SECOND as f32;
-/// Longest frame time accepted per update; longer frames are clipped.
-const MAX_FRAME_TIME: f32 = 0.05;
-/// Bound catch-up work so a slow frame cannot create an ever-growing backlog.
-const MAX_FIXED_STEPS_PER_FRAME: usize = 4;
+/// Most fixed steps run in one frame, bounding catch-up work so a slow
+/// frame cannot create an ever-growing backlog. Six steps cover a 20 FPS
+/// frame, so a display held at 30 FPS (for example Safari in Low Power
+/// Mode) keeps real time even when its frames arrive unevenly.
+const MAX_FIXED_STEPS_PER_FRAME: usize = 6;
+/// Longest frame time accepted per update, exactly the step budget; longer
+/// frames are clipped and reported as limited.
+const MAX_FRAME_TIME: f32 = MAX_FIXED_STEPS_PER_FRAME as f32 * FIXED_DT;
 // Keep projected centers inside walls to avoid floating-point rounding escapes.
 const WALL_PROJECTION_MARGIN: f32 = 16.0 * f32::EPSILON;
 

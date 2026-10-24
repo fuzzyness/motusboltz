@@ -1,0 +1,82 @@
+# Tests the engine, builds the WebAssembly version and publishes it with
+# web/ to GitHub Pages on every push to main. The live page therefore
+# always matches the latest commit, and no build output is committed.
+#
+# One-time setup: Settings > Pages > Build and deployment > Source:
+# "GitHub Actions".
+name: Web build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; a newer push waits rather than cancelling a
+# deployment already in progress.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  WASM_TARGET: wasm32-unknown-unknown
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.WASM_TARGET }}
+
+      - name: Test
+        run: cargo test --release
+
+      - name: Build WebAssembly
+        run: cargo build --release --target "$WASM_TARGET"
+
+      - name: Assemble site
+        run: |
+          mkdir -p _site
+          find web -maxdepth 1 -type f ! -name serve.sh ! -name '*.wasm' -exec cp {} _site/ \;
+          cp "target/$WASM_TARGET/release/motusboltz.wasm" _site/
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
+
+  # Formatting and lints are reported but do not block deployment, so a
+  # lint added in a new Rust release cannot stop the page from updating.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        run: cargo fmt -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
