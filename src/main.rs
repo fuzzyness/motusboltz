@@ -1,10 +1,11 @@
 //! MotusBoltz: a particle-driven two-cylinder (alpha-type) Stirling engine.
 
 mod camera;
-mod charts;
+mod cycle;
 mod engine;
 mod gas;
 mod graphics;
+mod panel;
 mod slider;
 mod ui;
 

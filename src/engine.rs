@@ -11,6 +11,11 @@ use macroquad::prelude::{
 };
 use macroquad::rand::{RandGenerator, gen_range};
 
+use crate::cycle::{
+    CycleMonitor,
+    CycleTotals,
+    Substep, //
+};
 use crate::gas as physics;
 use crate::gas::{
     COLLISION_FLASH_DURATION,
@@ -184,10 +189,11 @@ const LOAD_DRAG: f32 = REFERENCE_LOAD_DRAG * DYNAMICS_TIME_SCALE * DYNAMICS_TIME
 /// The 48 mm stroke needs this much to carry the crank past compression.
 const STARTER_ENERGY: f64 = 1_600.0;
 
+/// Which piston; the discriminants index per-cylinder arrays.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PistonSide {
-    Hot,
-    Cold,
+    Hot = crate::cycle::HOT as isize,
+    Cold = crate::cycle::COLD as isize,
 }
 
 /// Direction of a manual kick. `Negative` is the heat-engine direction and
@@ -238,6 +244,7 @@ pub struct PowerPistons {
     starter_work: f64,
     back_pressure_work: f64,
     drag_loss: f64,
+    gas_impulse: [f64; 2],
 }
 
 impl PowerPistons {
@@ -278,6 +285,7 @@ impl PowerPistons {
             starter_work: 0.0,
             back_pressure_work: 0.0,
             drag_loss: 0.0,
+            gas_impulse: [0.0; 2],
         }
     }
 
@@ -397,6 +405,7 @@ impl PowerPistons {
         if inverse_mass > 0.0 {
             self.angular_velocity +=
                 impulse * self.displacement_derivative(side) as f64 / self.inertia;
+            self.gas_impulse[side as usize] += impulse;
         }
         new_speed as f32
     }
@@ -438,6 +447,19 @@ impl PowerPistons {
     }
     pub fn revolutions(&self) -> f64 {
         self.total_angle / std::f64::consts::TAU
+    }
+    /// Signed crank rotation since the fill, in radians.
+    pub fn total_angle(&self) -> f64 {
+        self.total_angle
+    }
+    /// Area of one piston face, in square model units.
+    pub fn face_area(&self) -> f32 {
+        self.area
+    }
+    /// Returns the upward impulse the gas has given each moving piston face
+    /// (indexed hot, cold) since the last call, and resets it.
+    pub fn take_gas_impulse(&mut self) -> [f64; 2] {
+        std::mem::take(&mut self.gas_impulse)
     }
     pub fn stroke(&self) -> f32 {
         self.stroke
@@ -485,6 +507,7 @@ impl PowerPistons {
     }
 }
 
+const CUBIC_CENTIMETERS_PER_CUBIC_METER: f64 = 1.0e6;
 /// Collision and rendering radius of every particle, at every fill level.
 const PARTICLE_RADIUS: f32 = 0.13;
 /// Initial fill lattice spacing must be at least radius / 0.4, so
@@ -532,10 +555,10 @@ pub struct ConnectedChambers {
     initial_volume_m3: f64,
     piston_work_by_gas: f64,
     accumulator: f32,
-    elapsed_time: f64,
     thermal: ThermalReservoirs,
     gas: HeliumCalibration,
     initial_energy: f32,
+    cycle: CycleMonitor,
 }
 
 impl ConnectedChambers {
@@ -688,6 +711,13 @@ impl ConnectedChambers {
 
         let initial_energy = physics::kinetic_energy(&particles);
         let initial_volume_m3 = pistons.volume_m3(geometry);
+        let cycle = CycleMonitor::new(
+            pistons.face_area() as f64,
+            CycleTotals {
+                gas_energy: gas_energy(&particles),
+                ..CycleTotals::default()
+            },
+        );
         Self {
             particles,
             flashes: vec![0.0; count],
@@ -698,7 +728,6 @@ impl ConnectedChambers {
             initial_volume_m3,
             piston_work_by_gas: 0.0,
             accumulator: 0.0,
-            elapsed_time: 0.0,
             thermal: ThermalReservoirs::with_seed(random.gen_range(0, u64::MAX)),
             gas: HeliumCalibration::new(
                 initial_volume_m3,
@@ -706,12 +735,13 @@ impl ConnectedChambers {
                 MAX_INITIAL_CONCENTRATION_MOL_PER_L as f64,
             ),
             initial_energy,
+            cycle,
         }
     }
 
     /// Rebuilds the simulation with a fresh random seed and `count`
     /// particles, keeping reservoir temperatures and the running state.
-    /// Heat, work, kicks and model time restart from zero.
+    /// Heat, work, kicks and the per-turn records restart from zero.
     fn refill(&mut self, count: usize) {
         let hot_kelvin = self.thermal.hot_kelvin();
         let running = self.pistons.running();
@@ -736,24 +766,33 @@ impl ConnectedChambers {
         }
     }
 
-    /// Sets the hot wall temperature; particles change only when they hit it.
+    /// Sets the hot wall temperature; particles change only when they hit
+    /// it. A change discards the per-turn history (see `CycleMonitor`).
     pub fn set_hot_kelvin(&mut self, kelvin: f32) {
+        if kelvin != self.thermal.hot_kelvin() {
+            self.cycle.mark_settings_changed();
+        }
         self.thermal.set_hot_kelvin(kelvin);
     }
 
-    /// Sets the cold wall temperature; particles change only when they hit it.
+    /// Sets the cold wall temperature; particles change only when they hit
+    /// it. A change discards the per-turn history (see `CycleMonitor`).
     pub fn set_cold_kelvin(&mut self, kelvin: f32) {
+        if kelvin != self.thermal.cold_kelvin() {
+            self.cycle.mark_settings_changed();
+        }
         self.thermal.set_cold_kelvin(kelvin);
+    }
+
+    /// Per-turn heat, work, entropy and pressure-volume records.
+    pub fn cycle(&self) -> &CycleMonitor {
+        &self.cycle
     }
     pub fn cold_kelvin(&self) -> f32 {
         self.thermal.cold_kelvin()
     }
     pub fn hot_kelvin(&self) -> f32 {
         self.thermal.hot_kelvin()
-    }
-
-    pub fn elapsed_time(&self) -> f64 {
-        self.elapsed_time
     }
 
     pub fn heat(&self) -> HeatTransfer {
@@ -810,6 +849,32 @@ impl ConnectedChambers {
     /// Converts an energy in reduced simulation units to joules.
     pub fn energy_joules(&self, reduced_energy: impl Into<f64>) -> f64 {
         self.gas.energy_joules(reduced_energy)
+    }
+
+    /// Converts a reduced entropy (energy per reduced temperature) to J/K.
+    pub fn entropy_joules_per_kelvin(&self, reduced_entropy: f64) -> f64 {
+        self.gas.entropy_joules_per_kelvin(reduced_entropy)
+    }
+
+    /// Converts a reduced pressure to pascals.
+    pub fn pressure_pa(&self, reduced_pressure: f64) -> f64 {
+        self.gas.pressure_pa(reduced_pressure)
+    }
+
+    /// Converts a volume in cubic model units to cubic centimeters.
+    pub fn volume_cm3(&self, cubic_units: f64) -> f64 {
+        cubic_units * METERS_PER_UNIT.powi(3) * CUBIC_CENTIMETERS_PER_CUBIC_METER
+    }
+
+    /// Smallest and largest gas volume of one cylinder over a turn, in cm3.
+    pub fn cylinder_volume_range_cm3(&self) -> (f64, f64) {
+        let area = self.pistons.face_area() as f64;
+        let height = self.geometry.cylinder_height as f64;
+        let stroke = self.pistons.stroke() as f64;
+        (
+            self.volume_cm3(area * (height - stroke)),
+            self.volume_cm3(area * height),
+        )
     }
 
     /// Temperature, concentration and ideal-gas pressure for each cylinder,
@@ -1111,7 +1176,6 @@ impl ConnectedChambers {
     /// particle moves more than half a radius relative to a piston and the
     /// crank turns at most 0.02 rad per substep.
     fn step(&mut self, dt: f32) {
-        self.elapsed_time += dt as f64;
         const MAX_TRAVEL_RADII: f32 = 0.5;
         const MAX_CRANK_STEP_RADIANS: f32 = 0.02;
         let mut remaining = dt;
@@ -1191,7 +1255,37 @@ impl ConnectedChambers {
                 false,
             );
         }
+
+        let substep = Substep {
+            total_angle: self.pistons.total_angle(),
+            crank_angle: self.pistons.angle(),
+            dt: dt as f64,
+            gas_impulse: self.pistons.take_gas_impulse(),
+            volume: [self.pistons.left(), self.pistons.right()].map(|piston| {
+                self.pistons.cylinder_volume_m3(self.geometry, piston) / METERS_PER_UNIT.powi(3)
+            }),
+        };
+        let kelvin = (self.thermal.hot_kelvin(), self.thermal.cold_kelvin());
+        let (thermal, particles, gas_work) =
+            (&self.thermal, &self.particles, self.piston_work_by_gas);
+        self.cycle.record(substep, kelvin, || CycleTotals {
+            hot_heat: thermal.heat().hot,
+            cold_heat: thermal.heat().cold,
+            hot_entropy: thermal.entropy().hot,
+            cold_entropy: thermal.entropy().cold,
+            gas_work,
+            gas_energy: gas_energy(particles),
+        });
     }
+}
+
+/// Gas kinetic (internal) energy summed in f64, so per-turn differences of a
+/// few units out of thousands stay accurate.
+fn gas_energy(particles: &[Particle]) -> f64 {
+    particles
+        .iter()
+        .map(|particle| physics::particle_kinetic_energy(particle.velocity) as f64)
+        .sum()
 }
 
 #[cfg(test)]

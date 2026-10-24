@@ -108,3 +108,25 @@ fn cold_wall_emission_matches_flux_weighted_temperature() {
         (tangent_squared / SAMPLE_COUNT as f64 - expected).abs() < RELATIVE_TOLERANCE * expected
     );
 }
+
+#[test]
+fn entropy_flow_is_heat_over_reservoir_temperature() {
+    let mut walls = ThermalReservoirs::with_seed(11);
+    walls.set_accommodation(1.0);
+    walls.set_hot_kelvin(MAX_HOT_KELVIN);
+    walls.set_cold_kelvin(MIN_COLD_KELVIN);
+    for _ in 0..SAMPLES {
+        let mut hot = particle(INCIDENT_SPEED);
+        walls.reflect(&mut hot, Vec3::X, Some(ReservoirSide::Hot));
+        let mut cold = particle(FAST_INCIDENT_SPEED);
+        walls.reflect(&mut cold, Vec3::X, Some(ReservoirSide::Cold));
+        let mut insulated = particle(INCIDENT_SPEED);
+        walls.reflect(&mut insulated, Vec3::X, None);
+    }
+    let hot_t = MAX_HOT_KELVIN as f64 / KELVIN_PER_UNIT;
+    let cold_t = MIN_COLD_KELVIN as f64 / KELVIN_PER_UNIT;
+    // Reservoir temperatures are f32, so 1/3 is not exact.
+    let relative = |a: f64, b: f64| (a - b).abs() <= 1e-6 * b.abs().max(1.0);
+    assert!(relative(walls.entropy().hot, walls.heat().hot / hot_t));
+    assert!(relative(walls.entropy().cold, walls.heat().cold / cold_t));
+}

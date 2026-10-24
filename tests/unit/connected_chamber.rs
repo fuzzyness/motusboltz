@@ -816,8 +816,15 @@ fn fast_head_on_particles_do_not_tunnel_past_each_other() {
     assert!((simulation.kinetic_energy() - before).abs() < ENERGY_TOLERANCE);
 }
 
+/// One recorded turn and the work enclosed by each cylinder's P-V loop.
+struct RecordedTurn {
+    summary: crate::cycle::TurnSummary,
+    loop_work: [f64; 2],
+}
+
 /// Result of one kicked run, sampled at the last completed revolution.
 struct CycleOutcome {
+    turns: Vec<RecordedTurn>,
     completed_turns: usize,
     starter_energy: f64,
     phase_energy: f64,
@@ -844,8 +851,17 @@ fn kicked_run(seed: u64, hot_kelvin: f32, dt: f32, duration: f32) -> CycleOutcom
     let mut completed_turns = 0;
     let mut phase_energy = starter_energy;
     let mut phase_gas_work = 0.0;
+    let mut recorded = Vec::new();
     for _ in 0..(duration / dt) as usize {
         simulation.step(dt);
+        let cycle = simulation.cycle();
+        if cycle.completed_turns() as usize > recorded.len() {
+            recorded.push(RecordedTurn {
+                summary: cycle.last_turn().unwrap(),
+                loop_work: [crate::cycle::HOT, crate::cycle::COLD]
+                    .map(|cylinder| crate::cycle::loop_work(cycle.last_loop(cylinder))),
+            });
+        }
         let turns = (-simulation.pistons.revolutions()).max(0.0) as usize;
         if turns > completed_turns {
             completed_turns = turns;
@@ -854,6 +870,7 @@ fn kicked_run(seed: u64, hot_kelvin: f32, dt: f32, duration: f32) -> CycleOutcom
         }
     }
     CycleOutcome {
+        turns: recorded,
         completed_turns,
         starter_energy,
         phase_energy,
@@ -871,6 +888,10 @@ const MIN_TURNS: usize = 4;
 const BALANCE_TOLERANCE: f64 = 0.05;
 const HOT_GAIN_RATIO: f64 = 1.5;
 const EQUILIBRIUM_REMAINING_RATIO: f64 = 0.6;
+/// The two P-V loop areas must add up to the measured gas work within this
+/// fraction of the gross work on both pistons. The remaining error comes
+/// from averaging pressure over 10-degree bins; measured: below 0.7%.
+const LOOP_WORK_TOLERANCE: f64 = 0.02;
 
 /// Panics with the seed in the message if a run misses the criteria: a
 /// heated engine must gain energy from gas work, an equilibrium engine
@@ -883,6 +904,7 @@ fn check_kicked_run(seed: u64, hot_kelvin: f32, dt: f32, outcome: &CycleOutcome)
     );
     let context = format!("seed {seed}, hot {hot_kelvin} K, dt {dt}");
     assert!(o.completed_turns >= MIN_TURNS, "too few turns: {context}");
+    check_recorded_turns(o, &context);
     assert_eq!(o.final_starter_work, o.starter_energy, "{context}");
     assert!(o.gas_residual.abs() < BALANCE_TOLERANCE, "{context}");
     assert!(o.shaft_residual.abs() < BALANCE_TOLERANCE, "{context}");
@@ -900,6 +922,51 @@ fn check_kicked_run(seed: u64, hot_kelvin: f32, dt: f32, outcome: &CycleOutcome)
         );
         assert!(o.phase_gas_work < 0.0, "{context}");
     }
+}
+
+/// Checks every recorded turn against the laws the panel displays: the
+/// first-law ledger balances, the loop areas equal the work, efficiency
+/// stays below the Carnot limit, and settled turns raise the entropy of the
+/// surroundings.
+fn check_recorded_turns(outcome: &CycleOutcome, context: &str) {
+    // The first boundary only restarts the count, so one turn fewer.
+    assert!(
+        outcome.turns.len() + 1 >= outcome.completed_turns,
+        "turns not recorded: {context}"
+    );
+    let mut worst_loop_mismatch: f64 = 0.0;
+    let mut least_settled_entropy = f64::INFINITY;
+    for (index, turn) in outcome.turns.iter().enumerate() {
+        let summary = turn.summary;
+        let at = format!("turn {}: {context}", index + 1);
+        assert!(
+            summary.first_law_residual().abs() < BALANCE_TOLERANCE,
+            "ledger off by {}: {at}",
+            summary.first_law_residual()
+        );
+        let [hot, cold] = turn.loop_work;
+        let mismatch = (hot + cold - summary.gas_work).abs() / (hot.abs() + cold.abs());
+        worst_loop_mismatch = worst_loop_mismatch.max(mismatch);
+        assert!(
+            mismatch < LOOP_WORK_TOLERANCE,
+            "loop areas {hot} + {cold} vs work {}: {at}",
+            summary.gas_work
+        );
+        if let Some(efficiency) = summary.efficiency().filter(|_| summary.gas_work > 0.0) {
+            assert!(efficiency < summary.carnot_limit(), "beat Carnot: {at}");
+        }
+        if summary.is_settled() {
+            let entropy = summary.surroundings_entropy_change();
+            least_settled_entropy = least_settled_entropy.min(entropy);
+            assert!(entropy > 0.0, "settled turn lowered entropy: {at}");
+        }
+    }
+    println!(
+        "  {} turns recorded; worst loop mismatch {:.3}%; least settled dS surr {:.3} (reduced)",
+        outcome.turns.len(),
+        100.0 * worst_loop_mismatch,
+        least_settled_entropy
+    );
 }
 
 /// Fixed-seed regression, including a halved timestep.

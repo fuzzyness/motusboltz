@@ -417,6 +417,17 @@ impl HeliumCalibration {
         self.moles_per_marker * GAS_CONSTANT * KELVIN_PER_UNIT * reduced_energy.into()
     }
 
+    /// Converts reduced entropy (energy per reduced temperature) to J/K. The
+    /// 300 K factors of the energy and temperature scales cancel.
+    pub fn entropy_joules_per_kelvin(self, reduced_entropy: f64) -> f64 {
+        self.moles_per_marker * GAS_CONSTANT * reduced_entropy
+    }
+
+    /// Converts reduced pressure (energy per cubic model unit) to pascals.
+    pub fn pressure_pa(self, reduced_pressure: f64) -> f64 {
+        self.energy_joules(reduced_pressure) / METERS_PER_UNIT.powi(3)
+    }
+
     /// Readings for a region's particles occupying `volume_m3`.
     pub fn measure(self, sample: KineticMoments, volume_m3: f64) -> GasMeasurements {
         assert!(volume_m3 > 0.0);
@@ -466,6 +477,18 @@ impl HeatTransfer {
     }
 }
 
+/// Cumulative heat into the gas divided by the temperature of the reservoir
+/// that supplied it, q / T summed over every heat-exchanging wall impact, in
+/// reduced units (energy per reduced temperature).
+///
+/// Each reservoir's own entropy changes by minus its entry, so the entropy
+/// change of the surroundings is `-(hot + cold)`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EntropyFlow {
+    pub hot: f64,
+    pub cold: f64,
+}
+
 /// Hot and cold wall temperatures, the random stream for wall impacts, and
 /// the cumulative heat each reservoir has given the gas. Both start at 300 K.
 pub struct ThermalReservoirs {
@@ -473,6 +496,7 @@ pub struct ThermalReservoirs {
     cold_kelvin: f32,
     accommodation: f32,
     heat: HeatTransfer,
+    entropy: EntropyFlow,
     random: RandGenerator,
 }
 
@@ -492,6 +516,7 @@ impl ThermalReservoirs {
             cold_kelvin: MAX_COLD_KELVIN,
             accommodation: ACCOMMODATION_PROBABILITY,
             heat: HeatTransfer::default(),
+            entropy: EntropyFlow::default(),
         }
     }
 
@@ -519,6 +544,10 @@ impl ThermalReservoirs {
         self.heat
     }
 
+    pub fn entropy(&self) -> EntropyFlow {
+        self.entropy
+    }
+
     /// Bounces a particle off a stationary wall with the given outward unit
     /// normal. Particles already moving away from the wall are unchanged.
     ///
@@ -527,7 +556,8 @@ impl ThermalReservoirs {
     /// Otherwise the particle leaves with a new velocity drawn at that
     /// reservoir's temperature: a flux-weighted Maxwellian normal speed and
     /// Gaussian tangential components. Its change in kinetic energy is
-    /// booked as heat from that reservoir.
+    /// booked as heat from that reservoir, and that heat divided by the
+    /// reservoir temperature as entropy flow.
     pub fn reflect(
         &mut self,
         particle: &mut Particle,
@@ -561,9 +591,16 @@ impl ThermalReservoirs {
                 + tangent * u
                 + bitangent * v;
             let heat = (particle_kinetic_energy(particle.velocity) - before) as f64;
+            let entropy = heat / temperature as f64;
             match side {
-                ReservoirSide::Hot => self.heat.hot += heat,
-                ReservoirSide::Cold => self.heat.cold += heat,
+                ReservoirSide::Hot => {
+                    self.heat.hot += heat;
+                    self.entropy.hot += entropy;
+                }
+                ReservoirSide::Cold => {
+                    self.heat.cold += heat;
+                    self.entropy.cold += entropy;
+                }
             }
             return;
         }

@@ -1,10 +1,12 @@
-//! Main loop: input, simulation stepping, 3D scene, HUD text, buttons,
-//! sliders and charts.
+//! Main loop: input, simulation stepping, and screen layout. The 3D scene
+//! sits between the readings panel on the left and the controls on the
+//! right.
 
 use macroquad::prelude::{
     Color,
     KeyCode,
     MouseButton,
+    Vec2,
     WHITE,
     clear_background,
     draw_rectangle,
@@ -16,13 +18,13 @@ use macroquad::prelude::{
     measure_text,
     mouse_position,
     next_frame,
+    screen_height,
     screen_width,
     set_camera,
     set_default_camera, //
 };
 
 use crate::camera::OrbitCamera;
-use crate::charts::LiveCharts;
 use crate::engine::{
     ChamberGeometry,
     ConnectedChambers,
@@ -31,7 +33,6 @@ use crate::engine::{
 };
 use crate::gas::{
     DEFAULT_INITIAL_CONCENTRATION_MOL_PER_L,
-    GasMeasurements,
     MAX_INITIAL_CONCENTRATION_MOL_PER_L,
     MIN_INITIAL_CONCENTRATION_MOL_PER_L, //
 };
@@ -40,6 +41,12 @@ use crate::graphics::{
     CylinderDimensions,
     ParticleRenderer,
     ShaftVisual, //
+};
+use crate::panel::{
+    COLUMN_WIDTH,
+    EnginePanel,
+    TITLE,
+    fitted_text, //
 };
 use crate::slider::Slider;
 
@@ -60,20 +67,15 @@ const BUTTON_FONT_SIZE: f32 = 18.0;
 const BUTTON_WIDTH: f32 = (CONTROL_WIDTH - BUTTON_GAP_X) / 2.0;
 #[cfg(test)]
 const BUTTON_ROWS: usize = 2;
-const HUD_X: f32 = 20.0;
+/// Width kept free for the controls at the right edge.
+const CONTROL_COLUMN_WIDTH: f32 = CONTROL_WIDTH + RIGHT_MARGIN + crate::slider::PANEL_PADDING_X;
+const SCENE_TEXT_MARGIN: f32 = 20.0;
 const TITLE_Y: f32 = 36.0;
-const STATS_START_Y: f32 = 75.0;
-const HUD_LINE_HEIGHT: f32 = 25.0;
-const HUD_FONT_SIZE: f32 = 19.0;
 const TITLE_FONT_SIZE: f32 = 28.0;
 const HELP_FONT_SIZE: f32 = 16.0;
 const HELP_BOTTOM_Y: f32 = 24.0;
-const PASCALS_PER_BAR: f64 = 100_000.0;
-const HELP_TEXT: &str = "1-5: Fill | Space: Pause | A: Kick | T: Reset | R: Camera | G: Graphs";
-const TITLE_RUNNING: &str = "MotusBoltz | Particle dynamics";
-const TITLE_PAUSED: &str = "MotusBoltz | Paused";
-/// Seconds of wall time between HUD text refreshes.
-const STATS_REFRESH_SECONDS: f64 = 0.1;
+const HELP_TEXT: &str =
+    "1-5: Fill | Space: Pause | A: Kick | T: Reset | R: Camera | D: Details | G: Panel";
 /// Clock resolution used for the startup seed, in ticks per second.
 const SEED_TICKS_PER_SECOND: f64 = 1.0e6;
 /// Keys 1 to 5: 256, 512, 1,024, 1,536 and 2,048 particles.
@@ -98,26 +100,23 @@ enum Action {
     ResetGas,
     TogglePause,
     KickNegative,
+    ToggleDetails,
 }
 
-const BUTTON_ACTIONS: [Action; 3] = [Action::ResetGas, Action::TogglePause, Action::KickNegative];
+const BUTTON_ACTIONS: [Action; 4] = [
+    Action::ResetGas,
+    Action::TogglePause,
+    Action::KickNegative,
+    Action::ToggleDetails,
+];
 
-/// Left edge, top edge and width of button `index`. Buttons fill a
-/// two-column grid; the third (Kick) spans the full width.
+/// Left edge, top edge and width of button `index` in a two-column grid.
 fn button_rect(index: usize, screen_width: f32) -> (f32, f32, f32) {
     let col = (index % 2) as f32;
     let row = (index / 2) as f32;
     let x = screen_width - CONTROL_WIDTH - RIGHT_MARGIN + col * (BUTTON_WIDTH + BUTTON_GAP_X);
     let y = CONTROL_TOP + row * (BUTTON_HEIGHT + BUTTON_GAP);
-    (
-        x,
-        y,
-        if index == 2 {
-            CONTROL_WIDTH
-        } else {
-            BUTTON_WIDTH
-        },
-    )
+    (x, y, BUTTON_WIDTH)
 }
 
 fn button_at(x: f32, y: f32, bx: f32, by: f32, width: f32) -> bool {
@@ -154,7 +153,7 @@ fn draw_button(x: f32, y: f32, width: f32, label: &str) {
     );
 }
 
-fn draw_buttons(paused: bool) {
+fn draw_buttons(paused: bool, details: bool) {
     let labels = [
         "Reset (T)",
         if paused {
@@ -163,6 +162,7 @@ fn draw_buttons(paused: bool) {
             "Pause (Space)"
         },
         "Kick (A)",
+        if details { "Less (D)" } else { "Details (D)" },
     ];
     for (index, label) in labels.iter().enumerate() {
         let (x, y, width) = button_rect(index, screen_width());
@@ -170,20 +170,11 @@ fn draw_buttons(paused: bool) {
     }
 }
 
-/// One HUD line for a cylinder: particle count, temperature, concentration
-/// (mol/L) and ideal-gas pressure estimate.
-fn region_stats(name: &str, sample: GasMeasurements) -> String {
-    let temperature = sample
-        .temperature_kelvin
-        .map_or_else(|| "--".to_owned(), |value| format!("{value:.0}"));
-    let pressure = sample.pressure_pa.map_or_else(
-        || "--".to_owned(),
-        |value| format!("{:.1}", value / PASCALS_PER_BAR),
-    );
-    format!(
-        "{name}: {} | {temperature} K | {:.2} M | ~{pressure} bar",
-        sample.markers, sample.concentration_mol_per_l,
-    )
+/// Left edge and width of the 3D scene: between the panel (when shown)
+/// and the control column.
+fn scene_span(screen_width: f32, show_panel: bool) -> (f32, f32) {
+    let left = if show_panel { COLUMN_WIDTH } else { 0.0 };
+    (left, (screen_width - left - CONTROL_COLUMN_WIDTH).max(1.0))
 }
 
 /// Extra zoom-out so the passage, crank and flywheel all fit the first view.
@@ -208,8 +199,8 @@ pub async fn run() {
     let mut simulation =
         ConnectedChambers::with_initial_concentration(DEFAULT_INITIAL_CONCENTRATION_MOL_PER_L);
     let mut paused = false;
-    let mut charts = LiveCharts::new();
-    let mut show_charts = true;
+    let mut panel = EnginePanel::new();
+    let mut show_panel = true;
     let geometry = simulation.geometry();
     let mut camera = initial_camera(geometry);
     let mut renderer = ParticleRenderer::new();
@@ -226,9 +217,6 @@ pub async fn run() {
     // True while a press that started on a button is held, so dragging off
     // the button does not rotate the camera.
     let mut button_gesture = false;
-    let mut next_stats_refresh = 0.0;
-    let mut stats: Vec<String> = Vec::new();
-    let mut physics_limited_since_readout = false;
 
     loop {
         let (over_buttons, action) = buttons();
@@ -238,7 +226,6 @@ pub async fn run() {
         button_gesture |= action.is_some();
         if is_key_pressed(KeyCode::T) || action == Some(Action::ResetGas) {
             simulation.reset();
-            charts.clear();
         }
         if is_key_pressed(KeyCode::Space) || action == Some(Action::TogglePause) {
             paused = !paused;
@@ -246,11 +233,13 @@ pub async fn run() {
         if is_key_pressed(KeyCode::A) || action == Some(Action::KickNegative) {
             simulation.kick_flywheel(KickDirection::Negative);
         }
+        if is_key_pressed(KeyCode::D) || action == Some(Action::ToggleDetails) {
+            panel.toggle_details();
+        }
 
         for (&key, &concentration) in PRESET_KEYS.iter().zip(&CONCENTRATION_PRESETS) {
             if is_key_pressed(key) {
                 simulation.set_initial_concentration(concentration);
-                charts.clear();
                 concentration_slider.set_value(concentration);
                 break;
             }
@@ -258,7 +247,6 @@ pub async fn run() {
 
         if concentration_slider.update().released {
             simulation.set_initial_concentration(concentration_slider.value());
-            charts.clear();
         }
         if hot_slider.update().changed {
             simulation.set_hot_kelvin(hot_slider.value());
@@ -267,12 +255,12 @@ pub async fn run() {
         if cold_slider.update().changed {
             simulation.set_cold_kelvin(cold_slider.value());
         }
-        if !paused {
-            physics_limited_since_readout |= simulation.update(get_frame_time());
+        let limited = !paused && simulation.update(get_frame_time());
+        if show_panel {
+            panel.update(&simulation, limited, macroquad::time::get_time());
         }
-        charts.observe(&simulation);
         if is_key_pressed(KeyCode::G) {
-            show_charts = !show_charts;
+            show_panel = !show_panel;
         }
         camera.update(
             !(concentration_slider.blocks_camera()
@@ -280,21 +268,18 @@ pub async fn run() {
                 || cold_slider.blocks_camera()
                 || over_buttons
                 || button_gesture
-                || (show_charts
-                    && charts.blocks_camera(macroquad::prelude::Vec2::from(mouse_position())))),
+                || (show_panel && EnginePanel::blocks_camera(Vec2::from(mouse_position())))),
         );
         let mut view_camera = camera.camera();
-        if show_charts {
-            let scene_height =
-                (macroquad::prelude::screen_height() - LiveCharts::reserved_height()).max(1.0);
-            view_camera.viewport = Some((
-                0,
-                LiveCharts::reserved_height() as i32,
-                screen_width() as i32,
-                scene_height as i32,
-            ));
-            view_camera.aspect = Some(screen_width() / scene_height);
-        }
+        let (scene_left, scene_width) = scene_span(screen_width(), show_panel);
+        let scene_height = screen_height().max(1.0);
+        view_camera.viewport = Some((
+            scene_left as i32,
+            0,
+            scene_width as i32,
+            scene_height as i32,
+        ));
+        view_camera.aspect = Some(scene_width / scene_height);
         clear_background(BACKGROUND_COLOR);
         set_camera(&view_camera);
         chamber.draw(
@@ -312,85 +297,20 @@ pub async fn run() {
         );
         set_default_camera();
 
-        draw_text(
-            if paused { TITLE_PAUSED } else { TITLE_RUNNING },
-            HUD_X,
-            TITLE_Y,
-            TITLE_FONT_SIZE,
-            WHITE,
-        );
-        let now = macroquad::time::get_time();
-        if now >= next_stats_refresh {
-            next_stats_refresh = now + STATS_REFRESH_SECONDS;
-            let regions = simulation.measurements();
-            let heat = simulation.heat();
-            let pistons = simulation.power_pistons();
-            stats = vec![
-                format!(
-                    "Helium: {} particles | {:.4} mol | {} in passage",
-                    simulation.particles.len(),
-                    simulation.total_moles(),
-                    regions.passage_markers,
-                ),
-                region_stats("Hot", regions.hot),
-                region_stats("Cold", regions.cold),
-                format!(
-                    "Crank: {:+.2} model rpm | {:+.2} turns",
-                    pistons.angular_velocity() * 60.0 / std::f32::consts::TAU,
-                    pistons.revolutions(),
-                ),
-                // Signed heat into the gas: negative means the gas lost heat.
-                format!(
-                    "Heat into gas: hot {:+.2} J | cold {:+.2} J",
-                    simulation.energy_joules(heat.hot),
-                    simulation.energy_joules(heat.cold),
-                ),
-                format!(
-                    "Gas work: {:+.2} J | flywheel: {:.2} J | kicks: {:+.2} J",
-                    simulation.energy_joules(simulation.piston_work_by_gas()),
-                    simulation.energy_joules(pistons.kinetic_energy()),
-                    simulation.energy_joules(pistons.starter_work()),
-                ),
-                format!(
-                    "Energy balance error: gas {:+.4} J | shaft {:+.4} J",
-                    simulation.energy_joules(simulation.energy_balance_error()),
-                    simulation.energy_joules(simulation.mechanical_balance_error())
-                ),
-                format!(
-                    "Performance: {} fps{}",
-                    macroquad::time::get_fps(),
-                    if physics_limited_since_readout {
-                        " | physics time limited"
-                    } else {
-                        ""
-                    }
-                ),
-            ];
-            physics_limited_since_readout = false;
+        if show_panel {
+            panel.draw(&simulation, paused);
+        } else {
+            draw_text(TITLE, SCENE_TEXT_MARGIN, TITLE_Y, TITLE_FONT_SIZE, WHITE);
         }
-        {
-            for (index, line) in stats.iter().enumerate() {
-                draw_text(
-                    line,
-                    HUD_X,
-                    STATS_START_Y + index as f32 * HUD_LINE_HEIGHT,
-                    HUD_FONT_SIZE,
-                    WHITE,
-                );
-            }
-        }
-
-        draw_text(
+        fitted_text(
             HELP_TEXT,
-            HUD_X,
-            macroquad::prelude::screen_height() - HELP_BOTTOM_Y,
+            scene_left + SCENE_TEXT_MARGIN,
+            screen_height() - HELP_BOTTOM_Y,
+            scene_width - 2.0 * SCENE_TEXT_MARGIN,
             HELP_FONT_SIZE,
             WHITE,
         );
-        if show_charts {
-            charts.draw();
-        }
-        draw_buttons(paused);
+        draw_buttons(paused, panel.details_shown());
         concentration_slider.draw();
         hot_slider.draw();
         cold_slider.draw();
