@@ -87,7 +87,7 @@ const BUILD_LABEL: &str = concat!(
 const BUILD_LABEL_FONT_SIZE: f32 = 14.0;
 const BUILD_LABEL_COLOR: Color = Color::from_rgba(120, 140, 160, 255);
 const HELP_TEXT: &str =
-    "1-5: Fill | Space: Pause | A: Kick | T: Reset | R: Camera | D: Details | G: Panel";
+    "1-5: Fill | Space: Pause | A: Start | T: Reset | R: Camera | D: Details | G: Panel";
 /// Clock resolution used for the startup seed, in ticks per second.
 const SEED_TICKS_PER_SECOND: f64 = 1.0e6;
 /// Keys 1 to 5: 256, 512, 1,024, 1,536 and 2,048 particles.
@@ -111,14 +111,14 @@ const PRESET_KEYS: [KeyCode; CONCENTRATION_PRESETS.len()] = [
 enum Action {
     ResetGas,
     TogglePause,
-    KickNegative,
+    Start,
     ToggleDetails,
 }
 
 const BUTTON_ACTIONS: [Action; 4] = [
     Action::ResetGas,
     Action::TogglePause,
-    Action::KickNegative,
+    Action::Start,
     Action::ToggleDetails,
 ];
 
@@ -173,7 +173,7 @@ fn draw_buttons(paused: bool, details: bool) {
         } else {
             "Pause (Space)"
         },
-        "Kick (A)",
+        "Start (A)",
         if details { "Less (D)" } else { "Details (D)" },
     ];
     for (index, label) in labels.iter().enumerate() {
@@ -225,7 +225,7 @@ fn clock_seed() -> u64 {
 }
 
 /// Runs the application: a default fill at 300 K with both reservoirs at
-/// 300 K and the flywheel at rest until the first kick.
+/// 300 K and the flywheel at rest until the first Start.
 pub async fn run() {
     macroquad::rand::srand(clock_seed());
     let mut simulation =
@@ -262,7 +262,11 @@ pub async fn run() {
         if is_key_pressed(KeyCode::Space) || action == Some(Action::TogglePause) {
             paused = !paused;
         }
-        if is_key_pressed(KeyCode::A) || action == Some(Action::KickNegative) {
+        if is_key_pressed(KeyCode::A) || action == Some(Action::Start) {
+            simulation.start_engine();
+        }
+        // Hidden: the old additive kick, which can overdrive the engine.
+        if is_key_pressed(KeyCode::K) {
             simulation.kick_flywheel(KickDirection::Negative);
         }
         if is_key_pressed(KeyCode::D) || action == Some(Action::ToggleDetails) {
@@ -287,9 +291,16 @@ pub async fn run() {
         if cold_slider.update().changed {
             simulation.set_cold_kelvin(cold_slider.value());
         }
+        let physics_start = macroquad::miniquad::date::now();
         let limited = !paused && simulation.update(get_frame_time());
+        let physics_seconds = macroquad::miniquad::date::now() - physics_start;
         if show_panel {
-            panel.update(&simulation, limited, macroquad::time::get_time());
+            panel.update(
+                &simulation,
+                limited,
+                physics_seconds,
+                macroquad::time::get_time(),
+            );
         }
         if is_key_pressed(KeyCode::G) {
             show_panel = !show_panel;

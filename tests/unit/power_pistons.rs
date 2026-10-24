@@ -208,3 +208,54 @@ fn drag_loss_accounts_for_lost_flywheel_energy() {
             < EPSILON as f64
     );
 }
+
+#[test]
+fn start_brings_a_resting_shaft_to_the_starting_speed() {
+    let mut pistons = PowerPistons::new(ChamberGeometry::default(), PARTICLE_RADIUS);
+    assert!(pistons.start());
+    assert!(pistons.angular_velocity() < 0.0, "heat-engine direction");
+    assert!((pistons.kinetic_energy() - STARTER_ENERGY).abs() < EPSILON as f64);
+    assert!((pistons.starter_work() - pistons.kinetic_energy()).abs() < EPSILON as f64);
+}
+
+#[test]
+fn repeated_start_never_exceeds_the_starting_speed() {
+    let mut pistons = PowerPistons::new(ChamberGeometry::default(), PARTICLE_RADIUS);
+    pistons.start();
+    let speed = pistons.angular_velocity();
+    let work = pistons.starter_work();
+    for _ in 0..10 {
+        assert!(!pistons.start());
+    }
+    assert_eq!(pistons.angular_velocity(), speed);
+    assert_eq!(pistons.starter_work(), work);
+    // A shaft kicked faster than the starting speed is left alone too.
+    pistons.kick(KickDirection::Negative);
+    let faster = pistons.angular_velocity();
+    let kicked_work = pistons.starter_work();
+    assert!(!pistons.start());
+    assert_eq!(pistons.angular_velocity(), faster);
+    assert_eq!(pistons.starter_work(), kicked_work);
+}
+
+#[test]
+fn start_tops_up_a_slow_or_backward_shaft() {
+    for initial in [-0.5, 0.0, 0.7] {
+        let mut pistons = PowerPistons::new(ChamberGeometry::default(), PARTICLE_RADIUS);
+        pistons.angular_velocity = initial * pistons.start_speed;
+        let before = pistons.kinetic_energy();
+        assert!(pistons.start());
+        assert!((pistons.angular_velocity + pistons.start_speed).abs() < 1e-12);
+        // Reversing a backward shaft can cost energy as well as add it.
+        let booked = pistons.starter_work();
+        assert!((booked - (pistons.kinetic_energy() - before)).abs() < EPSILON as f64);
+    }
+}
+
+#[test]
+fn starting_energy_sets_the_starting_speed() {
+    let mut pistons = PowerPistons::new(ChamberGeometry::default(), PARTICLE_RADIUS);
+    pistons.set_starting_energy(2.0 * STARTER_ENERGY);
+    pistons.start();
+    assert!((pistons.kinetic_energy() - 2.0 * STARTER_ENERGY).abs() < EPSILON as f64);
+}

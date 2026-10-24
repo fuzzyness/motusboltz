@@ -822,7 +822,7 @@ struct RecordedTurn {
     loop_work: [f64; 2],
 }
 
-/// Result of one kicked run, sampled at the last completed revolution.
+/// Result of one started run, sampled at the last completed revolution.
 struct CycleOutcome {
     turns: Vec<RecordedTurn>,
     completed_turns: usize,
@@ -835,10 +835,10 @@ struct CycleOutcome {
     shaft_residual: f64,
 }
 
-/// Default fill, one kick, cold reservoir at 300 K. Energy is sampled at
+/// Default fill, one Start press, cold reservoir at 300 K. Energy is sampled at
 /// completed revolutions because compression and back-pressure work make
 /// arbitrary crank phases incomparable.
-fn kicked_run(seed: u64, hot_kelvin: f32, dt: f32, duration: f32) -> CycleOutcome {
+fn started_run(seed: u64, hot_kelvin: f32, dt: f32, duration: f32) -> CycleOutcome {
     let mut simulation = ConnectedChambers::with_geometry_seed(
         crate::gas::DEFAULT_CONNECTED_MARKERS,
         DEFAULT_GEOMETRY,
@@ -846,7 +846,7 @@ fn kicked_run(seed: u64, hot_kelvin: f32, dt: f32, duration: f32) -> CycleOutcom
     );
     simulation.set_hot_kelvin(hot_kelvin);
     simulation.set_cold_kelvin(crate::gas::MAX_COLD_KELVIN);
-    simulation.kick_flywheel(KickDirection::Negative);
+    assert!(simulation.start_engine());
     let starter_energy = simulation.pistons.starter_work();
     let mut completed_turns = 0;
     let mut phase_energy = starter_energy;
@@ -882,7 +882,7 @@ fn kicked_run(seed: u64, hot_kelvin: f32, dt: f32, duration: f32) -> CycleOutcom
     }
 }
 
-// Shared acceptance criteria for the kicked-engine regressions.
+// Shared acceptance criteria for the started-engine regressions.
 const ROTATION_DURATION: f32 = 120.0 * DYNAMICS_TIME_SCALE;
 const MIN_TURNS: usize = 4;
 const BALANCE_TOLERANCE: f64 = 0.05;
@@ -896,7 +896,7 @@ const LOOP_WORK_TOLERANCE: f64 = 0.02;
 /// Panics with the seed in the message if a run misses the criteria: a
 /// heated engine must gain energy from gas work, an equilibrium engine
 /// must lose it, and both energy balances must close.
-fn check_kicked_run(seed: u64, hot_kelvin: f32, dt: f32, outcome: &CycleOutcome) {
+fn check_started_run(seed: u64, hot_kelvin: f32, dt: f32, outcome: &CycleOutcome) {
     let o = outcome;
     println!(
         "seed={seed}, hot={hot_kelvin} K, dt={dt}: turns={}, phase energy={:.3}, gas work={:.3}, gas residual={:.6}, shaft residual={:.6}",
@@ -982,11 +982,11 @@ fn sustained_rotation_requires_a_temperature_difference() {
         (7, crate::gas::MIN_HOT_KELVIN, FIXED_DT),
     ];
     for (seed, hot_kelvin, dt) in cases {
-        check_kicked_run(
+        check_started_run(
             seed,
             hot_kelvin,
             dt,
-            &kicked_run(seed, hot_kelvin, dt, ROTATION_DURATION),
+            &started_run(seed, hot_kelvin, dt, ROTATION_DURATION),
         );
     }
 }
@@ -1028,7 +1028,7 @@ fn rotation_holds_for_random_seeds() {
                             (
                                 seed,
                                 hot,
-                                kicked_run(seed, hot, FIXED_DT, ROTATION_DURATION),
+                                started_run(seed, hot, FIXED_DT, ROTATION_DURATION),
                             )
                         })
                         .collect::<Vec<_>>()
@@ -1041,7 +1041,132 @@ fn rotation_holds_for_random_seeds() {
             .collect()
     });
     for (seed, hot, outcome) in &results {
-        check_kicked_run(*seed, *hot, FIXED_DT, outcome);
+        check_started_run(*seed, *hot, FIXED_DT, outcome);
+    }
+}
+
+#[test]
+fn starting_energy_grows_with_fill_above_the_default() {
+    const SEED: u64 = 42;
+    assert_eq!(starting_energy(MIN_CONNECTED_MARKERS), STARTER_ENERGY);
+    assert_eq!(starting_energy(DEFAULT_CONNECTED_MARKERS), STARTER_ENERGY);
+    assert_eq!(starting_energy(MAX_SIMULATED_MARKERS), 2.0 * STARTER_ENERGY);
+    for count in [
+        MIN_CONNECTED_MARKERS,
+        DEFAULT_CONNECTED_MARKERS,
+        MAX_SIMULATED_MARKERS,
+    ] {
+        let mut simulation = ConnectedChambers::with_geometry_seed(count, DEFAULT_GEOMETRY, SEED);
+        assert!(simulation.start_engine());
+        let energy = starting_energy(count);
+        assert!((simulation.pistons.kinetic_energy() - energy).abs() < 1e-9 * energy);
+        assert_eq!(
+            simulation.pistons.starter_work(),
+            simulation.pistons.kinetic_energy()
+        );
+        assert!(!simulation.start_engine(), "second press changed the speed");
+    }
+}
+
+/// Pressing Start every frame of a heated run never leaves the flywheel
+/// faster than it was before the press or than the starting speed, so
+/// presses cannot overdrive the engine.
+#[test]
+fn repeated_start_presses_cannot_overdrive_the_engine() {
+    const SEED: u64 = 42;
+    const FRAMES: usize = 240;
+    let mut simulation =
+        ConnectedChambers::with_geometry_seed(DEFAULT_CONNECTED_MARKERS, DEFAULT_GEOMETRY, SEED);
+    simulation.set_hot_kelvin(crate::gas::MAX_HOT_KELVIN);
+    let start_energy = starting_energy(DEFAULT_CONNECTED_MARKERS);
+    for frame in 0..FRAMES {
+        let before = simulation.pistons.kinetic_energy();
+        let work_before = simulation.pistons.starter_work();
+        let changed = simulation.start_engine();
+        let after = simulation.pistons.kinetic_energy();
+        assert!(
+            after <= before.max(start_energy) * (1.0 + 1e-9),
+            "frame {frame}: press raised the energy from {before} to {after}"
+        );
+        assert!(simulation.pistons.angular_velocity() < 0.0);
+        let booked = simulation.pistons.starter_work() - work_before;
+        assert!((booked - (after - before)).abs() < 1e-9 * start_energy);
+        assert_eq!(changed, booked != 0.0);
+        simulation.update(1.0 / 60.0);
+    }
+    assert!(simulation.mechanical_balance_error().abs() < BALANCE_TOLERANCE);
+}
+
+/// One Start press must carry a resting crank through a full turn at the
+/// smallest, default and largest fills, whatever the reservoirs and however
+/// long the gas warmed or cooled first (the crank is free meanwhile, as in
+/// the app). The hardest case measured is 2,048 particles at 1200/300 K,
+/// where the old fixed kick rocked back after about half a turn.
+/// Run with `cargo test --release one_start -- --ignored --nocapture`.
+#[test]
+#[ignore = "long one-press start regression; run in release mode"]
+fn one_start_completes_a_turn_at_every_fill() {
+    /// Measured first turns: about 10 to 17 s per unit of time scale.
+    const MAX_FIRST_TURN: f64 = 25.0 * DYNAMICS_TIME_SCALE as f64;
+    const WARM_UPS: [f32; 3] = [0.0, 2.0 * DYNAMICS_TIME_SCALE, 7.0 * DYNAMICS_TIME_SCALE];
+    let mut cases = Vec::new();
+    for count in [
+        MIN_CONNECTED_MARKERS,
+        DEFAULT_CONNECTED_MARKERS,
+        MAX_SIMULATED_MARKERS,
+    ] {
+        for kelvin in [(1_200.0, 300.0), (1_200.0, 100.0), (300.0, 100.0)] {
+            for warm_up in WARM_UPS {
+                cases.push((cases.len() as u64 + 1, count, kelvin, warm_up));
+            }
+        }
+    }
+    let run = |&(seed, count, (hot, cold), warm_up): &(u64, usize, (f32, f32), f32)| {
+        let mut simulation = ConnectedChambers::with_geometry_seed(count, DEFAULT_GEOMETRY, seed);
+        simulation.set_hot_kelvin(hot);
+        simulation.set_cold_kelvin(cold);
+        for _ in 0..(warm_up / FIXED_DT) as usize {
+            simulation.step(FIXED_DT);
+        }
+        let start_angle = simulation.pistons.total_angle();
+        assert!(simulation.start_engine());
+        let mut elapsed = 0.0_f64;
+        let mut reversed = false;
+        while elapsed < MAX_FIRST_TURN {
+            simulation.step(FIXED_DT);
+            elapsed += FIXED_DT as f64;
+            reversed |= simulation.pistons.angular_velocity() >= 0.0;
+            if simulation.pistons.total_angle() - start_angle <= -std::f64::consts::TAU {
+                return (seed, count, hot, cold, warm_up, Some(elapsed), reversed);
+            }
+        }
+        (seed, count, hot, cold, warm_up, None, reversed)
+    };
+    let results: Vec<_> = std::thread::scope(|scope| {
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let handles: Vec<_> = cases
+            .chunks(cases.len().div_ceil(threads))
+            .map(|chunk| scope.spawn(move || chunk.iter().map(run).collect::<Vec<_>>()))
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().unwrap())
+            .collect()
+    });
+    for &(seed, count, hot, cold, warm_up, turn, reversed) in &results {
+        println!(
+            "seed {seed}, {count} particles, {hot}/{cold} K, warm-up {warm_up} s: first turn {turn:.1?} s{}",
+            if reversed { ", reversed" } else { "" }
+        );
+    }
+    for (seed, count, hot, cold, warm_up, turn, reversed) in results {
+        let context =
+            format!("seed {seed}, {count} particles, {hot}/{cold} K, warm-up {warm_up} s");
+        assert!(
+            turn.is_some(),
+            "no full turn within {MAX_FIRST_TURN} s: {context}"
+        );
+        assert!(!reversed, "crank rocked back: {context}");
     }
 }
 
@@ -1067,7 +1192,7 @@ fn maximum_fill_benchmark() {
         SEED,
     );
     simulation.set_hot_kelvin(crate::gas::MAX_HOT_KELVIN);
-    simulation.kick_flywheel(KickDirection::Negative);
+    simulation.start_engine();
     for _ in 0..(WARMUP_SECONDS / FIXED_DT) as usize {
         simulation.step(FIXED_DT);
     }

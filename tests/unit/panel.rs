@@ -1,7 +1,7 @@
 //! Panel formatting and layout tests, without a graphics context.
 
 use super::*;
-use crate::engine::{DEFAULT_GEOMETRY, KickDirection};
+use crate::engine::DEFAULT_GEOMETRY;
 
 const SEED: u64 = 42;
 const LAPTOP_HEIGHT: f32 = 768.0;
@@ -165,7 +165,7 @@ fn every_panel_state_draws_ascii_text() {
     let mut texts = layout(&panel, &engine, DEFAULT_HEIGHT).1;
     assert!(texts.iter().any(|text| text == WAITING_START));
 
-    engine.kick_flywheel(KickDirection::Negative);
+    engine.start_engine();
     // Long enough for the crank to complete a few loop bins.
     const FRAMES: usize = 900;
     for _ in 0..FRAMES {

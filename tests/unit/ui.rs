@@ -29,7 +29,7 @@ fn two_column_buttons_do_not_overlap() {
 #[test]
 fn buttons_have_one_action_per_slot() {
     assert_eq!(BUTTON_ACTIONS.len(), BUTTON_ROWS * 2);
-    assert_eq!(BUTTON_ACTIONS[2], Action::KickNegative);
+    assert_eq!(BUTTON_ACTIONS[2], Action::Start);
     assert_eq!(BUTTON_ACTIONS[3], Action::ToggleDetails);
 }
 
@@ -122,7 +122,7 @@ fn fixed_canvas_text_is_ascii() {
         "Reset (T)",
         "Pause (Space)",
         "Resume (Space)",
-        "Kick (A)",
+        "Start (A)",
         "Details (D)",
         "Less (D)",
     ] {

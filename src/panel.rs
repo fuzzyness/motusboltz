@@ -24,6 +24,11 @@ const MARGIN: f32 = 16.0;
 const CONTENT_WIDTH: f32 = COLUMN_WIDTH - 2.0 * MARGIN;
 /// Seconds of wall time between text refreshes.
 const REFRESH_SECONDS: f64 = 0.1;
+/// Weight of each new frame in the smoothed physics time: about the last
+/// half second at 60 FPS. The browser clock counts whole milliseconds, so a
+/// single frame's reading is coarse.
+const PHYSICS_SMOOTHING: f64 = 1.0 / 30.0;
+const MILLISECONDS_PER_SECOND: f64 = 1_000.0;
 const PASCALS_PER_BAR: f64 = 100_000.0;
 const SECONDS_PER_MINUTE: f32 = 60.0;
 
@@ -81,7 +86,7 @@ const LAW_WORK: &str = "Work: area inside each P-V loop (last turn)";
 const LEDGER_EQUATION: &str = "Q hot + Q cold = W + dU";
 const THIRD_LAW_NOTE: &str = "3rd law: 100% would need T cold = 0 K";
 const ENTROPY_EQUATION: &str = "dS surr = -Q hot/T hot - Q cold/T cold";
-const WAITING_START: &str = "Press Kick (A) to start the engine.";
+const WAITING_START: &str = "Press Start (A) to turn the crank.";
 const WAITING_TURN: &str = "Waiting for the crank to finish a full turn.";
 const WAITING_NOTE: &str = "Readings use whole turns only.";
 const LIMITED_TEXT: &str = "Physics time limited: computer too slow";
@@ -133,6 +138,8 @@ pub struct EnginePanel {
     range: Option<PlotRange>,
     next_refresh: f64,
     limited_since_refresh: bool,
+    /// Smoothed time spent stepping the physics each frame, in milliseconds.
+    physics_ms: f64,
     show_details: bool,
 }
 
@@ -147,6 +154,7 @@ impl EnginePanel {
             range: None,
             next_refresh: 0.0,
             limited_since_refresh: false,
+            physics_ms: 0.0,
             show_details: false,
         }
     }
@@ -166,9 +174,18 @@ impl EnginePanel {
     }
 
     /// Rebuilds the text if `REFRESH_SECONDS` have passed since the last
-    /// rebuild. `limited` reports whether the physics dropped frame time.
-    pub fn update(&mut self, engine: &ConnectedChambers, limited: bool, now: f64) {
+    /// rebuild. `limited` reports whether the physics dropped frame time, and
+    /// `physics_seconds` is the wall time this frame spent stepping it.
+    pub fn update(
+        &mut self,
+        engine: &ConnectedChambers,
+        limited: bool,
+        physics_seconds: f64,
+        now: f64,
+    ) {
         self.limited_since_refresh |= limited;
+        self.physics_ms +=
+            (physics_seconds * MILLISECONDS_PER_SECOND - self.physics_ms) * PHYSICS_SMOOTHING;
         if now < self.next_refresh {
             return;
         }
@@ -224,7 +241,7 @@ impl EnginePanel {
                     engine.energy_joules(heat.cold)
                 ),
                 format!(
-                    "Gas work: {:+.1} J | kicks: {:+.1} J",
+                    "Gas work: {:+.1} J | starter: {:+.1} J",
                     engine.energy_joules(engine.piston_work_by_gas()),
                     engine.energy_joules(pistons.starter_work())
                 ),
@@ -233,7 +250,10 @@ impl EnginePanel {
                     engine.energy_joules(engine.energy_balance_error()),
                     engine.energy_joules(engine.mechanical_balance_error())
                 ),
-                format!("Display: {fps} fps"),
+                format!(
+                    "Display: {fps} fps | physics {:.1} ms per frame",
+                    self.physics_ms
+                ),
             ];
         }
 

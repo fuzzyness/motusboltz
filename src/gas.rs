@@ -26,8 +26,11 @@ pub const COLLISION_FLASH_DURATION: f32 = 0.01;
 /// Slows all motion by this factor so particles are easy to follow. Particle
 /// mass and flywheel inertia scale with its square and drag scales to match
 /// (engine.rs), so temperatures, energies and the ratio of gas speed to shaft
-/// speed are unchanged; only the pace of the animation changes.
-pub const DYNAMICS_TIME_SCALE: f32 = 6.0;
+/// speed are unchanged; only the pace of the animation changes. A heated
+/// engine at the default fill takes about 15 s per turn per unit of scale
+/// (about 45 s at 3). The physics work per real second grows as the scale
+/// drops, because faster particles need more substeps.
+pub const DYNAMICS_TIME_SCALE: f32 = 3.0;
 const REFERENCE_PARTICLE_MASS: f32 = 0.001;
 pub const PARTICLE_MASS: f32 = REFERENCE_PARTICLE_MASS * DYNAMICS_TIME_SCALE * DYNAMICS_TIME_SCALE;
 

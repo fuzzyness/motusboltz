@@ -19,6 +19,7 @@ use crate::cycle::{
 use crate::gas as physics;
 use crate::gas::{
     COLLISION_FLASH_DURATION,
+    DEFAULT_CONNECTED_MARKERS,
     DYNAMICS_TIME_SCALE,
     GasMeasurements,
     HeatTransfer,
@@ -185,9 +186,22 @@ const REFERENCE_LOAD_DRAG: f32 = 0.08;
 // scale: the linear term scales once, the quadratic term twice.
 const BEARING_DRAG: f32 = REFERENCE_BEARING_DRAG * DYNAMICS_TIME_SCALE;
 const LOAD_DRAG: f32 = REFERENCE_LOAD_DRAG * DYNAMICS_TIME_SCALE * DYNAMICS_TIME_SCALE;
-/// Flywheel energy one kick gives a shaft at rest, booked as starter work.
-/// The 48 mm stroke needs this much to carry the crank past compression.
+/// Flywheel energy Start gives a shaft at rest, at the default fill or
+/// below, booked as starter work. At the default fill it carries the crank
+/// past the first compression with a wide margin and is close to the
+/// heated engine's running speed. The hidden additive kick adds a change in
+/// speed worth this much from rest.
 const STARTER_ENERGY: f64 = 1_600.0;
+
+/// Flywheel energy Start gives a shaft at rest for `count` particles. The
+/// first compression resists in proportion to the amount of gas: from rest
+/// at 1200/300 K, the crank needed about 0.9 to 1.3 units per particle to
+/// finish its first turn. So above the default fill the energy grows with
+/// the particle count (3,200 at 2,048 particles), and below it the default
+/// is kept, so a small fill still starts at a watchable speed.
+pub fn starting_energy(count: usize) -> f64 {
+    STARTER_ENERGY * (count as f64 / DEFAULT_CONNECTED_MARKERS as f64).max(1.0)
+}
 
 /// Which piston; the discriminants index per-cylinder arrays.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -196,8 +210,9 @@ pub enum PistonSide {
     Cold = crate::cycle::COLD as isize,
 }
 
-/// Direction of a manual kick. `Negative` is the heat-engine direction and
-/// the only one the UI offers; `Positive` exists for mechanical tests.
+/// Direction of the additive kick. `Negative` is the heat-engine direction
+/// and the only one the UI offers (on a hidden key); `Positive` exists for
+/// mechanical tests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KickDirection {
     #[cfg(test)]
@@ -223,8 +238,8 @@ pub struct PistonState {
 }
 
 /// Crankshaft, flywheel and both pistons. The pistons follow one crank angle
-/// a quarter turn apart; only gas impacts, piston-back pressure, drag and
-/// manual kicks change the shaft's speed. Field names `left`/`right` are the
+/// a quarter turn apart; only gas impacts, piston-back pressure, drag, Start
+/// and kicks change the shaft's speed. Field names `left`/`right` are the
 /// hot/cold pistons.
 pub struct PowerPistons {
     stroke: f32,
@@ -236,6 +251,8 @@ pub struct PowerPistons {
     angular_velocity: f64,
     inertia: f64,
     kick_speed: f32,
+    /// Speed Start brings the shaft up to, in the heat-engine direction.
+    start_speed: f64,
     total_angle: f64,
     reference_pressure: f32,
     running: bool,
@@ -271,6 +288,7 @@ impl PowerPistons {
             angular_velocity: 0.0,
             inertia: FLYWHEEL_INERTIA,
             kick_speed: (2.0 * STARTER_ENERGY / FLYWHEEL_INERTIA).sqrt() as f32,
+            start_speed: (2.0 * STARTER_ENERGY / FLYWHEEL_INERTIA).sqrt(),
             total_angle: 0.0,
             reference_pressure: 0.0,
             running: true,
@@ -296,6 +314,12 @@ impl PowerPistons {
     pub fn set_reference_pressure(&mut self, pressure: f32) {
         assert!(pressure.is_finite() && pressure >= 0.0);
         self.reference_pressure = pressure;
+    }
+
+    /// Sets the flywheel energy Start gives a shaft at rest.
+    pub fn set_starting_energy(&mut self, energy: f64) {
+        assert!(energy.is_finite() && energy > 0.0);
+        self.start_speed = (2.0 * energy / self.inertia).sqrt();
     }
 
     fn position_at(&self, angle: f32) -> f32 {
@@ -418,9 +442,27 @@ impl PowerPistons {
         }
     }
 
-    /// Adds a fixed change in angular speed, not a sustained motor. The
-    /// resulting change in flywheel energy is booked as starter work, apart
-    /// from gas work. From rest this adds `STARTER_ENERGY`.
+    /// Brings the shaft up to the starting speed in the heat-engine
+    /// direction, like a starter motor that lets go at once: a resting, slow
+    /// or backward-turning shaft is set to that speed, and a shaft already
+    /// turning at least that fast is left alone, so repeated presses cannot
+    /// overdrive the engine. The change in flywheel energy is booked as
+    /// starter work, apart from gas work. Returns whether the speed changed.
+    pub fn start(&mut self) -> bool {
+        let target = KickDirection::Negative.sign() as f64 * self.start_speed;
+        if self.angular_velocity <= target {
+            return false;
+        }
+        let before = self.kinetic_energy();
+        self.angular_velocity = target;
+        self.starter_work += self.kinetic_energy() - before;
+        true
+    }
+
+    /// Adds a fixed change in angular speed, not a sustained motor, and can
+    /// be repeated to overdrive the engine. The resulting change in flywheel
+    /// energy is booked as starter work, apart from gas work. From rest this
+    /// adds `STARTER_ENERGY`.
     pub fn kick(&mut self, direction: KickDirection) {
         let before = self.kinetic_energy();
         self.angular_velocity += (direction.sign() * self.kick_speed) as f64;
@@ -620,6 +662,7 @@ impl ConnectedChambers {
         let provisional_volume = pistons.volume_m3(geometry);
         let volume_units = provisional_volume / crate::gas::METERS_PER_UNIT.powi(3);
         pistons.set_reference_pressure(count as f32 / volume_units as f32);
+        pistons.set_starting_energy(starting_energy(count));
 
         // Place particles on one lattice spanning both bores and the passage,
         // refining it until there are enough sites. A single lattice cannot
@@ -745,7 +788,7 @@ impl ConnectedChambers {
 
     /// Rebuilds the simulation with a fresh random seed and `count`
     /// particles, keeping reservoir temperatures and the running state.
-    /// Heat, work, kicks and the per-turn records restart from zero.
+    /// Heat, work, starter work and the per-turn records restart from zero.
     fn refill(&mut self, count: usize) {
         let hot_kelvin = self.thermal.hot_kelvin();
         let running = self.pistons.running();
@@ -825,13 +868,19 @@ impl ConnectedChambers {
         self.pistons.set_running(running);
     }
 
-    /// Applies one manual kick to the flywheel (see `PowerPistons::kick`).
+    /// Brings the flywheel up to the starting speed for this fill (see
+    /// `PowerPistons::start`). Returns whether the speed changed.
+    pub fn start_engine(&mut self) -> bool {
+        self.pistons.start()
+    }
+
+    /// Applies one additive kick to the flywheel (see `PowerPistons::kick`).
     pub fn kick_flywheel(&mut self, direction: KickDirection) {
         self.pistons.kick(direction);
     }
 
     /// Flywheel energy-balance residual, ideally zero: flywheel energy minus
-    /// gas work, kicks and back-pressure work, plus drag losses.
+    /// gas work, starter work and back-pressure work, plus drag losses.
     pub fn mechanical_balance_error(&self) -> f64 {
         self.pistons.kinetic_energy()
             - self.piston_work_by_gas
