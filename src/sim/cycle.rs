@@ -358,5 +358,5 @@ impl CycleMonitor {
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/cycle.rs"]
+#[path = "../../tests/unit/sim/cycle.rs"]
 mod tests;

@@ -1,4 +1,4 @@
-//! Thermal-reservoir unit tests for `src/gas.rs`.
+//! Thermal-reservoir unit tests for `src/sim/reservoir.rs`.
 
 use super::*;
 
@@ -8,10 +8,9 @@ impl ThermalReservoirs {
         self.accommodation = value;
     }
 }
-use macroquad::prelude::{
-    Vec3,
-    vec3, //
-};
+use macroquad::prelude::vec3;
+
+use crate::sim::gas::PARTICLE_MASS;
 
 const TOLERANCE: f32 = 1e-5;
 const INCIDENT_SPEED: f32 = 1.0;

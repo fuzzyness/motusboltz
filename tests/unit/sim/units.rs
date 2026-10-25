@@ -1,4 +1,4 @@
-//! Helium-calibration unit tests for `src/gas.rs`.
+//! Helium-calibration and measurement tests for `src/sim/units.rs`.
 
 use super::*;
 
@@ -8,6 +8,8 @@ impl HeliumCalibration {
     }
 }
 use macroquad::prelude::vec3;
+
+use crate::sim::gas::PARTICLE_MASS;
 
 const TEST_TOLERANCE: f64 = 1e-10;
 const TEST_VOLUME_M3: f64 = 1e-3;

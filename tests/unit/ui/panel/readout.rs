@@ -1,20 +1,14 @@
-//! Panel formatting and layout tests, without a graphics context.
+//! Wording and number tests for `src/ui/panel/readout.rs`.
 
 use super::*;
-use crate::engine::DEFAULT_GEOMETRY;
+use crate::sim::engine::ConnectedChambers;
+use crate::sim::geometry::DEFAULT_GEOMETRY;
+use crate::sim::units::DEFAULT_CONNECTED_MARKERS;
 
 const SEED: u64 = 42;
-const LAPTOP_HEIGHT: f32 = 768.0;
-const DEFAULT_HEIGHT: f32 = 900.0;
-/// A P-V plot this large is comfortably readable.
-const COMFORTABLE_PLOT_SIDE: f32 = 200.0;
 
 fn engine() -> ConnectedChambers {
-    ConnectedChambers::with_geometry_seed(
-        crate::gas::DEFAULT_CONNECTED_MARKERS,
-        DEFAULT_GEOMETRY,
-        SEED,
-    )
+    ConnectedChambers::with_geometry_seed(DEFAULT_CONNECTED_MARKERS, DEFAULT_GEOMETRY, SEED)
 }
 
 /// A settled heated turn, in reduced units, that balances exactly.
@@ -31,19 +25,6 @@ fn heated_turn() -> TurnSummary {
         hot_kelvin: 1_200.0,
         cold_kelvin: 300.0,
     }
-}
-
-/// A panel holding readings, with a P-V range, as after a few turns.
-fn filled_panel(engine: &ConnectedChambers, details: bool) -> EnginePanel {
-    let mut panel = EnginePanel::new();
-    panel.show_details = details;
-    panel.refresh(engine, 60);
-    panel.turn = Some(turn_readout(engine, heated_turn()));
-    panel.range = Some(PlotRange {
-        volume: engine.cylinder_volume_range_cm3(),
-        pressure: (20.0, 70.0),
-    });
-    panel
 }
 
 #[test]
@@ -115,6 +96,16 @@ fn efficiency_and_entropy_readouts_cover_each_case() {
             .contains("without a temperature difference")
     );
 
+    let no_work = turn_readout(
+        &engine,
+        TurnSummary {
+            gas_work: 0.0,
+            cold_heat: 3.0 * -8_900.0,
+            ..heated_turn()
+        },
+    );
+    assert!(no_work.efficiency_text.0.ends_with("per turn"));
+
     let warming = turn_readout(
         &engine,
         TurnSummary {
@@ -135,58 +126,25 @@ fn efficiency_and_entropy_readouts_cover_each_case() {
     assert!(unbalanced.ledger_warning.is_some());
 }
 
-/// Lays the panel out without a window and returns the P-V plot side and
-/// every string it would have drawn.
-fn layout(panel: &EnginePanel, engine: &ConnectedChambers, height: f32) -> (f32, Vec<String>) {
-    let mut pen = Pen::offline();
-    let side = panel.draw_with_height(&mut pen, engine, false, height);
-    (side, pen.texts)
-}
-
 #[test]
-fn panel_fits_a_laptop_screen_with_a_readable_plot() {
+fn details_add_lines_and_a_dropped_frame_adds_a_warning() {
     let engine = engine();
-    let panel = filled_panel(&engine, false);
-    assert!(layout(&panel, &engine, DEFAULT_HEIGHT).0 >= COMFORTABLE_PLOT_SIDE);
-    assert!(layout(&panel, &engine, LAPTOP_HEIGHT).0 >= MIN_PLOT_SIDE);
-    // With details shown on a short screen the plot may give way to a note.
-    let (side, texts) = layout(&filled_panel(&engine, true), &engine, LAPTOP_HEIGHT);
-    assert!(side >= MIN_PLOT_SIDE || texts.iter().any(|text| text == PLOT_TOO_SMALL));
-}
-
-/// Macroquad's built-in font is only relied on for ASCII, so every string
-/// the panel draws, in every state, must be ASCII.
-#[test]
-fn every_panel_state_draws_ascii_text() {
-    let mut engine = engine();
-    let mut panel = EnginePanel::new();
-    panel.refresh(&engine, 60);
-    assert_eq!(panel.waiting, WAITING_START);
-    let mut texts = layout(&panel, &engine, DEFAULT_HEIGHT).1;
-    assert!(texts.iter().any(|text| text == WAITING_START));
-
-    engine.start_engine();
-    // Long enough for the crank to complete a few loop bins.
-    const FRAMES: usize = 900;
-    for _ in 0..FRAMES {
-        engine.update(1.0 / 60.0);
-    }
-    panel.show_details = true;
-    panel.limited_since_refresh = true;
-    panel.refresh(&engine, 60);
-    assert_eq!(panel.waiting, WAITING_TURN);
-    assert!(panel.range.is_some(), "the turn in progress sets the range");
-    assert!(panel.now_lines.iter().any(|(text, _)| text == LIMITED_TEXT));
-    texts.extend(layout(&panel, &engine, DEFAULT_HEIGHT).1);
-    let filled = layout(&filled_panel(&engine, true), &engine, DEFAULT_HEIGHT).1;
-    for expected in [LAW_FIRST, LAW_CARNOT, LAW_ENTROPY, LAW_WORK, THIRD_LAW_NOTE] {
-        assert!(
-            filled.iter().any(|text| text == expected),
-            "{expected} not drawn"
-        );
-    }
-    texts.extend(filled);
-    for text in &texts {
-        assert!(text.is_ascii(), "non-ASCII panel text: {text:?}");
-    }
+    let stats = |limited| FrameStats {
+        limited,
+        fps: 60,
+        physics_ms: 4.2,
+    };
+    let plain = now_readout(&engine, false, stats(false));
+    assert!(plain.details.is_empty());
+    assert!(plain.lines.iter().all(|(text, _)| text != LIMITED_TEXT));
+    let detailed = now_readout(&engine, true, stats(true));
+    assert!(!detailed.details.is_empty());
+    assert!(
+        detailed
+            .details
+            .iter()
+            .any(|text| text.contains("4.2 ms per frame"))
+    );
+    assert!(detailed.lines.iter().any(|(text, _)| text == LIMITED_TEXT));
+    assert_eq!(waiting_text(&engine), WAITING_START);
 }

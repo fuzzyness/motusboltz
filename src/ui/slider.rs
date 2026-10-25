@@ -1,5 +1,5 @@
-//! Hot and cold reservoir temperature sliders and the helium concentration
-//! slider.
+//! Horizontal slider widget, used for the hot and cold reservoir
+//! temperatures and the helium concentration.
 
 use macroquad::prelude::{
     Color,
@@ -16,26 +16,43 @@ use macroquad::prelude::{
     screen_width, //
 };
 
-use crate::gas::{
+use crate::sim::reservoir::{
+    MAX_COLD_KELVIN,
     MAX_HOT_KELVIN,
+    MIN_COLD_KELVIN,
+    MIN_HOT_KELVIN, //
+};
+use crate::sim::units::{
     MAX_INITIAL_CONCENTRATION_MOL_PER_L,
-    MIN_HOT_KELVIN,
     MIN_INITIAL_CONCENTRATION_MOL_PER_L, //
 };
+use crate::ui::layout::{
+    CONTROL_PADDING_X,
+    CONTROL_WIDTH,
+    control_left, //
+};
 
-const SLIDER_WIDTH: f32 = 260.0;
-const SLIDER_RIGHT_MARGIN: f32 = 32.0;
+const SLIDER_WIDTH: f32 = CONTROL_WIDTH;
 const SLIDER_TRACK_HEIGHT: f32 = 8.0;
 const SLIDER_HANDLE_RADIUS: f32 = 11.0;
 const SLIDER_HIT_HALF_HEIGHT: f32 = 24.0;
 const SLIDER_HIT_MARGIN_X: f32 = 14.0;
-pub(crate) const PANEL_PADDING_X: f32 = 18.0;
-pub(crate) const PANEL_PADDING_TOP: f32 = 52.0;
+/// Background above and below the track, which holds the label and the
+/// range values.
+pub const PANEL_PADDING_TOP: f32 = 52.0;
 const PANEL_PADDING_BOTTOM: f32 = 43.0;
-pub(crate) const HOT_Y: f32 = 200.0;
+const LABEL_SIZE: f32 = 21.0;
+/// Baseline of the label above the track.
+const LABEL_OFFSET_Y: f32 = 21.0;
+const RANGE_SIZE: f32 = 17.0;
+/// Baseline of the minimum and maximum values below the track.
+const RANGE_OFFSET_Y: f32 = 36.0;
+/// Track centers, top to bottom.
+pub const HOT_Y: f32 = 200.0;
 const COLD_Y: f32 = HOT_Y + 120.0;
 const CONCENTRATION_Y: f32 = COLD_Y + 120.0;
-const MOLARITY_INCREMENT: f32 = 0.005;
+const KELVIN_STEP: f32 = 1.0;
+const MOLARITY_STEP: f32 = 0.005;
 const PANEL_COLOR: Color = Color::new(0.035, 0.060, 0.105, 0.88);
 const TRACK_COLOR: Color = Color::new(0.27, 0.33, 0.40, 1.0);
 const RANGE_TEXT_COLOR: Color = Color::new(0.72, 0.78, 0.85, 1.0);
@@ -66,7 +83,7 @@ impl Slider {
             "Hot reservoir (K)",
             MIN_HOT_KELVIN,
             MAX_HOT_KELVIN,
-            1.0,
+            KELVIN_STEP,
             0,
             HOT_Y,
             value,
@@ -74,11 +91,10 @@ impl Slider {
     }
 
     pub fn cold_temperature(value: f32) -> Self {
-        const KELVIN_STEP: f32 = 1.0;
         Self::new(
             "Cold reservoir (K)",
-            crate::gas::MIN_COLD_KELVIN,
-            crate::gas::MAX_COLD_KELVIN,
+            MIN_COLD_KELVIN,
+            MAX_COLD_KELVIN,
             KELVIN_STEP,
             0,
             COLD_Y,
@@ -91,7 +107,7 @@ impl Slider {
             "Helium (mol/L)",
             MIN_INITIAL_CONCENTRATION_MOL_PER_L,
             MAX_INITIAL_CONCENTRATION_MOL_PER_L,
-            MOLARITY_INCREMENT,
+            MOLARITY_STEP,
             3,
             CONCENTRATION_Y,
             value,
@@ -137,7 +153,7 @@ impl Slider {
     }
 
     fn origin_x(&self) -> f32 {
-        screen_width() - SLIDER_WIDTH - SLIDER_RIGHT_MARGIN
+        control_left(screen_width())
     }
 
     fn pointer_over_track(&self) -> bool {
@@ -150,7 +166,7 @@ impl Slider {
     fn pointer_over_panel(&self) -> bool {
         let (x, y) = mouse_position();
         let origin = self.origin_x();
-        (origin - PANEL_PADDING_X..=origin + SLIDER_WIDTH + PANEL_PADDING_X).contains(&x)
+        (origin - CONTROL_PADDING_X..=origin + SLIDER_WIDTH + CONTROL_PADDING_X).contains(&x)
             && (self.y - PANEL_PADDING_TOP..=self.y + PANEL_PADDING_BOTTOM).contains(&y)
     }
 
@@ -198,17 +214,17 @@ impl Slider {
         let progress = (self.value - self.min) / (self.max - self.min);
         let handle_x = x + progress * SLIDER_WIDTH;
         draw_rectangle(
-            x - PANEL_PADDING_X,
+            x - CONTROL_PADDING_X,
             self.y - PANEL_PADDING_TOP,
-            SLIDER_WIDTH + 2.0 * PANEL_PADDING_X,
+            SLIDER_WIDTH + 2.0 * CONTROL_PADDING_X,
             PANEL_PADDING_TOP + PANEL_PADDING_BOTTOM,
             PANEL_COLOR,
         );
         draw_text(
             format!("{}: {:.*}", self.label, self.precision, self.value),
             x,
-            self.y - 21.0,
-            21.0,
+            self.y - LABEL_OFFSET_Y,
+            LABEL_SIZE,
             WHITE,
         );
         draw_rectangle(
@@ -228,18 +244,24 @@ impl Slider {
         draw_circle(handle_x, self.y, SLIDER_HANDLE_RADIUS, WHITE);
         let min = format!("{:.*}", self.precision, self.min);
         let max = format!("{:.*}", self.precision, self.max);
-        draw_text(&min, x, self.y + 36.0, 17.0, RANGE_TEXT_COLOR);
-        let max_width = measure_text(&max, None, 17, 1.0).width;
+        draw_text(
+            &min,
+            x,
+            self.y + RANGE_OFFSET_Y,
+            RANGE_SIZE,
+            RANGE_TEXT_COLOR,
+        );
+        let max_width = measure_text(&max, None, RANGE_SIZE as u16, 1.0).width;
         draw_text(
             &max,
             x + SLIDER_WIDTH - max_width,
-            self.y + 36.0,
-            17.0,
+            self.y + RANGE_OFFSET_Y,
+            RANGE_SIZE,
             RANGE_TEXT_COLOR,
         );
     }
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/slider.rs"]
+#[path = "../../tests/unit/ui/slider.rs"]
 mod tests;

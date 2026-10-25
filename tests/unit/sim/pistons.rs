@@ -1,6 +1,7 @@
-//! Particle-driven crankshaft tests for `src/engine.rs`.
+//! Crankshaft, flywheel and Start tests for `src/sim/pistons.rs`.
 
 use super::*;
+use std::f32::consts::TAU;
 
 // The full-volume reference exists only to validate moving piston volume.
 impl ChamberGeometry {
@@ -23,8 +24,8 @@ const TEST_DT: f32 = 1.0 / 120.0;
 fn initial_pistons_are_a_quarter_cycle_out_of_phase() {
     let geometry = ChamberGeometry::default();
     let pistons = PowerPistons::new(geometry, PARTICLE_RADIUS);
-    assert!((pistons.left().face_y - geometry.cylinder_height / 2.0).abs() < EPSILON);
-    assert!((pistons.right().face_y - pistons.position_at(FRAC_PI_2)).abs() < EPSILON);
+    assert!((pistons.hot().face_y - geometry.cylinder_height / 2.0).abs() < EPSILON);
+    assert!((pistons.cold().face_y - pistons.position_at(FRAC_PI_2)).abs() < EPSILON);
     assert!(pistons.stroke() <= (STROKE_METERS / METERS_PER_UNIT) as f32);
     assert!(
         -geometry.cylinder_height / 2.0 + geometry.connector_radius + PARTICLE_RADIUS
@@ -37,12 +38,12 @@ fn a_full_revolution_restores_piston_positions() {
     let geometry = ChamberGeometry::default();
     let mut pistons = PowerPistons::new(geometry, PARTICLE_RADIUS);
     pistons.kick(KickDirection::Positive);
-    let before_left = pistons.left().face_y;
-    let before_right = pistons.right().face_y;
+    let before_hot = pistons.hot().face_y;
+    let before_cold = pistons.cold().face_y;
     pistons.angle = TAU;
     pistons.update_faces(TEST_DT);
-    assert!((pistons.left().face_y - before_left).abs() < EPSILON);
-    assert!((pistons.right().face_y - before_right).abs() < EPSILON);
+    assert!((pistons.hot().face_y - before_hot).abs() < EPSILON);
+    assert!((pistons.cold().face_y - before_cold).abs() < EPSILON);
 }
 
 #[test]
@@ -51,12 +52,12 @@ fn pausing_stops_motion_without_teleporting_pistons() {
     let mut pistons = PowerPistons::new(geometry, PARTICLE_RADIUS);
     pistons.kick(KickDirection::Positive);
     pistons.advance(TEST_DT);
-    let before = (pistons.left().face_y, pistons.right().face_y);
+    let before = (pistons.hot().face_y, pistons.cold().face_y);
     pistons.set_running(false);
     pistons.advance(TEST_DT);
-    assert_eq!((pistons.left().face_y, pistons.right().face_y), before);
-    assert_eq!(pistons.left().velocity, 0.0);
-    assert_eq!(pistons.right().velocity, 0.0);
+    assert_eq!((pistons.hot().face_y, pistons.cold().face_y), before);
+    assert_eq!(pistons.hot().velocity, 0.0);
+    assert_eq!(pistons.cold().velocity, 0.0);
 }
 
 #[test]

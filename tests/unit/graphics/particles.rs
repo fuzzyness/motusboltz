@@ -1,8 +1,15 @@
-//! Particle-renderer unit tests for `src/graphics.rs`.
+//! Particle-renderer tests for `src/graphics/particles.rs`.
 
 use super::*;
-
-use crate::gas::MAX_SIMULATED_MARKERS;
+use crate::sim::engine::{
+    ConnectedChambers,
+    PARTICLE_RADIUS, //
+};
+use crate::sim::geometry::DEFAULT_GEOMETRY;
+use crate::sim::units::{
+    DEFAULT_CONNECTED_MARKERS,
+    MAX_SIMULATED_MARKERS, //
+};
 
 const CHAMBER_HEIGHT: f32 = 4.0;
 const CHAMBER_RADIUS: f32 = 2.0;
@@ -185,11 +192,8 @@ fn resizing_rebuilds_only_the_batch_layout() {
 fn maximum_fill_mesh_benchmark() {
     const SAMPLE_FRAMES: usize = 1_000;
     const SEED: u64 = 42;
-    let simulation = crate::engine::ConnectedChambers::with_geometry_seed(
-        MAX_SIMULATED_MARKERS,
-        crate::engine::DEFAULT_GEOMETRY,
-        SEED,
-    );
+    let simulation =
+        ConnectedChambers::with_geometry_seed(MAX_SIMULATED_MARKERS, DEFAULT_GEOMETRY, SEED);
     let mut renderer = ParticleRenderer::new();
     let camera = test_camera();
     let chamber = CylinderDimensions {
@@ -202,7 +206,7 @@ fn maximum_fill_mesh_benchmark() {
         renderer.prepare(
             &simulation.particles,
             simulation.collision_flashes(),
-            simulation.particle_radius(),
+            PARTICLE_RADIUS,
             &camera,
             chamber,
             TEST_BACKGROUND,
@@ -242,7 +246,7 @@ fn high_fill_detail_reduction_preserves_particles_and_valid_geometry() {
         let c = renderer.template.positions[triangle[2] as usize];
         assert!((b - a).cross(c - a).dot(a + b + c) > 0.0);
     }
-    renderer.resize_batches(crate::gas::DEFAULT_CONNECTED_MARKERS);
+    renderer.resize_batches(DEFAULT_CONNECTED_MARKERS);
     assert!(!renderer.low_detail);
     assert!(renderer.template.positions.len() > low_vertices);
     let represented: usize = renderer
@@ -250,5 +254,5 @@ fn high_fill_detail_reduction_preserves_particles_and_valid_geometry() {
         .iter()
         .map(|mesh| mesh.vertices.len() / renderer.template.positions.len())
         .sum();
-    assert_eq!(represented, crate::gas::DEFAULT_CONNECTED_MARKERS);
+    assert_eq!(represented, DEFAULT_CONNECTED_MARKERS);
 }

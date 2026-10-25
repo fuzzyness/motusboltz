@@ -1,15 +1,16 @@
-//! Particle-collision unit tests for `src/gas.rs`.
+//! Particle-collision and temperature tests for `src/sim/gas.rs`.
 
 use super::*;
 
-// Test-only temperature reading (the runtime uses regional kinetic moments).
+/// Temperature of a whole sample (the simulation measures regions with
+/// `KineticMoments` instead).
 fn temperature(particles: &[Particle]) -> f32 {
     if particles.len() < 2 {
         return 0.0;
     }
     temperature_about_mean(particles, mean_velocity(particles))
 }
-// Keep shared collision tests independent of the temporary engine.
+/// Any radius works; these tests do not depend on the engine's.
 const PARTICLE_RADIUS: f32 = 0.18;
 use macroquad::prelude::vec3;
 

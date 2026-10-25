@@ -1,6 +1,7 @@
-//! Spatial-grid unit tests for `src/gas.rs`.
+//! Spatial-grid unit tests for `src/sim/grid.rs`.
 
 use super::*;
+use crate::sim::gas::Particle;
 use macroquad::prelude::vec3;
 
 const CHAMBER_DIAMETER: f32 = 4.0;

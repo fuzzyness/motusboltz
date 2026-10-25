@@ -1,22 +1,19 @@
-//! Orbit, pan, and zoom controls for the 3D chamber.
+//! Orbit, pan and zoom for the 3D scene, by mouse and by keyboard.
 
 use std::f32::consts::FRAC_PI_2;
 
 use macroquad::prelude::{
     Camera3D,
-    KeyCode,
     MouseButton,
     Vec2,
     Vec3,
-    is_key_down,
-    is_key_pressed,
     is_mouse_button_down,
     mouse_position,
-    mouse_wheel,
-    screen_height,
     vec2,
     vec3, //
 };
+
+use crate::ui::input::CameraKeys;
 
 const INITIAL_POSITION: Vec3 = Vec3::new(8.4, 5.6, 8.4);
 const ORBIT_CENTER: Vec3 = Vec3::ZERO;
@@ -25,9 +22,34 @@ const ORBIT_SENSITIVITY: f32 = 0.005;
 const POLE_MARGIN: f32 = 0.01;
 const MAX_PITCH: f32 = FRAC_PI_2 - POLE_MARGIN;
 
+/// Zoom per pixel of wheel scroll, as a fraction of the distance.
 const ZOOM_SENSITIVITY: f32 = 0.005;
 const MIN_DISTANCE: f32 = 4.0;
 const MAX_DISTANCE: f32 = 25.0;
+
+/// Keyboard orbit speed, in radians per second.
+const KEY_ORBIT_SPEED: f32 = 1.2;
+/// Keyboard pan speed, as a fraction of the visible height per second.
+const KEY_PAN_SPEED: f32 = 0.5;
+/// Keyboard zoom rate: the distance changes by a factor of e every this
+/// many reciprocal seconds.
+const KEY_ZOOM_RATE: f32 = 0.9;
+
+/// Right-drag pans natively. In the browser a right click also opens the
+/// context menu, which swallows the button release, so the camera stayed
+/// stuck panning; there Shift+drag and Shift+WASD/arrows pan instead.
+const RIGHT_DRAG_PANS: bool = !cfg!(target_arch = "wasm32");
+
+/// Pointer state for one frame, read by the caller.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Pointer {
+    /// False while the pointer is over the panel or a control, or a gesture
+    /// that started there is still held.
+    pub enabled: bool,
+    pub shift_down: bool,
+    /// Wheel scroll this frame, in pixels; positive zooms in.
+    pub wheel_pixels: f32,
+}
 
 /// Camera that orbits the chamber while keeping its pan offset in view space.
 ///
@@ -66,34 +88,31 @@ impl OrbitCamera {
         *self = Self::with_scale(self.view_scale);
     }
 
-    /// Applies keyboard and, when enabled, pointer input for one frame.
-    pub fn update(&mut self, pointer_enabled: bool) {
-        if is_key_pressed(KeyCode::R) {
-            self.reset();
-            return;
-        }
+    /// Applies one frame of input: held camera keys over `dt` seconds, and
+    /// mouse drags and the wheel when the pointer is enabled.
+    pub fn update(&mut self, keys: CameraKeys, pointer: Pointer, dt: f32, view_height: f32) {
+        self.apply_keys(keys, dt);
 
-        // The mouse is over a control or chart, or a control drag is in
-        // progress; drop any drag so the camera does not jump afterward.
-        if !pointer_enabled {
+        // The mouse is over a control or the panel, or a gesture that
+        // started there is held; drop any drag so the camera does not jump.
+        if !pointer.enabled {
             self.previous_orbit_mouse = None;
             self.previous_pan_mouse = None;
             return;
         }
 
         let left_down = is_mouse_button_down(MouseButton::Left);
-        let right_down = is_mouse_button_down(MouseButton::Right);
-        let shift_down = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
-
-        let pan_active = right_down || (left_down && shift_down);
+        let right_down = RIGHT_DRAG_PANS && is_mouse_button_down(MouseButton::Right);
+        let pan_active = right_down || (left_down && pointer.shift_down);
         let orbit_active = left_down && !pan_active;
+        let mouse = Vec2::from(mouse_position());
 
         if pan_active {
             self.previous_orbit_mouse = None;
-            self.update_pan();
+            self.drag_pan(mouse, view_height);
         } else if orbit_active {
             self.previous_pan_mouse = None;
-            self.update_orbit();
+            self.drag_orbit(mouse);
         } else {
             self.previous_orbit_mouse = None;
             self.previous_pan_mouse = None;
@@ -102,54 +121,54 @@ impl OrbitCamera {
         // Zoom only when no button is held: some trackpads report scroll
         // events during drag gestures.
         if !left_down && !right_down {
-            self.update_zoom();
+            self.zoom_by(-pointer.wheel_pixels * ZOOM_SENSITIVITY);
         }
     }
 
-    fn update_orbit(&mut self) {
-        let (x, y) = mouse_position();
-        let current_mouse = vec2(x, y);
+    /// Orbits with W/A/S/D or the arrows, pans with Shift held, and zooms
+    /// with - and =, at rates independent of the frame rate.
+    fn apply_keys(&mut self, keys: CameraKeys, dt: f32) {
+        self.yaw += keys.orbit.x * KEY_ORBIT_SPEED * dt;
+        self.pitch =
+            (self.pitch + keys.orbit.y * KEY_ORBIT_SPEED * dt).clamp(-MAX_PITCH, MAX_PITCH);
+        self.pan_offset += keys.pan * self.visible_height() * KEY_PAN_SPEED * dt;
+        self.zoom_by(-keys.zoom * KEY_ZOOM_RATE * dt);
+    }
 
-        if let Some(previous_mouse) = self.previous_orbit_mouse {
-            let delta = current_mouse - previous_mouse;
-
+    fn drag_orbit(&mut self, mouse: Vec2) {
+        if let Some(previous) = self.previous_orbit_mouse {
+            let delta = mouse - previous;
             self.yaw -= delta.x * ORBIT_SENSITIVITY;
             self.pitch = (self.pitch - delta.y * ORBIT_SENSITIVITY).clamp(-MAX_PITCH, MAX_PITCH);
         }
-
-        self.previous_orbit_mouse = Some(current_mouse);
+        self.previous_orbit_mouse = Some(mouse);
     }
 
-    fn update_pan(&mut self) {
-        let (x, y) = mouse_position();
-        let current_mouse = vec2(x, y);
-
-        if let Some(previous_mouse) = self.previous_pan_mouse {
-            let delta = current_mouse - previous_mouse;
-            let camera = self.camera();
-
-            // Store the translation in camera-plane coordinates rather than
-            // changing the orbit pivot. The basis will rotate with the camera.
-            let world_units_per_pixel =
-                2.0 * self.distance * (camera.fovy / 2.0).tan() / screen_height();
-
+    /// Moves the view with the pointer, so the chamber follows the drag.
+    fn drag_pan(&mut self, mouse: Vec2, view_height: f32) {
+        if let Some(previous) = self.previous_pan_mouse {
+            let delta = mouse - previous;
+            let world_units_per_pixel = self.visible_height() / view_height.max(1.0);
+            // Stored in camera-plane coordinates rather than moving the
+            // orbit pivot; the basis rotates with the camera.
             self.pan_offset += vec2(-delta.x, delta.y) * world_units_per_pixel;
         }
-
-        self.previous_pan_mouse = Some(current_mouse);
+        self.previous_pan_mouse = Some(mouse);
     }
 
-    fn update_zoom(&mut self) {
-        let (_, scroll_y) = mouse_wheel();
-
-        if scroll_y != 0.0 {
-            let zoom_factor = (-scroll_y * ZOOM_SENSITIVITY).exp();
-
-            self.distance = (self.distance * zoom_factor).clamp(
+    /// Scales the distance by e to the power `amount`, within the limits.
+    fn zoom_by(&mut self, amount: f32) {
+        if amount != 0.0 {
+            self.distance = (self.distance * amount.exp()).clamp(
                 MIN_DISTANCE * self.view_scale,
                 MAX_DISTANCE * self.view_scale,
             );
         }
+    }
+
+    /// Height of the view at the orbit center, in world units.
+    fn visible_height(&self) -> f32 {
+        2.0 * self.distance * (self.camera().fovy / 2.0).tan()
     }
 
     /// Returns the chamber-centered offset before applying the pan.
@@ -185,5 +204,5 @@ impl OrbitCamera {
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/camera.rs"]
+#[path = "../../tests/unit/ui/camera.rs"]
 mod tests;

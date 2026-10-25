@@ -1,4 +1,4 @@
-//! Slider bounds and value-quantization tests.
+//! Slider bounds and value-quantization tests for `src/ui/slider.rs`.
 use super::*;
 
 #[test]
@@ -42,14 +42,11 @@ fn concentration_slider_matches_gas_range() {
 #[test]
 fn cold_slider_reaches_both_temperature_limits() {
     const TRACK_X: f32 = 100.0;
-    let slider = Slider::cold_temperature(crate::gas::MAX_COLD_KELVIN);
-    assert_eq!(
-        slider.value_at_x(TRACK_X, TRACK_X),
-        crate::gas::MIN_COLD_KELVIN
-    );
+    let slider = Slider::cold_temperature(MAX_COLD_KELVIN);
+    assert_eq!(slider.value_at_x(TRACK_X, TRACK_X), MIN_COLD_KELVIN);
     assert_eq!(
         slider.value_at_x(TRACK_X + SLIDER_WIDTH, TRACK_X),
-        crate::gas::MAX_COLD_KELVIN
+        MAX_COLD_KELVIN
     );
-    assert_eq!(slider.value(), crate::gas::KELVIN_PER_UNIT as f32);
+    assert_eq!(slider.value(), crate::sim::units::KELVIN_PER_UNIT as f32);
 }

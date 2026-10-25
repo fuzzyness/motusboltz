@@ -1,4 +1,4 @@
-//! Cylinder-frame unit tests for `src/graphics.rs`.
+//! Cylinder-frame and passage tests for `src/graphics/chamber.rs`.
 
 use super::*;
 use macroquad::prelude::ORANGE;
@@ -36,7 +36,7 @@ fn cylinder_frame_is_one_valid_mesh() {
 #[test]
 fn passage_wireframe_reaches_both_floors_and_covers_the_bottom_run() {
     const TOLERANCE: f32 = 1e-4;
-    let geometry = crate::engine::DEFAULT_GEOMETRY;
+    let geometry = crate::sim::geometry::DEFAULT_GEOMETRY;
     let lines = passage_wireframe(geometry);
     assert!(!lines.is_empty());
     let mut reaches_floor = [false; 2];

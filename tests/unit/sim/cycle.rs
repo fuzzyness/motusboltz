@@ -1,4 +1,4 @@
-//! Unit tests for `src/cycle.rs`, driven by synthetic substeps.
+//! Unit tests for `src/sim/cycle.rs`, driven by synthetic substeps.
 
 use super::*;
 

@@ -1,12 +1,8 @@
 //! MotusBoltz: a particle-driven two-cylinder (alpha-type) Stirling engine.
 
-mod camera;
-mod cycle;
-mod engine;
-mod gas;
+mod app;
 mod graphics;
-mod panel;
-mod slider;
+mod sim;
 mod ui;
 
 use crate::graphics::{
@@ -35,5 +31,5 @@ fn window_conf() -> macroquad::conf::Conf {
 
 #[macroquad::main(window_conf)]
 async fn main() {
-    ui::run().await;
+    app::run().await;
 }
