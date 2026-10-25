@@ -401,6 +401,25 @@ fn taller_chambers_expand_collision_grid_bounds() {
     );
 }
 
+/// The collision grid stores only the cells over `gas_bounds`, so every
+/// particle center must stay inside them, pistons moving and walls hot.
+#[test]
+fn particle_centers_stay_within_the_gas_bounds() {
+    const STEPS: usize = 240;
+    let mut simulation = ConnectedChambers::with_geometry_seed(TEST_COUNT, DEFAULT_GEOMETRY, 42);
+    simulation.set_hot_kelvin(MAX_HOT_KELVIN);
+    assert!(simulation.start_engine());
+    let (lower, upper) = simulation.geometry().gas_bounds();
+    for _ in 0..STEPS {
+        simulation.step(FIXED_DT);
+        for particle in &simulation.particles {
+            for axis in 0..3 {
+                assert!((lower[axis]..=upper[axis]).contains(&particle.position[axis]));
+            }
+        }
+    }
+}
+
 #[test]
 fn initial_concentration_is_bounded_by_one_molar_across_the_system() {
     const LOCAL_CONCENTRATION_TOLERANCE: f64 = 0.10;

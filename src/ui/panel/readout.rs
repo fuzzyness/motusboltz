@@ -31,7 +31,6 @@ const LEDGER_TOLERANCE_JOULES: f64 = 0.05;
 
 pub const WAITING_START: &str = "Press Start (Enter) to turn the crank.";
 pub const WAITING_TURN: &str = "Waiting for the crank to finish a full turn.";
-pub const LIMITED_TEXT: &str = "Physics time limited: computer too slow";
 const LOOPS_NOT_YET: &str = "Dots: each cylinder's state now";
 
 /// A line of text with its color.
@@ -43,16 +42,6 @@ pub struct NowReadout {
     pub lines: Vec<Line>,
     /// Extra lines shown with Details on.
     pub details: Vec<String>,
-}
-
-/// Inputs to the live readings that come from the app rather than the
-/// simulation.
-pub struct FrameStats {
-    /// Whether physics time was dropped since the last refresh.
-    pub limited: bool,
-    pub fps: i32,
-    /// Smoothed time spent stepping the physics each frame.
-    pub physics_ms: f64,
 }
 
 /// Formatted readings for the recent turns.
@@ -73,10 +62,10 @@ pub struct TurnReadout {
 }
 
 /// The "Engine now" lines and, with `details`, the extra lines.
-pub fn now_readout(engine: &ConnectedChambers, details: bool, stats: FrameStats) -> NowReadout {
+pub fn now_readout(engine: &ConnectedChambers, details: bool) -> NowReadout {
     let regions = engine.measurements();
     let pistons = engine.power_pistons();
-    let mut lines = vec![
+    let lines = vec![
         (gas_line("Hot gas", regions.hot), HOT_COLOR),
         (gas_line("Cold gas", regions.cold), COLD_COLOR),
         (
@@ -95,9 +84,6 @@ pub fn now_readout(engine: &ConnectedChambers, details: bool, stats: FrameStats)
             TEXT,
         ),
     ];
-    if stats.limited {
-        lines.push((LIMITED_TEXT.to_owned(), WARNING));
-    }
     if !details {
         return NowReadout {
             lines,
@@ -133,10 +119,6 @@ pub fn now_readout(engine: &ConnectedChambers, details: bool, stats: FrameStats)
             "Balance error: gas {:+.4} J | shaft {:+.4} J",
             engine.energy_joules(engine.energy_balance_error()),
             engine.energy_joules(engine.mechanical_balance_error())
-        ),
-        format!(
-            "Display: {} fps | physics {:.1} ms per frame",
-            stats.fps, stats.physics_ms
         ),
     ];
     NowReadout { lines, details }

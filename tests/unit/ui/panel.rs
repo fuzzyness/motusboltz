@@ -13,7 +13,6 @@ use laws::{
 };
 use plot::LOOP_KEY;
 use readout::{
-    LIMITED_TEXT,
     WAITING_START,
     WAITING_TURN, //
 };
@@ -51,7 +50,7 @@ fn heated_turn() -> TurnSummary {
 fn filled_panel(engine: &ConnectedChambers, details: bool) -> EnginePanel {
     let mut panel = EnginePanel::new();
     panel.show_details = details;
-    panel.refresh(engine, 60);
+    panel.refresh(engine);
     panel.turn = Some(turn_readout(engine, heated_turn()));
     panel.range = Some(PlotRange {
         volume: engine.cylinder_volume_range_cm3(),
@@ -203,7 +202,7 @@ fn scrollbar_drag_and_track_clicks_scroll_the_content() {
 fn every_panel_state_draws_ascii_text() {
     let mut engine = engine();
     let mut panel = EnginePanel::new();
-    panel.refresh(&engine, 60);
+    panel.refresh(&engine);
     assert_eq!(panel.waiting, WAITING_START);
     let mut texts = layout(&mut panel, &engine, DEFAULT_HEIGHT).1;
     assert!(texts.iter().any(|text| text == WAITING_START));
@@ -215,11 +214,9 @@ fn every_panel_state_draws_ascii_text() {
         engine.update(1.0 / 60.0);
     }
     panel.show_details = true;
-    panel.limited_since_refresh = true;
-    panel.refresh(&engine, 60);
+    panel.refresh(&engine);
     assert_eq!(panel.waiting, WAITING_TURN);
     assert!(panel.range.is_some(), "the turn in progress sets the range");
-    assert!(panel.now.lines.iter().any(|(text, _)| text == LIMITED_TEXT));
     texts.extend(layout(&mut panel, &engine, DEFAULT_HEIGHT).1);
 
     let mut filled = filled_panel(&engine, true);

@@ -1,6 +1,7 @@
 //! The main loop. Each frame reads the input, steps the simulation, updates
 //! the panel and camera, and draws the scene with the panel on the left and
-//! the controls on the right.
+//! the controls on the right. The scene's top-left corner carries the frame
+//! rate (with Details on) and the warning when physics time is dropped.
 
 use macroquad::prelude::{
     Color,
@@ -36,6 +37,10 @@ use crate::ui::camera::{
 use crate::ui::controls::{
     Action,
     Controls, //
+};
+use crate::ui::frame_stats::{
+    FrameStats,
+    LIMITED_TEXT, //
 };
 use crate::ui::input::{
     CameraKeys,
@@ -75,6 +80,15 @@ const BUILD_LABEL: &str = concat!(
 );
 const BUILD_LABEL_FONT_SIZE: f32 = 14.0;
 const BUILD_LABEL_COLOR: Color = Color::from_rgba(120, 140, 160, 255);
+/// Corner readout: its first baseline, below the title when the panel is
+/// hidden, and its line spacing.
+const CORNER_TOP_Y: f32 = 30.0;
+const CORNER_BELOW_TITLE_Y: f32 = TITLE_Y + 26.0;
+const CORNER_FONT_SIZE: f32 = 16.0;
+const CORNER_LINE_HEIGHT: f32 = 20.0;
+const CORNER_TEXT_COLOR: Color = Color::from_rgba(150, 165, 180, 255);
+/// The panel's warning color.
+const WARNING_COLOR: Color = Color::from_rgba(255, 130, 110, 255);
 /// Clock resolution used for the startup seed, in ticks per second.
 const SEED_TICKS_PER_SECOND: f64 = 1.0e6;
 /// Fills chosen with keys 1 to 5: 256, 512, 1,024, 1,536 and 2,048 particles.
@@ -123,6 +137,7 @@ struct App {
     camera: OrbitCamera,
     scene: Scene,
     controls: Controls,
+    frame_stats: FrameStats,
 }
 
 impl App {
@@ -140,6 +155,7 @@ impl App {
                 DEFAULT_INITIAL_CONCENTRATION_MOL_PER_L,
             ),
             paused: false,
+            frame_stats: FrameStats::new(),
             simulation,
         }
     }
@@ -195,13 +211,10 @@ impl App {
         let physics_start = macroquad::miniquad::date::now();
         let limited = !self.paused && self.simulation.update(get_frame_time());
         let physics_seconds = macroquad::miniquad::date::now() - physics_start;
+        let now = macroquad::time::get_time();
+        self.frame_stats.record(now, physics_seconds, limited);
         if self.show_panel {
-            self.panel.update(
-                &self.simulation,
-                limited,
-                physics_seconds,
-                macroquad::time::get_time(),
-            );
+            self.panel.update(&self.simulation, now);
         }
 
         self.camera.update(
@@ -239,6 +252,7 @@ impl App {
         } else {
             pen.text(TITLE, SCENE_TEXT_MARGIN, TITLE_Y, TITLE_FONT_SIZE, WHITE);
         }
+        self.draw_corner(&mut pen, scene_left, scene_width);
         let mut help_y = screen_height() - HELP_BOTTOM_Y - HELP_LINE_HEIGHT;
         for line in HELP_LINES {
             pen.fitted(
@@ -260,6 +274,37 @@ impl App {
             BUILD_LABEL_COLOR,
         );
         self.controls.draw(self.paused, self.panel.details_shown());
+    }
+
+    /// The frame rate and physics time while Details is on, and the
+    /// warning while it is held, at the scene's top-left in every view.
+    fn draw_corner(&self, pen: &mut Pen, scene_left: f32, scene_width: f32) {
+        let stats = self
+            .panel
+            .details_shown()
+            .then(|| self.frame_stats.line())
+            .flatten()
+            .map(|line| (line, CORNER_TEXT_COLOR));
+        let warning = self
+            .frame_stats
+            .limited(macroquad::time::get_time())
+            .then(|| (LIMITED_TEXT.to_owned(), WARNING_COLOR));
+        let mut y = if self.show_panel {
+            CORNER_TOP_Y
+        } else {
+            CORNER_BELOW_TITLE_Y
+        };
+        for (text, color) in stats.into_iter().chain(warning) {
+            pen.fitted(
+                &text,
+                scene_left + SCENE_TEXT_MARGIN,
+                y,
+                scene_width - 2.0 * SCENE_TEXT_MARGIN,
+                CORNER_FONT_SIZE,
+                color,
+            );
+            y += CORNER_LINE_HEIGHT;
+        }
     }
 }
 

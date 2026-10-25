@@ -37,7 +37,10 @@ fn elastic_collision_conserves_energy_and_momentum() {
     let momentum_before = particles[0].velocity + particles[1].velocity;
 
     let (left, right) = particles.split_at_mut(1);
-    assert!(resolve_pair(&mut left[0], &mut right[0], PARTICLE_RADIUS));
+    assert_eq!(
+        resolve_pair(&mut left[0], &mut right[0], PARTICLE_RADIUS),
+        Contact::Impact
+    );
 
     let energy_after = kinetic_energy(&particles);
     let momentum_after = particles[0].velocity + particles[1].velocity;
@@ -61,13 +64,19 @@ fn separated_or_receding_particles_do_not_trigger_collision_events() {
 
     // Overlapping but separating: correct geometry without reporting
     // a kinetic collision or changing either velocity.
-    assert!(!resolve_pair(&mut first, &mut second, PARTICLE_RADIUS));
+    assert_eq!(
+        resolve_pair(&mut first, &mut second, PARTICLE_RADIUS),
+        Contact::Overlap
+    );
     assert_eq!(first.velocity.x, -TEST_PARTICLE_SPEED);
     assert_eq!(second.velocity.x, TEST_PARTICLE_SPEED);
 
     first.position = vec3(-PARTICLE_RADIUS * 2.0, 0.0, 0.0);
     second.position = vec3(PARTICLE_RADIUS * 2.0, 0.0, 0.0);
-    assert!(!resolve_pair(&mut first, &mut second, PARTICLE_RADIUS));
+    assert_eq!(
+        resolve_pair(&mut first, &mut second, PARTICLE_RADIUS),
+        Contact::Apart
+    );
 }
 
 #[test]

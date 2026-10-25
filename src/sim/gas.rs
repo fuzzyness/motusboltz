@@ -23,23 +23,36 @@ const BOLTZMANN_CONSTANT: f32 = 1.0;
 const COLLISION_DISTANCE_EPSILON: f32 = 1e-6;
 
 /// One simulated hard sphere, standing for a fixed amount of helium.
+#[derive(Clone, Copy)]
 pub struct Particle {
     pub position: Vec3,
     pub velocity: Vec3,
 }
 
+/// What `resolve_pair` did to two particles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Contact {
+    /// Not touching; nothing changed.
+    Apart,
+    /// Overlapping but already separating: pushed apart, velocities kept.
+    Overlap,
+    /// Overlapping and approaching: pushed apart and bounced.
+    Impact,
+}
+
 /// Resolves an elastic collision between two equal-mass hard spheres.
 ///
 /// Corrects overlap, then exchanges the normal velocity component of
-/// approaching particles. Returns `true` only when velocities change due
-/// to an actual collision; overlap correction alone is not a collision event.
-pub fn resolve_pair(a: &mut Particle, b: &mut Particle, radius: f32) -> bool {
+/// approaching particles. Only `Contact::Impact` changes velocities;
+/// overlap correction alone is not a collision event, but it does move
+/// both particles.
+pub fn resolve_pair(a: &mut Particle, b: &mut Particle, radius: f32) -> Contact {
     let minimum_distance = 2.0 * radius;
     let displacement = b.position - a.position;
     let distance_squared = displacement.length_squared();
 
     if distance_squared >= minimum_distance * minimum_distance {
-        return false;
+        return Contact::Apart;
     }
 
     let distance = distance_squared.sqrt();
@@ -56,12 +69,12 @@ pub fn resolve_pair(a: &mut Particle, b: &mut Particle, radius: f32) -> bool {
 
     let normal_speed = (b.velocity - a.velocity).dot(normal);
     if normal_speed >= 0.0 {
-        return false;
+        return Contact::Overlap;
     }
 
     a.velocity += normal * normal_speed;
     b.velocity -= normal * normal_speed;
-    true
+    Contact::Impact
 }
 
 /// Translational kinetic energy of one particle.

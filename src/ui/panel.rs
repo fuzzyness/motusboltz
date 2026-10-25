@@ -34,7 +34,6 @@ use plot::{
     plot_range, //
 };
 use readout::{
-    FrameStats,
     NowReadout,
     TurnReadout,
     loop_text,
@@ -49,11 +48,6 @@ const MARGIN: f32 = 16.0;
 const CONTENT_WIDTH: f32 = PANEL_WIDTH - 2.0 * MARGIN;
 /// Seconds of wall time between text refreshes.
 const REFRESH_SECONDS: f64 = 0.1;
-/// Weight of each new frame in the smoothed physics time: about the last
-/// half second at 60 FPS. The browser clock counts whole milliseconds, so a
-/// single frame's reading is coarse.
-const PHYSICS_SMOOTHING: f64 = 1.0 / 30.0;
-const MILLISECONDS_PER_SECOND: f64 = 1_000.0;
 
 // Header: the title, then a row of tabs. It stays put while the content
 // below it scrolls.
@@ -169,9 +163,6 @@ pub struct EnginePanel {
     loop_text: String,
     range: Option<PlotRange>,
     next_refresh: f64,
-    limited_since_refresh: bool,
-    /// Smoothed time spent stepping the physics each frame, in milliseconds.
-    physics_ms: f64,
     show_details: bool,
     view: PanelView,
     /// How far the content is scrolled up, in pixels.
@@ -195,8 +186,6 @@ impl EnginePanel {
             loop_text: String::new(),
             range: None,
             next_refresh: 0.0,
-            limited_since_refresh: false,
-            physics_ms: 0.0,
             show_details: false,
             view: PanelView::All,
             scroll: 0.0,
@@ -223,32 +212,17 @@ impl EnginePanel {
     }
 
     /// Rebuilds the text if `REFRESH_SECONDS` have passed since the last
-    /// rebuild. `limited` reports whether the physics dropped frame time, and
-    /// `physics_seconds` is the wall time this frame spent stepping it.
-    pub fn update(
-        &mut self,
-        engine: &ConnectedChambers,
-        limited: bool,
-        physics_seconds: f64,
-        now: f64,
-    ) {
-        self.limited_since_refresh |= limited;
-        self.physics_ms +=
-            (physics_seconds * MILLISECONDS_PER_SECOND - self.physics_ms) * PHYSICS_SMOOTHING;
+    /// rebuild, at wall time `now`.
+    pub fn update(&mut self, engine: &ConnectedChambers, now: f64) {
         if now < self.next_refresh {
             return;
         }
         self.next_refresh = now + REFRESH_SECONDS;
-        self.refresh(engine, macroquad::time::get_fps());
+        self.refresh(engine);
     }
 
-    fn refresh(&mut self, engine: &ConnectedChambers, fps: i32) {
-        let stats = FrameStats {
-            limited: std::mem::take(&mut self.limited_since_refresh),
-            fps,
-            physics_ms: self.physics_ms,
-        };
-        self.now = now_readout(engine, self.show_details, stats);
+    fn refresh(&mut self, engine: &ConnectedChambers) {
+        self.now = now_readout(engine, self.show_details);
         self.turn = engine
             .cycle()
             .recent()

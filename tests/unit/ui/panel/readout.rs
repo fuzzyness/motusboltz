@@ -127,24 +127,17 @@ fn efficiency_and_entropy_readouts_cover_each_case() {
 }
 
 #[test]
-fn details_add_lines_and_a_dropped_frame_adds_a_warning() {
+fn details_add_lines() {
     let engine = engine();
-    let stats = |limited| FrameStats {
-        limited,
-        fps: 60,
-        physics_ms: 4.2,
-    };
-    let plain = now_readout(&engine, false, stats(false));
+    let plain = now_readout(&engine, false);
     assert!(plain.details.is_empty());
-    assert!(plain.lines.iter().all(|(text, _)| text != LIMITED_TEXT));
-    let detailed = now_readout(&engine, true, stats(true));
-    assert!(!detailed.details.is_empty());
+    let detailed = now_readout(&engine, true);
+    assert_eq!(detailed.lines, plain.lines);
     assert!(
         detailed
             .details
             .iter()
-            .any(|text| text.contains("4.2 ms per frame"))
+            .any(|text| text.starts_with("Balance error"))
     );
-    assert!(detailed.lines.iter().any(|(text, _)| text == LIMITED_TEXT));
     assert_eq!(waiting_text(&engine), WAITING_START);
 }

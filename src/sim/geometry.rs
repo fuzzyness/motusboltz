@@ -81,6 +81,16 @@ impl ChamberGeometry {
             .max(-2.0 * self.bottom())
     }
 
+    /// Corners of the smallest box holding every place a particle center
+    /// can be: both cylinders up to their tops and the passage below them.
+    pub fn gas_bounds(self) -> (Vec3, Vec3) {
+        let half_width = self.cylinder_offset + self.cylinder_radius;
+        (
+            vec3(-half_width, self.bottom(), -self.cylinder_radius),
+            vec3(half_width, self.cylinder_height / 2.0, self.cylinder_radius),
+        )
+    }
+
     /// Centerlines of the three capsules forming the U: a leg down from each
     /// cylinder floor and the bottom run between them. Capsules overlap at
     /// the corners, which gives rounded elbows.
@@ -100,10 +110,8 @@ impl ChamberGeometry {
     fn connector_axis_point(self, position: Vec3) -> Vec3 {
         let mut closest = Vec3::ZERO;
         let mut distance = f32::INFINITY;
-        for (start, end) in self.connector_segments() {
-            let axis = end - start;
-            let point = start
-                + axis * ((position - start).dot(axis) / axis.length_squared()).clamp(0.0, 1.0);
+        for segment in self.connector_segments() {
+            let point = segment_point(segment, position);
             let squared = position.distance_squared(point);
             if squared < distance {
                 closest = point;
@@ -148,10 +156,13 @@ impl ChamberGeometry {
     }
 
     /// Whether a sphere of `radius` centered at `position` fits inside the
-    /// passage.
+    /// passage: within reach of any of its centerlines, so the search stops
+    /// at the first that fits.
     pub fn within_connector(self, position: Vec3, radius: f32) -> bool {
         let limit = self.connector_radius - radius;
-        position.distance_squared(self.connector_axis_point(position)) <= limit * limit
+        self.connector_segments().into_iter().any(|segment| {
+            position.distance_squared(segment_point(segment, position)) <= limit * limit
+        })
     }
 
     /// Whether a sphere fits anywhere in the connected gas volume, with the
@@ -208,6 +219,12 @@ impl Default for ChamberGeometry {
     fn default() -> Self {
         DEFAULT_GEOMETRY
     }
+}
+
+/// Closest point to `position` on the segment from `start` to `end`.
+fn segment_point((start, end): (Vec3, Vec3), position: Vec3) -> Vec3 {
+    let axis = end - start;
+    start + axis * ((position - start).dot(axis) / axis.length_squared()).clamp(0.0, 1.0)
 }
 
 #[cfg(test)]

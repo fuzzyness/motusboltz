@@ -18,6 +18,7 @@ use crate::sim::cycle::{
 };
 use crate::sim::gas::{
     self,
+    Contact,
     INITIAL_TEMPERATURE,
     PARTICLE_MASS,
     Particle, //
@@ -70,8 +71,13 @@ const MAX_FIXED_STEPS_PER_FRAME: usize = 6;
 /// frames are clipped and reported as limited.
 const MAX_FRAME_TIME: f32 = MAX_FIXED_STEPS_PER_FRAME as f32 * FIXED_DT;
 /// Substep limits: no particle moves more than this many radii relative to
-/// a piston, and the crank turns at most this far.
-const MAX_TRAVEL_RADII: f32 = 0.5;
+/// a piston, and the crank turns at most this far. Collisions are found as
+/// overlaps at the end of each substep, so longer substeps miss a few
+/// grazing ones: at 0.75, 2,048 particles collide 1.5% less often than at
+/// 0.5 (2.9% less than at 0.25), while turns, heat and work stay within the
+/// scatter between seeds. Every substep costs a full collision pass, so
+/// this limit sets most of the physics time.
+const MAX_TRAVEL_RADII: f32 = 0.75;
 const MAX_CRANK_STEP_RADIANS: f32 = 0.02;
 
 /// Which part of the connected gas volume contains a particle center.
@@ -101,6 +107,10 @@ pub struct ConnectedChambers {
     pub particles: Vec<Particle>,
     flashes: Vec<f32>,
     grid: SpatialGrid,
+    /// Particles moved by collision overlap correction in the current
+    /// substep, which are the only ones that can have crossed a wall since
+    /// the wall check.
+    nudged: Vec<usize>,
     geometry: ChamberGeometry,
     pistons: PowerPistons,
     #[cfg(test)]
@@ -227,7 +237,11 @@ impl ConnectedChambers {
         Self {
             particles,
             flashes: vec![0.0; count],
-            grid: SpatialGrid::new(geometry.grid_side(), PARTICLE_RADIUS),
+            grid: {
+                let (lower, upper) = geometry.gas_bounds();
+                SpatialGrid::covering(geometry.grid_side(), PARTICLE_RADIUS, lower, upper)
+            },
+            nudged: Vec::new(),
             geometry,
             pistons,
             #[cfg(test)]
@@ -692,16 +706,24 @@ impl ConnectedChambers {
             *remaining = (*remaining - dt).max(0.0);
         }
 
-        let flashes = &mut self.flashes;
-        self.grid.resolve_collisions(&mut self.particles, |a, b| {
-            flashes[a] = COLLISION_FLASH_DURATION;
-            flashes[b] = COLLISION_FLASH_DURATION;
-        });
+        let (flashes, nudged) = (&mut self.flashes, &mut self.nudged);
+        nudged.clear();
+        self.grid
+            .resolve_collisions(&mut self.particles, |a, b, contact| {
+                if contact == Contact::Impact {
+                    flashes[a] = COLLISION_FLASH_DURATION;
+                    flashes[b] = COLLISION_FLASH_DURATION;
+                }
+                nudged.extend([a, b]);
+            });
 
-        // Collision overlap correction may have pushed centers past a wall.
-        for particle in &mut self.particles {
+        // Collision overlap correction may have pushed those centers past a
+        // wall; every other particle is where the wall check left it.
+        nudged.sort_unstable();
+        nudged.dedup();
+        for &index in nudged.iter() {
             Self::constrain_particle(
-                particle,
+                &mut self.particles[index],
                 self.geometry,
                 PARTICLE_RADIUS,
                 &mut self.thermal,
