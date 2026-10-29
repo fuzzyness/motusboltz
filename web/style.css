@@ -1,0 +1,1259 @@
+/*
+ * MotusBoltz page styles. The top band is the instrument: dark like the
+ * engine inside it. Below it the page is a cool, light reading surface.
+ * Orange always means the hot side, blue the cold side, and gold work, as in
+ * the engine itself.
+ */
+
+@font-face {
+	font-family: "Literata";
+	src: url("fonts/literata.woff") format("woff");
+	font-weight: 400 700;
+	font-style: normal;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: "Literata";
+	src: url("fonts/literata-italic.woff") format("woff");
+	font-weight: 400 700;
+	font-style: italic;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: "Fira Sans";
+	src: url("fonts/fira-sans-regular.woff") format("woff");
+	font-weight: 400;
+	font-style: normal;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: "Fira Sans";
+	src: url("fonts/fira-sans-italic.woff") format("woff");
+	font-weight: 400;
+	font-style: italic;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: "Fira Sans";
+	src: url("fonts/fira-sans-semibold.woff") format("woff");
+	font-weight: 600;
+	font-style: normal;
+	font-display: swap;
+}
+
+:root {
+	--serif: "Literata", "Iowan Old Style", Georgia, serif;
+	--sans: "Fira Sans", "Segoe UI", system-ui, sans-serif;
+
+	/* Reading surface. */
+	--paper: #f2f5f8;
+	--paper-raised: #fafbfc;
+	--ink: #16202c;
+	--ink-2: #475565;
+	--rule: #d3dce6;
+	--grid: #e3eaf1;
+
+	/* Energy colors: text-safe versions for words and strokes, bright
+	   versions for fills, and tints for backgrounds. */
+	--hot: #b4441a;
+	--hot-fill: #f0894d;
+	--hot-tint: #fbe8dd;
+	--cold: #17609f;
+	--cold-fill: #5bb8f2;
+	--cold-tint: #ddeefa;
+	--work: #7a5900;
+	--work-fill: #e8b53a;
+	--work-tint: #f8edcd;
+	--engine-mark: #2b3a4e;
+	--piston: #c9d2dc;
+
+	/* The instrument band, matching the engine's own colors. */
+	--instrument: #0c121e;
+	--instrument-raised: #131d2b;
+	--instrument-ink: #d7e2ee;
+	--instrument-muted: #8fa2b6;
+
+	--focus: #2f8fe0;
+	--measure: 40rem;
+	--gutter: clamp(1rem, 3vw, 2.5rem);
+
+	color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--paper: #0f1723;
+		--paper-raised: #152030;
+		--ink: #dce5ef;
+		--ink-2: #9aabbd;
+		--rule: #26354a;
+		--grid: #1b2738;
+		--hot: #f2935b;
+		--hot-tint: #3a2419;
+		--cold: #6cc0f5;
+		--cold-tint: #142b40;
+		--work: #e8b53a;
+		--work-tint: #312810;
+		--engine-mark: #8fa2b6;
+		--piston: #4a5a6e;
+		--focus: #6cc0f5;
+		color-scheme: dark;
+	}
+}
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
+html {
+	-webkit-text-size-adjust: 100%;
+	text-size-adjust: 100%;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+	html {
+		scroll-behavior: smooth;
+	}
+}
+
+body {
+	margin: 0;
+	background: var(--paper);
+	color: var(--ink);
+	font-family: var(--sans);
+	font-size: 1.0625rem;
+	line-height: 1.6;
+	font-variant-numeric: lining-nums;
+}
+
+@media (min-width: 48rem) {
+	body {
+		font-size: 1.125rem;
+	}
+}
+
+h1,
+h2,
+h3 {
+	font-family: var(--serif);
+	font-weight: 600;
+	line-height: 1.15;
+	text-wrap: balance;
+}
+
+h4 {
+	font-family: var(--sans);
+	font-weight: 600;
+	font-size: 1rem;
+	margin: 0 0 0.4rem;
+}
+
+p {
+	margin: 0 0 1rem;
+	text-wrap: pretty;
+}
+
+a {
+	color: var(--cold);
+	text-decoration-thickness: 1px;
+	text-underline-offset: 0.18em;
+}
+
+a:hover {
+	text-decoration-thickness: 2px;
+}
+
+:focus-visible {
+	outline: 3px solid var(--focus);
+	outline-offset: 2px;
+}
+
+/* Variables are set like a chemistry textbook: serif italics. */
+var {
+	font-family: var(--serif);
+	font-style: italic;
+	font-size: 1.05em;
+}
+
+sub,
+sup {
+	font-size: 0.72em;
+	line-height: 0;
+}
+
+kbd {
+	display: inline-block;
+	min-width: 1.6em;
+	padding: 0 0.35em;
+	border: 1px solid var(--rule);
+	border-bottom-width: 2px;
+	border-radius: 4px;
+	background: var(--paper-raised);
+	font-family: var(--sans);
+	font-size: 0.85em;
+	line-height: 1.5;
+	text-align: center;
+}
+
+kbd + kbd {
+	margin-left: 0.15em;
+}
+
+.skip {
+	position: absolute;
+	left: 1rem;
+	top: -3rem;
+	z-index: 10;
+	padding: 0.5rem 0.9rem;
+	border-radius: 6px;
+	background: var(--paper);
+	color: var(--ink);
+}
+
+.skip:focus {
+	top: 1rem;
+}
+
+/* ---- Instrument band: navigation, title and the engine ---- */
+
+.hero {
+	background: var(--instrument);
+	color: var(--instrument-ink);
+	padding: 0 var(--gutter) 1.25rem;
+}
+
+.topbar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 0.5rem 2rem;
+	max-width: 100rem;
+	margin: 0 auto;
+	padding: 1.1rem 0;
+	border-bottom: 1px solid #1f2b3c;
+}
+
+.wordmark {
+	color: var(--instrument-ink);
+	font-family: var(--serif);
+	font-size: 1.3rem;
+	font-weight: 600;
+	text-decoration: none;
+}
+
+.topbar ul {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.25rem 1.5rem;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.topbar ul a {
+	color: var(--instrument-muted);
+	font-size: 0.95rem;
+	text-decoration: none;
+}
+
+.topbar ul a:hover {
+	color: var(--instrument-ink);
+	text-decoration: underline;
+}
+
+.hero-text {
+	display: grid;
+	gap: 0.75rem 3rem;
+	max-width: 100rem;
+	margin: 0 auto;
+	padding: 2.25rem 0 1.75rem;
+}
+
+@media (min-width: 60rem) {
+	.hero-text {
+		grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+		align-items: end;
+	}
+}
+
+.hero h1 {
+	margin: 0;
+	font-size: clamp(2.5rem, 1.6rem + 3.4vw, 4.4rem);
+	line-height: 1;
+	letter-spacing: -0.015em;
+}
+
+.lede {
+	max-width: 36rem;
+	margin: 0;
+	color: var(--instrument-muted);
+	font-size: 1.1rem;
+	line-height: 1.55;
+}
+
+/* Short screens, such as a 1366x768 laptop with browser bars: a tighter
+   title so more of the engine shows. */
+@media (max-height: 50rem) and (min-width: 60rem) {
+	.hero-text {
+		padding: 1.25rem 0 1.1rem;
+	}
+
+	.hero h1 {
+		font-size: clamp(2.4rem, 1rem + 4.5vh, 3.4rem);
+	}
+
+	.lede {
+		font-size: 1rem;
+	}
+}
+
+.engine {
+	max-width: 100rem;
+	margin: 0 auto;
+}
+
+.engine-frame {
+	position: relative;
+	height: clamp(34rem, 100svh - 8rem, 56rem);
+	overflow: hidden;
+	border: 1px solid #1f2b3c;
+	border-radius: 10px;
+	background: var(--instrument);
+}
+
+.engine canvas {
+	display: block;
+	width: 100%;
+	height: 100%;
+	outline: none;
+}
+
+.engine[data-engaged="true"] .engine-frame {
+	border-color: #3a5878;
+}
+
+/* Until clicked, a cover keeps the wheel and keys for the page and says how
+   to take control. */
+.engine-cover {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 0.6rem;
+	width: 100%;
+	border: 0;
+	background: rgb(12 18 30 / 0.42);
+	color: var(--instrument-ink);
+	font: inherit;
+	cursor: pointer;
+}
+
+.engine[data-engaged="true"] .engine-cover,
+.engine-cover[hidden] {
+	display: none;
+}
+
+/* Too narrow for the engine: a shorter frame holding only the notice, and
+   no instructions for an engine that is not there. */
+.engine.is-narrow .engine-frame {
+	height: 16rem;
+}
+
+.engine.is-narrow figcaption span {
+	display: none;
+}
+
+.engine-cover-main {
+	padding: 0.7rem 1.4rem;
+	border-radius: 999px;
+	background: #f2f5f8;
+	color: #16202c;
+	font-weight: 600;
+	box-shadow: 0 6px 24px rgb(0 0 0 / 0.35);
+}
+
+.engine-cover:hover .engine-cover-main {
+	background: #ffffff;
+}
+
+.engine-cover:focus-visible {
+	outline-offset: -4px;
+}
+
+.engine-cover-sub {
+	font-size: 0.95rem;
+	text-shadow: 0 1px 6px rgb(0 0 0 / 0.6);
+}
+
+.engine-narrow {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 1rem;
+	padding: 2rem;
+	background: var(--instrument-raised);
+	text-align: center;
+}
+
+.engine-narrow[hidden] {
+	display: none;
+}
+
+.engine-narrow p {
+	max-width: 24rem;
+	margin: 0;
+}
+
+.engine-load {
+	padding: 0.55rem 1.1rem;
+	border: 1px solid #3a5878;
+	border-radius: 999px;
+	background: transparent;
+	color: var(--instrument-ink);
+	font: inherit;
+	cursor: pointer;
+}
+
+.engine figcaption {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: space-between;
+	gap: 0.4rem 2rem;
+	padding: 0.75rem 0.15rem 0;
+	color: var(--instrument-muted);
+	font-size: 0.9rem;
+}
+
+.engine figcaption a {
+	color: var(--instrument-ink);
+}
+
+/* ---- Reading sections ---- */
+
+/* Sections are divided by a rule that lines up with the text, not the
+   page edge. */
+.section {
+	max-width: 72rem;
+	margin: 0 auto;
+	padding: clamp(3rem, 6vw, 5.5rem) var(--gutter);
+	background: linear-gradient(var(--rule), var(--rule)) var(--gutter) 0 /
+		calc(100% - 2 * var(--gutter)) 1px no-repeat;
+}
+
+main > .section:first-child {
+	background: none;
+}
+
+.section h2 {
+	margin: 0 0 0.75rem;
+	font-size: clamp(2rem, 1.5rem + 1.8vw, 2.9rem);
+	letter-spacing: -0.01em;
+}
+
+.section h3 {
+	margin: 0 0 0.75rem;
+	font-size: 1.35rem;
+}
+
+.section-intro {
+	max-width: var(--measure);
+	margin-bottom: 2.5rem;
+	color: var(--ink-2);
+	font-size: 1.15em;
+	line-height: 1.55;
+}
+
+/* Run it */
+
+.run-layout {
+	display: grid;
+	gap: 2.5rem 4rem;
+	align-items: start;
+}
+
+@media (min-width: 58rem) {
+	.run-layout {
+		grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+	}
+}
+
+.steps {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	counter-reset: step;
+}
+
+.steps li {
+	position: relative;
+	max-width: 32rem;
+	margin-bottom: 1.25rem;
+	padding-left: 3rem;
+	counter-increment: step;
+}
+
+.steps li::before {
+	content: counter(step);
+	position: absolute;
+	left: 0;
+	top: -0.1rem;
+	display: grid;
+	place-items: center;
+	width: 2rem;
+	height: 2rem;
+	border: 1.5px solid var(--ink);
+	border-radius: 50%;
+	font-family: var(--serif);
+	font-weight: 600;
+	font-size: 1rem;
+}
+
+.diagram {
+	margin: 0;
+}
+
+.diagram svg,
+.chart svg {
+	display: block;
+	width: 100%;
+	height: auto;
+}
+
+.diagram svg {
+	padding: 0.75rem;
+	border: 1px solid var(--rule);
+	border-radius: 10px;
+	background-color: var(--paper-raised);
+	/* Graph paper. */
+	background-image:
+		linear-gradient(var(--grid) 1px, transparent 1px),
+		linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+	background-size: 22px 22px;
+	background-position: -1px -1px;
+}
+
+.diagram figcaption,
+.chart figcaption {
+	max-width: 36rem;
+	margin-top: 0.75rem;
+	color: var(--ink-2);
+	font-size: 0.92rem;
+}
+
+.diagram .tube {
+	fill: none;
+	stroke: var(--ink-2);
+	stroke-width: 34;
+}
+
+.diagram .tube-inner {
+	fill: none;
+	stroke: var(--paper-raised);
+	stroke-width: 30;
+}
+
+.diagram .cylinder-hot {
+	fill: var(--hot-tint);
+	stroke: var(--hot);
+	stroke-width: 3;
+}
+
+.diagram .cylinder-cold {
+	fill: var(--cold-tint);
+	stroke: var(--cold);
+	stroke-width: 3;
+}
+
+.diagram .dots-hot,
+.diagram .dot-hot {
+	fill: var(--hot-fill);
+}
+
+.diagram .dots-cold,
+.diagram .dot-cold {
+	fill: var(--cold-fill);
+}
+
+.diagram .piston {
+	fill: var(--piston);
+	stroke: var(--ink-2);
+	stroke-width: 1.5;
+}
+
+.diagram .rod,
+.diagram .shaft,
+.diagram .leader {
+	fill: none;
+	stroke: var(--ink-2);
+	stroke-width: 2;
+	stroke-linecap: round;
+}
+
+.diagram .leader {
+	stroke-width: 1;
+}
+
+.diagram .wheel {
+	fill: none;
+	stroke: var(--work);
+	stroke-width: 3;
+}
+
+.diagram .spokes {
+	fill: none;
+	stroke: var(--work);
+	stroke-width: 1.5;
+}
+
+.diagram .flow-hot,
+.diagram .flow-cold,
+.diagram .flow-work {
+	fill: none;
+	stroke-width: 3;
+	stroke-linecap: round;
+}
+
+.diagram .flow-hot {
+	stroke: var(--hot);
+}
+
+.diagram .flow-cold {
+	stroke: var(--cold);
+}
+
+.diagram .flow-work {
+	stroke: var(--work);
+}
+
+.diagram .fill-hot {
+	fill: var(--hot);
+}
+
+.diagram .fill-cold {
+	fill: var(--cold);
+}
+
+.diagram .fill-work {
+	fill: var(--work);
+}
+
+.diagram .label {
+	fill: var(--ink);
+	font-family: var(--sans);
+	font-size: 15px;
+}
+
+.diagram .label-hot {
+	fill: var(--hot);
+	font-weight: 600;
+}
+
+.diagram .label-cold {
+	fill: var(--cold);
+	font-weight: 600;
+}
+
+.diagram .label-work {
+	fill: var(--work);
+	font-weight: 600;
+}
+
+.diagram .label-quiet {
+	fill: var(--ink-2);
+	font-size: 13px;
+}
+
+.reference {
+	display: grid;
+	gap: 2.5rem 3rem;
+	margin-top: 4rem;
+	padding-top: 2.5rem;
+	border-top: 1px solid var(--rule);
+	font-size: 0.95em;
+}
+
+@media (min-width: 58rem) {
+	.reference {
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 1fr);
+	}
+}
+
+.reference h3 {
+	font-size: 1.2rem;
+}
+
+.swatches {
+	margin: 0 0 1rem;
+	padding: 0;
+	list-style: none;
+}
+
+.swatches li {
+	display: grid;
+	grid-template-columns: 1.1rem 1fr;
+	gap: 0.6rem;
+	margin-bottom: 0.5rem;
+}
+
+.swatch {
+	width: 1rem;
+	height: 1rem;
+	margin-top: 0.3rem;
+	border-radius: 50%;
+}
+
+/* The engine's own particle colors. */
+.swatch-cold {
+	background: #3c97ff;
+}
+
+.swatch-room {
+	background: #ffa000;
+}
+
+.swatch-hot {
+	background: #ff433e;
+}
+
+.keys {
+	width: 100%;
+	border-collapse: collapse;
+}
+
+.keys th,
+.keys td {
+	padding: 0.35rem 0;
+	border-bottom: 1px solid var(--rule);
+	text-align: left;
+	vertical-align: top;
+}
+
+.keys th {
+	width: 45%;
+	padding-right: 1rem;
+	font-weight: 400;
+}
+
+.tabs-guide {
+	margin: 0;
+}
+
+.tabs-guide dt {
+	font-weight: 600;
+}
+
+.tabs-guide dd {
+	margin: 0 0 0.8rem;
+}
+
+/* Words to know */
+
+.glossary {
+	margin: 0;
+}
+
+.term {
+	display: grid;
+	gap: 0.25rem 2.5rem;
+	padding: 1.6rem 0;
+	border-top: 1px solid var(--rule);
+}
+
+@media (min-width: 52rem) {
+	.term {
+		grid-template-columns: 15rem minmax(0, 1fr);
+	}
+}
+
+.term dt {
+	font-family: var(--serif);
+	font-size: 1.3rem;
+	font-weight: 600;
+	line-height: 1.25;
+}
+
+.term dd {
+	max-width: var(--measure);
+	margin: 0;
+}
+
+.term dd p:last-child {
+	margin-bottom: 0;
+}
+
+/* Where a term shows up. The left rule marks the engine; its color says
+   which part of it. */
+.in-engine,
+.everyday {
+	padding-left: 0.9rem;
+	border-left: 3px solid var(--engine-mark);
+}
+
+.everyday {
+	border-left-color: var(--rule);
+}
+
+.term .in-engine::before,
+.term .everyday::before {
+	font-weight: 600;
+}
+
+.term .in-engine::before {
+	content: "In the engine: ";
+}
+
+.term .everyday::before {
+	content: "Everyday: ";
+}
+
+.in-engine.hot {
+	border-left-color: var(--hot);
+}
+
+.in-engine.work {
+	border-left-color: var(--work-fill);
+}
+
+/* The three laws */
+
+.law {
+	display: grid;
+	gap: 0 2rem;
+	padding: 2.5rem 0;
+	border-top: 1px solid var(--rule);
+}
+
+@media (min-width: 52rem) {
+	.law {
+		grid-template-columns: 5.5rem minmax(0, 1fr);
+	}
+}
+
+.law-number {
+	margin: 0;
+	color: var(--ink-2);
+	font-family: var(--serif);
+	font-size: 5.5rem;
+	font-weight: 400;
+	line-height: 0.8;
+	opacity: 0.55;
+}
+
+@media (max-width: 51.99rem) {
+	.law-number {
+		font-size: 3.5rem;
+		margin-bottom: 0.5rem;
+	}
+}
+
+.law-body > p,
+.law-body > ul {
+	max-width: var(--measure);
+}
+
+.law h3 {
+	font-size: clamp(1.45rem, 1.2rem + 0.8vw, 1.85rem);
+}
+
+.equation {
+	margin: 1.5rem 0;
+	font-family: var(--serif);
+	font-size: 1.4rem;
+	line-height: 1.4;
+	font-variant-numeric: lining-nums;
+}
+
+.equation var {
+	font-size: 1em;
+}
+
+.equation-large {
+	font-size: clamp(1.7rem, 1.3rem + 1.5vw, 2.4rem);
+}
+
+.terms {
+	margin: 0 0 1.25rem;
+	padding: 0;
+	list-style: none;
+	color: var(--ink-2);
+	font-size: 0.95em;
+}
+
+.terms li {
+	margin-bottom: 0.3rem;
+}
+
+.aside {
+	padding-left: 0.9rem;
+	border-left: 3px solid var(--rule);
+	color: var(--ink-2);
+	font-size: 0.95em;
+}
+
+.pair {
+	display: grid;
+	gap: 1.5rem 3rem;
+	margin-top: 2rem;
+}
+
+@media (min-width: 52rem) {
+	.pair {
+		grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+	}
+}
+
+.pair .in-engine,
+.pair .everyday {
+	padding-left: 1.1rem;
+}
+
+.pair p:last-child {
+	margin-bottom: 0;
+}
+
+.readout {
+	font-family: var(--serif);
+	font-size: 1.25rem;
+	font-variant-numeric: tabular-nums lining-nums;
+}
+
+.try {
+	padding: 0.75rem 0.9rem;
+	border-radius: 8px;
+	background: var(--cold-tint);
+}
+
+/* Spontaneity and the calculator */
+
+.calculator {
+	display: grid;
+	gap: 2rem 3rem;
+	margin: 2.5rem 0;
+	padding: clamp(1.25rem, 3vw, 2.25rem);
+	border: 1px solid var(--rule);
+	border-radius: 14px;
+	background: var(--paper-raised);
+}
+
+@media (min-width: 62rem) {
+	.calculator {
+		grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+	}
+}
+
+.presets {
+	margin: 0 0 1rem;
+	padding: 0;
+	border: 0;
+}
+
+.presets legend {
+	margin-bottom: 0.5rem;
+	color: var(--ink-2);
+	font-size: 0.9rem;
+}
+
+.preset-buttons {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.4rem;
+}
+
+.preset-buttons button {
+	padding: 0.4rem 0.85rem;
+	border: 1px solid var(--rule);
+	border-radius: 999px;
+	background: var(--paper);
+	color: var(--ink);
+	font: inherit;
+	font-size: 0.9rem;
+	cursor: pointer;
+}
+
+.preset-buttons button:hover {
+	border-color: var(--ink-2);
+}
+
+.preset-buttons button[aria-pressed="true"] {
+	border-color: var(--ink);
+	background: var(--ink);
+	color: var(--paper);
+}
+
+.reaction {
+	min-height: 3.2em;
+	margin: 0 0 1.25rem;
+	color: var(--ink-2);
+	font-size: 0.95rem;
+}
+
+.reaction .formula {
+	display: block;
+	color: var(--ink);
+	font-family: var(--serif);
+	font-size: 1.1rem;
+}
+
+.field {
+	display: grid;
+	grid-template-columns: 7.5rem minmax(0, 1fr) 6.5rem;
+	align-items: center;
+	gap: 0.75rem;
+	margin-bottom: 1rem;
+}
+
+.field label {
+	font-family: var(--serif);
+	font-size: 1.2rem;
+}
+
+.field .unit {
+	display: block;
+	color: var(--ink-2);
+	font-family: var(--sans);
+	font-size: 0.8rem;
+}
+
+.field input[type="range"] {
+	width: 100%;
+	accent-color: var(--ink);
+}
+
+.field input[type="number"] {
+	width: 100%;
+	padding: 0.35rem 0.5rem;
+	border: 1px solid var(--rule);
+	border-radius: 6px;
+	background: var(--paper);
+	color: var(--ink);
+	font: inherit;
+	font-variant-numeric: tabular-nums;
+	text-align: right;
+}
+
+.result {
+	display: flex;
+	align-items: baseline;
+	gap: 0.6rem;
+	margin: 0 0 0.25rem;
+	font-family: var(--serif);
+}
+
+.result-label {
+	font-size: 1.5rem;
+}
+
+.result-value {
+	font-size: clamp(2.2rem, 1.8rem + 1.5vw, 3rem);
+	font-weight: 600;
+	font-variant-numeric: tabular-nums lining-nums;
+	letter-spacing: -0.01em;
+}
+
+.verdict {
+	min-height: 3.2em;
+	max-width: 34rem;
+}
+
+.chart {
+	margin: 0.5rem 0 0;
+}
+
+.chart svg {
+	touch-action: none;
+	cursor: ew-resize;
+}
+
+.chart .axis,
+.chart .tick {
+	stroke: var(--rule);
+	stroke-width: 1;
+}
+
+.chart .zero {
+	stroke: var(--ink-2);
+	stroke-width: 1;
+}
+
+.chart .region-yes {
+	fill: var(--cold-tint);
+}
+
+.chart .curve {
+	fill: none;
+	stroke: var(--ink);
+	stroke-width: 2;
+	stroke-linejoin: round;
+	stroke-linecap: round;
+}
+
+.chart .now-line {
+	stroke: var(--ink-2);
+	stroke-width: 1;
+}
+
+.chart .now-dot {
+	fill: var(--ink);
+	stroke: var(--paper-raised);
+	stroke-width: 2;
+}
+
+.chart .cross-dot {
+	fill: var(--paper-raised);
+	stroke: var(--ink);
+	stroke-width: 2;
+}
+
+.chart text {
+	paint-order: stroke;
+	stroke: var(--paper-raised);
+	stroke-width: 4px;
+	stroke-linejoin: round;
+	fill: var(--ink-2);
+	font-family: var(--sans);
+	font-size: 13px;
+	font-variant-numeric: tabular-nums;
+}
+
+.chart .region-label {
+	fill: var(--ink-2);
+	font-size: 13px;
+}
+
+.chart .cross-label {
+	fill: var(--ink);
+	font-weight: 600;
+}
+
+.signs {
+	width: 100%;
+	max-width: 52rem;
+	margin: 0 0 3.5rem;
+	border-collapse: separate;
+	border-spacing: 0.4rem;
+	table-layout: fixed;
+}
+
+.signs caption {
+	margin-bottom: 0.5rem;
+	color: var(--ink-2);
+	font-size: 0.92rem;
+	text-align: left;
+	caption-side: top;
+}
+
+.signs th,
+.signs td {
+	padding: 0.85rem 1rem;
+	text-align: left;
+	vertical-align: top;
+}
+
+.signs thead td {
+	width: 11rem;
+}
+
+.signs th {
+	font-family: var(--serif);
+	font-weight: 600;
+	font-size: 1.1rem;
+}
+
+.signs th span,
+.signs td span {
+	display: block;
+	color: var(--ink-2);
+	font-family: var(--sans);
+	font-size: 0.85rem;
+	font-weight: 400;
+}
+
+.signs tbody td {
+	border: 1px solid var(--rule);
+	border-radius: 10px;
+	background: var(--paper-raised);
+}
+
+.signs tbody td[data-active="true"] {
+	border-color: var(--ink);
+	box-shadow: inset 0 0 0 1px var(--ink);
+}
+
+.bridge {
+	max-width: var(--measure);
+}
+
+.bridge .in-engine {
+	margin-top: 1.5rem;
+}
+
+/* What the model leaves out */
+
+.limits {
+	max-width: 46rem;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.limits li {
+	margin-bottom: 1.25rem;
+	padding-left: 1.1rem;
+	border-left: 3px solid var(--rule);
+}
+
+.limits b {
+	display: block;
+	font-weight: 600;
+}
+
+/* Footer */
+
+.footer {
+	max-width: 72rem;
+	margin: 0 auto;
+	padding: 2.5rem var(--gutter) 4rem;
+	background: linear-gradient(var(--rule), var(--rule)) var(--gutter) 0 /
+		calc(100% - 2 * var(--gutter)) 1px no-repeat;
+	color: var(--ink-2);
+	font-size: 0.92rem;
+}
+
+.footer p {
+	max-width: 46rem;
+}
+
+.sources {
+	font-size: 0.85rem;
+}
+
+@media (max-width: 40rem) {
+	.field {
+		grid-template-columns: 5.5rem minmax(0, 1fr) 5.5rem;
+	}
+
+	.signs {
+		border-spacing: 0.25rem;
+	}
+
+	.signs th,
+	.signs td {
+		padding: 0.6rem;
+	}
+
+	.signs thead td {
+		width: 6.5rem;
+	}
+}

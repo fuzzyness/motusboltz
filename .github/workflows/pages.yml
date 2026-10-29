@@ -45,7 +45,10 @@ jobs:
       - name: Assemble site
         run: |
           mkdir -p _site
-          find web -maxdepth 1 -type f ! -name serve.sh ! -name '*.wasm' -exec cp {} _site/ \;
+          # All of web/, folders such as fonts/ included, except the local
+          # serve script and any stray build output.
+          cp -R web/. _site/
+          rm -f _site/serve.sh _site/*.wasm
           cp "target/$WASM_TARGET/release/motusboltz.wasm" _site/
 
       - uses: actions/configure-pages@v6

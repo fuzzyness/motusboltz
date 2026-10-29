@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <title>MotusBoltz engine</title>
+  <style>
+    html,
+    body,
+    canvas {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      position: absolute;
+      background: #0c121e;
+      z-index: 0;
+    }
+
+    /* Shown while the simulation does not have the keyboard; above the
+       key help, clear of the frame-rate readout at the top. */
+    #focus-hint {
+      position: absolute;
+      z-index: 1;
+      bottom: 64px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 6px 14px;
+      border-radius: 4px;
+      background: #263444;
+      color: #d7e2ee;
+      font: 14px sans-serif;
+      pointer-events: none;
+    }
+  </style>
+</head>
+
+<body>
+  <canvas id="glcanvas" tabindex="1"></canvas>
+  <div id="focus-hint" hidden>Click the simulation to use the keys</div>
+  <script src="gl.js"></script>
+  <script>
+    load("motusboltz.wasm");
+    // In a block: gl.js already declares a global `canvas`.
+    {
+      const simulation = document.getElementById("glcanvas");
+      const hint = document.getElementById("focus-hint");
+      // Keys only reach the simulation while its canvas has focus, which a
+      // click elsewhere on the page or in the browser takes away.
+      simulation.addEventListener("blur", () => { hint.hidden = false; });
+      simulation.addEventListener("focus", () => { hint.hidden = true; });
+      simulation.focus();
+    }
+  </script>
+</body>
+
+</html>

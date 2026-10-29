@@ -3,56 +3,611 @@
 
 <head>
   <meta charset="utf-8">
-  <title>MotusBoltz</title>
-  <style>
-    html,
-    body,
-    canvas {
-      margin: 0;
-      padding: 0;
-      width: 100%;
-      height: 100%;
-      overflow: hidden;
-      position: absolute;
-      background: #0c121e;
-      z-index: 0;
-    }
-
-    /* Shown while the simulation does not have the keyboard; above the
-       key help, clear of the frame-rate readout at the top. */
-    #focus-hint {
-      position: absolute;
-      z-index: 1;
-      bottom: 64px;
-      left: 50%;
-      transform: translateX(-50%);
-      padding: 6px 14px;
-      border-radius: 4px;
-      background: #263444;
-      color: #d7e2ee;
-      font: 14px sans-serif;
-      pointer-events: none;
-    }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MotusBoltz: how heat turns a wheel</title>
+  <meta name="description"
+    content="A working Stirling engine made of bouncing helium particles, with plain explanations of heat, work, entropy, the three laws of thermodynamics and Gibbs free energy.">
+  <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
-  <canvas id="glcanvas" tabindex="1"></canvas>
-  <div id="focus-hint" hidden>Click the simulation to use the keys</div>
+  <a class="skip" href="#run">Skip to the explanations</a>
+
+  <header class="hero">
+    <nav class="topbar" aria-label="Sections">
+      <a class="wordmark" href="#top">MotusBoltz</a>
+      <ul>
+        <li><a href="#run">Run it</a></li>
+        <li><a href="#words">Words to know</a></li>
+        <li><a href="#laws">The three laws</a></li>
+        <li><a href="#spontaneity">Spontaneity</a></li>
+        <li><a href="#model">About the model</a></li>
+      </ul>
+    </nav>
+
+    <div class="hero-text" id="top">
+      <h1>How heat turns a wheel</h1>
+      <p class="lede">
+        Below is a working engine made of 2,048 helium particles. One cylinder touches a hot wall and
+        the other a cold one. Nothing pushes the pistons except particles bouncing off them, yet the
+        wheel keeps turning. This page explains why, one law of thermodynamics at a time.
+      </p>
+    </div>
+
+    <figure class="engine" data-engaged="false">
+      <div class="engine-frame">
+        <canvas id="glcanvas" tabindex="0" aria-label="Stirling engine simulation"></canvas>
+        <button class="engine-cover" type="button">
+          <span class="engine-cover-main">Click to use the engine</span>
+          <span class="engine-cover-sub">Then press Enter to start it</span>
+        </button>
+        <div class="engine-narrow" hidden>
+          <p>The engine needs a wider screen, like a laptop or desktop. Everything below works on any
+            screen.</p>
+          <button type="button" class="engine-load">Load the engine anyway</button>
+        </div>
+      </div>
+      <figcaption>
+        <span>While the engine is selected, the mouse wheel zooms the view. Press Esc or click outside
+          the engine to scroll the page.</span>
+        <a href="engine.html" target="_blank" rel="noopener">Open the engine in its own window</a>
+      </figcaption>
+    </figure>
+  </header>
+
+  <main>
+    <section id="run" class="section">
+      <h2>Run the engine</h2>
+      <p class="section-intro">
+        This is a model of a real machine, the Stirling engine, patented by the Scottish minister Robert
+        Stirling in 1816. Ours has two cylinders joined by a tube along the bottom. Gas moves back and
+        forth between them while two pistons, linked to one wheel, rise and fall.
+      </p>
+
+      <div class="run-layout">
+        <div>
+          <h3>Start it in four steps</h3>
+          <ol class="steps">
+            <li>Click the engine, so your keys go to it.</li>
+            <li>Drag <b>Hot reservoir</b> all the way up to 1200&nbsp;K and <b>Cold reservoir</b> all the
+              way down to 100&nbsp;K. These are the sliders on the right.</li>
+            <li>Press <kbd>Enter</kbd> or the <b>Start</b> button. This gives the wheel a single push to get
+              it moving. From then on, only the gas keeps it going.</li>
+            <li>Watch for a minute or two. One full turn takes about half a minute, and the readings for
+              each law appear on the left after the first full turn.</li>
+          </ol>
+        </div>
+
+        <figure class="diagram">
+          <svg viewBox="0 0 560 430" role="img"
+            aria-labelledby="diagram-title diagram-desc">
+            <title id="diagram-title">Parts of the engine</title>
+            <desc id="diagram-desc">Two cylinders stand side by side. The left one is heated and the right
+              one is cooled. A tube joins their bottoms. Each cylinder has a piston connected by a rod to a
+              shaft with a flywheel. Heat flows into the hot cylinder through its walls and out of the cold
+              cylinder through its walls, and work turns the flywheel.</desc>
+            <defs>
+              <marker id="arrow-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7"
+                markerHeight="7" orient="auto-start-reverse">
+                <path d="M0 0L10 5L0 10z" class="fill-hot" />
+              </marker>
+              <marker id="arrow-cold" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7"
+                markerHeight="7" orient="auto-start-reverse">
+                <path d="M0 0L10 5L0 10z" class="fill-cold" />
+              </marker>
+              <marker id="arrow-work" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7"
+                markerHeight="7" orient="auto-start-reverse">
+                <path d="M0 0L10 5L0 10z" class="fill-work" />
+              </marker>
+            </defs>
+
+            <!-- Connecting tube: drawn first so the cylinders sit over its ends. -->
+            <path class="tube" d="M160 326 V388 H400 V326" />
+            <path class="tube-inner" d="M160 326 V388 H400 V326" />
+            <circle class="dot-hot" cx="160" cy="362" r="5" />
+            <circle class="dot-hot" cx="232" cy="388" r="5" />
+            <circle class="dot-cold" cx="330" cy="388" r="5" />
+            <circle class="dot-cold" cx="400" cy="358" r="5" />
+
+            <!-- Hot cylinder, its gas and piston. -->
+            <rect class="cylinder-hot" x="100" y="170" width="120" height="160" rx="3" />
+            <g class="dots-hot">
+              <circle cx="122" cy="246" r="5" /><circle cx="154" cy="236" r="5" />
+              <circle cx="192" cy="258" r="5" /><circle cx="134" cy="286" r="5" />
+              <circle cx="172" cy="300" r="5" /><circle cx="202" cy="292" r="5" />
+              <circle cx="118" cy="314" r="5" /><circle cx="160" cy="268" r="5" />
+            </g>
+            <rect class="piston" x="104" y="208" width="112" height="12" rx="2" />
+
+            <!-- Cold cylinder, its gas and piston. -->
+            <rect class="cylinder-cold" x="340" y="170" width="120" height="160" rx="3" />
+            <g class="dots-cold">
+              <circle cx="362" cy="292" r="5" /><circle cx="392" cy="304" r="5" />
+              <circle cx="424" cy="290" r="5" /><circle cx="376" cy="316" r="5" />
+              <circle cx="410" cy="318" r="5" /><circle cx="442" cy="310" r="5" />
+            </g>
+            <rect class="piston" x="344" y="258" width="112" height="12" rx="2" />
+
+            <!-- Rods, shaft and flywheel. -->
+            <path class="rod" d="M160 208 L172 82" />
+            <path class="rod" d="M400 258 L388 82" />
+            <path class="shaft" d="M150 82 H410" />
+            <circle class="wheel" cx="280" cy="82" r="44" />
+            <path class="spokes" d="M280 38 V126 M242 60 L318 104 M242 104 L318 60" />
+
+            <!-- Energy flows. -->
+            <path class="flow-hot" d="M38 248 H92" marker-end="url(#arrow-hot)" />
+            <path class="flow-hot" d="M38 292 H92" marker-end="url(#arrow-hot)" />
+            <path class="flow-cold" d="M468 268 H522" marker-end="url(#arrow-cold)" />
+            <path class="flow-cold" d="M468 312 H522" marker-end="url(#arrow-cold)" />
+            <path class="flow-work" d="M232 44 A58 58 0 0 1 328 44" marker-end="url(#arrow-work)" />
+
+            <!-- Labels. -->
+            <text class="label label-hot" x="24" y="208">Heat in</text>
+            <text class="label label-hot" x="24" y="228">(Q hot)</text>
+            <text class="label label-cold" x="470" y="228">Heat out</text>
+            <text class="label label-cold" x="470" y="248">(Q cold)</text>
+            <text class="label label-work" x="338" y="30">Work turns the wheel (W)</text>
+            <text class="label" x="136" y="352" text-anchor="end">Hot cylinder</text>
+            <text class="label" x="424" y="352">Cold cylinder</text>
+            <text class="label" x="280" y="418" text-anchor="middle">Connecting tube</text>
+            <text class="label label-quiet" x="226" y="219">Piston</text>
+            <text class="label label-quiet" x="180" y="134">Rod</text>
+            <text class="label label-quiet" x="280" y="146" text-anchor="middle">Flywheel</text>
+          </svg>
+          <figcaption>Heat flows in through the walls of the hot cylinder and out through the walls of the
+            cold one. The engine catches part of that flow as work, which turns the flywheel.</figcaption>
+        </figure>
+      </div>
+
+      <div class="reference">
+        <div>
+          <h3>What the colors mean</h3>
+          <p>Each dot is colored by how fast it moves.</p>
+          <ul class="swatches">
+            <li><span class="swatch swatch-cold" aria-hidden="true"></span>Blue: slower than an average
+              particle at room temperature</li>
+            <li><span class="swatch swatch-room" aria-hidden="true"></span>Orange: about average for 300&nbsp;K
+              (27&nbsp;°C)</li>
+            <li><span class="swatch swatch-hot" aria-hidden="true"></span>Red: about three times the energy
+              of an average room-temperature particle, or more</li>
+          </ul>
+          <p>A dot flashes white for a moment when it collides with another one.</p>
+        </div>
+
+        <div>
+          <h3>Keys and mouse</h3>
+          <table class="keys">
+            <tbody>
+              <tr><th scope="row"><kbd>Enter</kbd></th><td>Start the engine</td></tr>
+              <tr><th scope="row"><kbd>Space</kbd></th><td>Pause or resume</td></tr>
+              <tr><th scope="row"><kbd>T</kbd></th><td>Refill with fresh gas at 300&nbsp;K</td></tr>
+              <tr><th scope="row"><kbd>1</kbd> to <kbd>5</kbd></th><td>Less or more helium</td></tr>
+              <tr><th scope="row"><kbd>I</kbd></th><td>More or fewer details</td></tr>
+              <tr><th scope="row"><kbd>G</kbd></th><td>Hide or show the left panel</td></tr>
+              <tr><th scope="row">Drag, or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></th><td>Turn the
+                  view</td></tr>
+              <tr><th scope="row">Shift with either</th><td>Slide the view</td></tr>
+              <tr><th scope="row">Wheel, or <kbd>-</kbd> <kbd>=</kbd></th><td>Zoom</td></tr>
+              <tr><th scope="row"><kbd>R</kbd></th><td>Reset the view</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div>
+          <h3>Reading the panel</h3>
+          <dl class="tabs-guide">
+            <dt>Now</dt>
+            <dd>The temperature and pressure of the gas in each cylinder right now, how fast the wheel
+              turns, and how much energy it carries.</dd>
+            <dt>Laws</dt>
+            <dd>One readout per law, averaged over the last full turns (up to three). Changing a
+              temperature starts the average over.</dd>
+            <dt>P-V</dt>
+            <dd>A pressure against volume graph for each cylinder over the last turn. The area inside each
+              loop is the work done in that turn.</dd>
+            <dt>All</dt>
+            <dd>Everything at once. Scroll the panel if it does not fit.</dd>
+          </dl>
+        </div>
+      </div>
+    </section>
+
+    <section id="words" class="section">
+      <h2>Words to know</h2>
+      <p class="section-intro">Each term is tied to something you can watch happen in the engine.</p>
+
+      <dl class="glossary">
+        <div class="term">
+          <dt>System and surroundings</dt>
+          <dd>
+            <p>The system is whatever you are studying. Everything else is the surroundings.</p>
+            <p class="in-engine">The system is the helium gas. The hot wall, the cold wall, the pistons and
+              the wheel are all surroundings.</p>
+            <p class="everyday">In a pot of soup, the soup is the system. The pot, the stove and the kitchen
+              are the surroundings.</p>
+          </dd>
+        </div>
+
+        <div class="term">
+          <dt>Temperature</dt>
+          <dd>
+            <p>A measure of how fast the particles move on average. Hotter means faster.</p>
+            <p class="in-engine">Dots in the hot cylinder turn orange and red, and dots in the cold cylinder
+              turn blue. A single particle has a speed, not a temperature: temperature describes the whole
+              crowd.</p>
+          </dd>
+        </div>
+
+        <div class="term">
+          <dt>Internal energy (<var>U</var>)</dt>
+          <dd>
+            <p>All the energy stored in the system. Helium atoms only have energy of motion, so for this
+              gas <var>U</var> is the total kinetic energy of every particle.</p>
+            <p class="in-engine">The panel's <b>dU</b> is how much the gas's energy changed over a turn.
+              Once the engine settles into a steady rhythm, it stays close to zero.</p>
+          </dd>
+        </div>
+
+        <div class="term">
+          <dt>Heat (<var>q</var>)</dt>
+          <dd>
+            <p>Energy that moves because of a temperature difference. On its own, heat always flows from
+              hotter to colder.</p>
+            <p class="in-engine hot">A particle that hits the hot wall bounces off faster, so heat flowed
+              into the gas. One that hits the cold wall bounces off slower, so heat flowed out.</p>
+          </dd>
+        </div>
+
+        <div class="term">
+          <dt>Work (<var>w</var>)</dt>
+          <dd>
+            <p>Energy moved by a push that makes something move.</p>
+            <p class="in-engine work">Every particle that hits a piston gives it a tiny push. All those
+              pushes add up to the force that turns the wheel.</p>
+          </dd>
+        </div>
+
+        <div class="term">
+          <dt>State function</dt>
+          <dd>
+            <p>A quantity that depends only on where the system is now, not on how it got there.
+              Temperature, pressure, volume and internal energy are state functions. Heat and work are
+              not: they depend on the path taken.</p>
+            <p class="in-engine">After each steady turn, the gas comes back to about the same temperature
+              and pressure, so <var>U</var> is unchanged. The heat and work totals, though, keep growing
+              turn after turn.</p>
+            <p class="everyday">Your height above sea level is a state function. The distance you hiked to
+              get there is not.</p>
+          </dd>
+        </div>
+
+        <div class="term">
+          <dt>Reversible and irreversible</dt>
+          <dd>
+            <p>A reversible change could run backward and leave no trace. Real changes are irreversible:
+              they only go one way on their own.</p>
+            <p class="in-engine">Much of the heat leaks straight through the gas from the hot side to the
+              cold side without doing any work. That leak is irreversible, and it is the main reason this
+              engine turns only a few percent of its heat into work.</p>
+            <p class="everyday">An ice cube melts in a glass of warm water. The water never freezes it back
+              on its own.</p>
+          </dd>
+        </div>
+
+        <div class="term">
+          <dt>Entropy (<var>S</var>)</dt>
+          <dd>
+            <p>A measure of how spread out energy is, in joules per kelvin (J/K). Energy tends to spread
+              out, so the total entropy of the universe tends to rise.</p>
+            <p class="in-engine">Heat leaving the hot wall and arriving at the cold wall spreads energy out.
+              The panel's <b>dS surr</b> shows the entropy of the surroundings rising every turn.</p>
+            <p class="everyday">A drop of food coloring spreads through a glass of water and never gathers
+              itself back into a drop.</p>
+          </dd>
+        </div>
+
+        <div class="term">
+          <dt>Enthalpy (<var>H</var>)</dt>
+          <dd>
+            <p>The heat content of a system at constant pressure. Its change, Δ<var>H</var>, is the heat a
+              reaction takes in (positive, endothermic) or gives off (negative, exothermic).</p>
+            <p class="everyday">A hand warmer gives off heat (Δ<var>H</var> &lt; 0). An instant cold pack
+              takes heat in (Δ<var>H</var> &gt; 0).</p>
+            <p class="in-engine">The engine has no chemical reactions, so it has no Δ<var>H</var> of its
+              own. The heat its walls trade with the gas plays the same part, as the
+              <a href="#bridge">spontaneity section</a> shows.</p>
+          </dd>
+        </div>
+
+        <div class="term">
+          <dt>Spontaneous</dt>
+          <dd>
+            <p>A change that happens on its own, without continuous help from outside. It says nothing
+              about speed: iron rusting is spontaneous but slow.</p>
+            <p class="in-engine">Heat flowing from the hot wall to the cold wall is spontaneous. The engine
+              catches some of it on the way past.</p>
+          </dd>
+        </div>
+
+        <div class="term">
+          <dt>Gibbs free energy (<var>G</var>)</dt>
+          <dd>
+            <p>One number that combines enthalpy and entropy to tell whether a change happens on its own
+              at a given temperature: Δ<var>G</var> = Δ<var>H</var> − <var>T</var>Δ<var>S</var>. A
+              negative Δ<var>G</var> means yes. Try it in the <a href="#calculator">calculator</a>.</p>
+          </dd>
+        </div>
+
+        <div class="term">
+          <dt>Heat engine and efficiency (<var>η</var>)</dt>
+          <dd>
+            <p>A heat engine turns part of a flow of heat into work. Its efficiency, <var>η</var> (the Greek
+              letter eta), is the work out divided by the heat in: <var>η</var> = <var>W</var> /
+              <var>Q</var><sub>hot</sub>.</p>
+            <p class="in-engine">The Laws tab shows the efficiency each turn, next to the Carnot limit: the
+              highest efficiency any engine could reach between the same two temperatures.</p>
+          </dd>
+        </div>
+      </dl>
+    </section>
+
+    <section id="laws" class="section">
+      <h2>The three laws</h2>
+      <p class="section-intro">Thermodynamics rests on a few laws that no experiment has ever broken. Each
+        one shows up in the engine.</p>
+
+      <article class="law" aria-labelledby="law-1">
+        <p class="law-number" aria-hidden="true">1</p>
+        <div class="law-body">
+          <h3 id="law-1">First law: energy is never created or destroyed</h3>
+          <p>Energy can change form or move from place to place, but the total stays the same. For the gas
+            in the engine, every joule that comes in as heat leaves as heat, leaves as work, or stays in
+            the gas.</p>
+          <p class="equation"><var>Q</var><sub>hot</sub> + <var>Q</var><sub>cold</sub> = <var>W</var> +
+            Δ<var>U</var></p>
+          <ul class="terms">
+            <li><var>Q</var><sub>hot</sub> is heat from the hot wall, positive because it comes in.</li>
+            <li><var>Q</var><sub>cold</sub> is heat to the cold wall, negative because it goes out.</li>
+            <li><var>W</var> is the work the gas does on the pistons.</li>
+            <li>Δ<var>U</var> is the change in the gas's own energy.</li>
+          </ul>
+          <p class="aside">Chemistry books write the same law as Δ<var>U</var> = <var>q</var> +
+            <var>w</var>, where <var>w</var> is work done <em>on</em> the system. The gas does work
+            <var>W</var> on the pistons, so <var>w</var> = −<var>W</var>, and both forms say the same
+            thing.</p>
+          <div class="pair">
+            <div class="in-engine">
+              <h4>In the engine</h4>
+              <p>In one run with 2,048 particles at 1200&nbsp;K and 100&nbsp;K, the Laws tab showed, per
+                turn:</p>
+              <p class="readout">2724.2 − 2572.3 = 125.0 + 26.9 J</p>
+              <p>Both sides come to 151.9&nbsp;J. Open the Laws tab and watch the two sides match, turn
+                after turn.</p>
+            </div>
+            <div class="everyday">
+              <h4>In everyday life</h4>
+              <p>Pump up a bike tire and the pump gets warm. The work you do squeezing the air raises its
+                internal energy, and some of that leaves as heat through the pump.</p>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="law" aria-labelledby="law-2">
+        <p class="law-number" aria-hidden="true">2</p>
+        <div class="law-body">
+          <h3 id="law-2">Second law: heat flows from hot to cold, and entropy rises</h3>
+          <p>Left alone, heat always moves from hotter things to colder things, never the reverse. A heat
+            engine can catch part of that flow as work, but never all of it: some heat must always flow on
+            to the cold side. Put another way, every real process raises the total entropy of the
+            universe.</p>
+          <p class="equation">Δ<var>S</var><sub>surr</sub> = −<var>Q</var><sub>hot</sub> /
+            <var>T</var><sub>hot</sub> − <var>Q</var><sub>cold</sub> / <var>T</var><sub>cold</sub></p>
+          <p>This is the entropy change of the surroundings over one turn, shown on the panel as
+            <b>dS surr</b>. The hot wall loses heat at a high temperature, which lowers its entropy a
+            little. The cold wall gains nearly the same heat at a low temperature, which raises its entropy
+            a lot. The total goes up.</p>
+          <div class="pair">
+            <div class="in-engine">
+              <h4>In the engine</h4>
+              <p>In the run above, <b>dS surr</b> was +23.5&nbsp;J/K per turn. The gas ends each turn
+                where it started, so this is also the entropy change of the whole universe.</p>
+              <p>Efficiency was 4.6%, far below the Carnot limit of 1 − 100/1200 = 91.7%. Most of the
+                heat walked straight through the gas.</p>
+              <p class="try">Try it: set both reservoirs to 300&nbsp;K and press Start. With no temperature
+                difference, no heat flows through, and the wheel slows down turn after turn.</p>
+            </div>
+            <div class="everyday">
+              <h4>In everyday life</h4>
+              <p>A hot drink cools to room temperature, and a cold one warms up. Neither ever goes the
+                other way on its own.</p>
+              <p>A car engine sends much of its fuel's energy out as heat through the radiator and exhaust.
+                No engine can avoid that loss completely.</p>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="law" aria-labelledby="law-3">
+        <p class="law-number" aria-hidden="true">3</p>
+        <div class="law-body">
+          <h3 id="law-3">Third law: absolute zero can never be reached</h3>
+          <p>As a substance gets colder, its entropy falls. A perfect crystal at absolute zero
+            (0&nbsp;K, or −273.15&nbsp;°C) would have zero entropy, but no process can cool anything all
+            the way to 0&nbsp;K.</p>
+          <p class="equation"><var>η</var><sub>max</sub> = 1 − <var>T</var><sub>cold</sub> /
+            <var>T</var><sub>hot</sub></p>
+          <div class="pair">
+            <div class="in-engine">
+              <h4>In the engine</h4>
+              <p>The Carnot limit would reach 100% only if <var>T</var><sub>cold</sub> were 0&nbsp;K.
+                Since that can't happen, no engine can ever turn all of its heat into work. The panel
+                says so under the Carnot readout. The cold slider stops at 100&nbsp;K, but even a perfect
+                engine with a colder cold side would fall short of 100%.</p>
+            </div>
+            <div class="everyday">
+              <h4>In everyday life</h4>
+              <p>Scientists have cooled atoms to less than a billionth of a degree above absolute zero,
+                but never to absolute zero itself.</p>
+            </div>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section id="spontaneity" class="section">
+      <h2>Spontaneity: ΔH, ΔS and ΔG</h2>
+      <p class="section-intro">
+        A spontaneous change happens on its own. Water runs downhill, and heat flows from hot to cold. In
+        1824 the French engineer Sadi Carnot compared heat engines to water wheels: the flow is
+        spontaneous, and the wheel catches some of it. Chemists predict which way a change will go with
+        Gibbs free energy.
+      </p>
+
+      <p class="equation equation-large">Δ<var>G</var> = Δ<var>H</var> − <var>T</var>Δ<var>S</var></p>
+      <ul class="terms">
+        <li>Δ<var>H</var> is the heat taken in or given off, in kJ/mol.</li>
+        <li>Δ<var>S</var> is the change in the system's entropy, in J/(mol·K).</li>
+        <li><var>T</var> is the temperature in kelvins.</li>
+        <li>If Δ<var>G</var> is negative, the change happens on its own. If it is positive, it doesn't,
+          but the reverse change does. If it is zero, both directions balance: equilibrium.</li>
+      </ul>
+
+      <div class="calculator" id="calculator">
+        <div class="calc-controls">
+          <h3>Try it: Gibbs free energy calculator</h3>
+          <fieldset class="presets">
+            <legend>Start from an example</legend>
+            <div class="preset-buttons" role="group">
+              <button type="button" data-preset="ice" aria-pressed="true">Ice melting</button>
+              <button type="button" data-preset="coldpack" aria-pressed="false">Instant cold pack</button>
+              <button type="button" data-preset="warmer" aria-pressed="false">Hand warmer</button>
+              <button type="button" data-preset="peroxide" aria-pressed="false">Hydrogen peroxide</button>
+              <button type="button" data-preset="ozone" aria-pressed="false">Making ozone</button>
+            </div>
+          </fieldset>
+          <p class="reaction" aria-live="polite"></p>
+
+          <div class="field">
+            <label for="dh-range">Δ<var>H</var> <span class="unit">kJ/mol</span></label>
+            <input type="range" id="dh-range" min="-900" max="900" step="0.01">
+            <input type="number" id="dh-number" min="-900" max="900" step="0.01" aria-label="ΔH in kJ/mol">
+          </div>
+          <div class="field">
+            <label for="ds-range">Δ<var>S</var> <span class="unit">J/(mol·K)</span></label>
+            <input type="range" id="ds-range" min="-300" max="300" step="0.1">
+            <input type="number" id="ds-number" min="-300" max="300" step="0.1" aria-label="ΔS in J/(mol·K)">
+          </div>
+          <div class="field">
+            <label for="t-range"><var>T</var> <span class="unit">K</span></label>
+            <input type="range" id="t-range" min="0" max="1500" step="1">
+            <input type="number" id="t-number" min="0" max="1500" step="1" aria-label="T in kelvins">
+          </div>
+        </div>
+
+        <div class="calc-result">
+          <p class="result" aria-live="polite">
+            <span class="result-label">Δ<var>G</var> =</span>
+            <span class="result-value"></span>
+          </p>
+          <p class="verdict" aria-live="polite"></p>
+          <figure class="chart">
+            <svg viewBox="0 0 520 300" role="img" aria-labelledby="chart-title">
+              <title id="chart-title">ΔG against temperature</title>
+            </svg>
+            <figcaption>Δ<var>G</var> against temperature for these values. Below the zero line, the change
+              happens on its own. Drag on the graph to change <var>T</var>.</figcaption>
+          </figure>
+        </div>
+      </div>
+
+      <table class="signs">
+        <caption>What the signs of ΔH and ΔS predict. The highlighted case matches the calculator.</caption>
+        <thead>
+          <tr>
+            <td></td>
+            <th scope="col">Δ<var>S</var> &gt; 0<span>energy spreads out</span></th>
+            <th scope="col">Δ<var>S</var> &lt; 0<span>energy gathers up</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row">Δ<var>H</var> &lt; 0<span>gives off heat</span></th>
+            <td data-case="neg-pos"><b>Always</b> spontaneous<span>hydrogen peroxide breaking down</span></td>
+            <td data-case="neg-neg"><b>Only when cold</b>, below Δ<var>H</var>/Δ<var>S</var><span>water
+                freezing, a hand warmer</span></td>
+          </tr>
+          <tr>
+            <th scope="row">Δ<var>H</var> &gt; 0<span>takes in heat</span></th>
+            <td data-case="pos-pos"><b>Only when hot</b>, above Δ<var>H</var>/Δ<var>S</var><span>ice melting,
+                an instant cold pack</span></td>
+            <td data-case="pos-neg"><b>Never</b> spontaneous<span>oxygen turning into ozone</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="bridge" id="bridge">
+        <h3>The same law in a beaker and in the engine</h3>
+        <p>The second law says a change happens on its own when the total entropy of the universe goes
+          up. The universe here is the system plus its surroundings:</p>
+        <p class="equation">Δ<var>S</var><sub>universe</sub> = Δ<var>S</var> +
+          Δ<var>S</var><sub>surr</sub> &gt; 0</p>
+        <p>A reaction that gives off heat hands it to the surroundings. At constant pressure that heat is
+          −Δ<var>H</var>, so the surroundings' entropy changes by</p>
+        <p class="equation">Δ<var>S</var><sub>surr</sub> = −Δ<var>H</var> / <var>T</var></p>
+        <p>That is the same formula the engine's panel uses for each of its walls. Put the two together
+          and multiply by −<var>T</var>:</p>
+        <p class="equation">−<var>T</var>Δ<var>S</var><sub>universe</sub> = Δ<var>H</var> −
+          <var>T</var>Δ<var>S</var> = Δ<var>G</var></p>
+        <p>So a negative Δ<var>G</var> means exactly the same thing as a rising entropy of the universe.
+          Gibbs free energy is the second law, seen from the system's side.</p>
+        <p class="in-engine">In the engine, <b>dS surr</b> is positive every steady turn, so running the
+          engine is spontaneous. Making heat flow the other way, from cold to hot, would take outside work.
+          That is what a refrigerator does.</p>
+      </div>
+    </section>
+
+    <section id="model" class="section">
+      <h2>What the model leaves out</h2>
+      <p class="section-intro">A model is useful because it leaves things out. Here is what this one
+        simplifies, so you know which numbers to trust.</p>
+      <ul class="limits">
+        <li><b>Each dot stands for a crowd of atoms.</b> At the largest fill, 2,048 dots carry
+          0.277&nbsp;mol of helium, so each dot stands for about 8&nbsp;×&nbsp;10<sup>19</sup> atoms. The
+          dots are drawn far bigger than atoms so you can see them.</li>
+        <li><b>The engine runs slowly.</b> Motion is slowed down so you can follow single particles.
+          Times and rpm are in model units, not real seconds.</li>
+        <li><b>Pressure on the Now tab is an estimate.</b> The ~ sign marks an ideal gas estimate,
+          <var>P</var> = <var>nRT</var>/<var>V</var>, from each cylinder's particles. The P-V loops use the
+          real pushes of particles on the pistons.</li>
+        <li><b>The two sides can hold very different pressures.</b> The connecting tube is narrow
+          compared with how far a particle travels between collisions, so the hot side can keep a higher
+          pressure than the cold side. Real gases do the same in very thin tubes.</li>
+        <li><b>There is no regenerator.</b> Real Stirling engines store heat in a mesh between the
+          cylinders and reuse it on the next stroke. Stirling's 1816 patent already had one, which he
+          called the economiser. Ours lets that heat go, which keeps its efficiency low.</li>
+        <li><b>The walls never warm up or cool down.</b> They stay at the slider temperatures no matter
+          how much heat they give or take. Heat crosses only the cylinder walls and floors: the pistons
+          and the tube are insulated.</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>MotusBoltz is a CHM 1046 project by Manuel Albisu-Bouza. The engine is written in Rust with
+      Macroquad and runs in your browser as WebAssembly. <a href="https://github.com/fuzzyness/motusboltz">Source
+        code on GitHub</a>.</p>
+    <p class="sources">Calculator values are standard values near 25&nbsp;°C, and Δ<var>H</var> and
+      Δ<var>S</var> are treated as fixed at every temperature, as most textbooks do. Sources:
+      <a href="https://chem.libretexts.org/Courses/Brevard_College/CHE_104%3A_Principles_of_Chemistry_II/04%3A_Thermochemistry_and_Thermodynamics/4.22%3A_Changes_of_State_and_Free_Energy">LibreTexts</a>
+      for ice, <a href="https://www2.chem.wisc.edu/deptfiles/genchem/netorial/modules/thermodynamics/entropy/debrief.htm">University
+        of Wisconsin</a> for the cold pack, and standard enthalpies and entropies of formation for the
+      others.</p>
+  </footer>
+
   <script src="gl.js"></script>
-  <script>
-    load("motusboltz.wasm");
-    // In a block: gl.js already declares a global `canvas`.
-    {
-      const simulation = document.getElementById("glcanvas");
-      const hint = document.getElementById("focus-hint");
-      // Keys only reach the simulation while its canvas has focus, which a
-      // click elsewhere on the page or in the browser takes away.
-      simulation.addEventListener("blur", () => { hint.hidden = false; });
-      simulation.addEventListener("focus", () => { hint.hidden = true; });
-      simulation.focus();
-    }
-  </script>
+  <script src="page.js"></script>
 </body>
 
 </html>

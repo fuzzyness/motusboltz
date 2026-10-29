@@ -24,8 +24,10 @@ cargo build --release --target "$TARGET"
 
 rm -rf "$site"
 mkdir -p "$site"
-# Every page file in web/ except this script and any stray build output.
-find web -maxdepth 1 -type f ! -name serve.sh ! -name '*.wasm' -exec cp {} "$site/" \;
+# All of web/, folders such as fonts/ included, except this script and any
+# stray build output.
+cp -R web/. "$site/"
+rm -f "$site/serve.sh" "$site"/*.wasm
 cp "target/$TARGET/release/motusboltz.wasm" "$site/"
 
 echo "Serving $site at http://localhost:$port (Ctrl-C to stop)"
