@@ -12,6 +12,8 @@ use macroquad::prelude::vec3;
 
 use crate::sim::gas::PARTICLE_MASS;
 
+/// Seed for the wall-impact draws, so a failing test can be rerun exactly.
+const TEST_SEED: u64 = 42;
 const TOLERANCE: f32 = 1e-5;
 const INCIDENT_SPEED: f32 = 1.0;
 const FAST_INCIDENT_SPEED: f32 = 3.0;
@@ -26,7 +28,7 @@ fn particle(normal_speed: f32) -> Particle {
 
 #[test]
 fn hot_setting_changes_reservoir_not_gas() {
-    let mut walls = ThermalReservoirs::new();
+    let mut walls = ThermalReservoirs::with_seed(TEST_SEED);
     assert_eq!(walls.hot_kelvin(), MIN_HOT_KELVIN);
     walls.set_hot_kelvin(MAX_HOT_KELVIN);
     assert_eq!(walls.hot_kelvin(), MAX_HOT_KELVIN);
@@ -35,7 +37,7 @@ fn hot_setting_changes_reservoir_not_gas() {
 
 #[test]
 fn insulated_reflection_is_elastic_and_preserves_tangential_velocity() {
-    let mut walls = ThermalReservoirs::new();
+    let mut walls = ThermalReservoirs::with_seed(TEST_SEED);
     walls.set_accommodation(1.0);
     let mut particle = particle(INCIDENT_SPEED);
     walls.reflect(&mut particle, Vec3::X, None);
@@ -48,7 +50,7 @@ fn insulated_reflection_is_elastic_and_preserves_tangential_velocity() {
 
 #[test]
 fn hot_wall_can_heat_and_cold_wall_can_cool() {
-    let mut walls = ThermalReservoirs::new();
+    let mut walls = ThermalReservoirs::with_seed(TEST_SEED);
     walls.set_accommodation(1.0);
     walls.set_hot_kelvin(MAX_HOT_KELVIN);
     for _ in 0..SAMPLES {
@@ -65,7 +67,7 @@ fn hot_wall_can_heat_and_cold_wall_can_cool() {
 
 #[test]
 fn heat_tracks_particle_energy_exactly() {
-    let mut walls = ThermalReservoirs::new();
+    let mut walls = ThermalReservoirs::with_seed(TEST_SEED);
     walls.set_accommodation(1.0);
     let mut particle = particle(INCIDENT_SPEED);
     let before = 0.5 * PARTICLE_MASS * particle.velocity.length_squared();
@@ -76,7 +78,7 @@ fn heat_tracks_particle_energy_exactly() {
 
 #[test]
 fn cold_control_has_shared_equilibrium_endpoint_and_does_not_inject_heat() {
-    let mut walls = ThermalReservoirs::with_seed(42);
+    let mut walls = ThermalReservoirs::with_seed(TEST_SEED);
     assert_eq!(walls.cold_kelvin(), walls.hot_kelvin());
     walls.set_cold_kelvin(MIN_COLD_KELVIN);
     assert_eq!(walls.cold_kelvin(), MIN_COLD_KELVIN);

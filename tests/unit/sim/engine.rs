@@ -52,6 +52,16 @@ impl ConnectedChambers {
         )
     }
 
+    /// The default chamber filled with `TEST_SEED`.
+    fn seeded(count: usize) -> Self {
+        Self::with_geometry_seed(count, DEFAULT_GEOMETRY, TEST_SEED)
+    }
+
+    /// `seeded` at an initial concentration in mol/L.
+    fn seeded_at_concentration(concentration: f32) -> Self {
+        Self::seeded(Self::markers_for_concentration(concentration))
+    }
+
     fn counts(&self) -> RegionCounts {
         let mut counts = RegionCounts::default();
         for particle in &self.particles {
@@ -76,12 +86,16 @@ const POSITION_TOLERANCE: f32 = 1e-5;
 const ENERGY_TOLERANCE: f32 = 1e-3;
 const TRANSFER_TEST_STEPS: usize = 1_500;
 const TEST_COUNT: usize = 64;
+/// Seed for every test gas, so a failing test can be rerun exactly. Only
+/// draws that are the point of a test (the new gas a reset makes, the
+/// random-seed rotation sweep) are left to chance.
+const TEST_SEED: u64 = 42;
 const TRANSIT_SPEED: f32 = 2.0;
 const TRANSIT_HEIGHT: f32 = CONNECTOR_CENTER_Y;
 
 /// Disables wall heat transfer and piston motion for isolated transport tests.
 fn insulated(count: usize) -> ConnectedChambers {
-    let mut simulation = ConnectedChambers::new(count);
+    let mut simulation = ConnectedChambers::seeded(count);
     simulation.thermal.set_accommodation(0.0);
     simulation.set_pistons_running(false);
     simulation
@@ -214,7 +228,7 @@ fn two_chamber_gas_conserves_particles_and_energy() {
 fn thermal_reservoirs_exchange_energy_at_both_cylinder_walls() {
     const WALL_SPEED: f32 = 2.0;
     const ENERGY_BALANCE_TOLERANCE: f32 = 1e-4;
-    let mut simulation = ConnectedChambers::new(2);
+    let mut simulation = ConnectedChambers::seeded(2);
     simulation.set_hot_kelvin(MAX_HOT_KELVIN);
     simulation.thermal.set_accommodation(1.0);
     simulation.set_pistons_running(false);
@@ -236,12 +250,38 @@ fn thermal_reservoirs_exchange_energy_at_both_cylinder_walls() {
     );
 }
 
+/// With the hot wall at its lowest (300 K) and the cold wall at 100 K, heat
+/// still flows from hot to cold: the cold wall cools the gas, and gas that
+/// drifts back into the hot cylinder takes heat from its 300 K wall. The
+/// pistons are held, so only heat carried through the gas counts. Over 40
+/// seeds, 20 s gave the hot wall 139 units on average, with a spread of 23
+/// and never below 84, so the signs do not depend on this seed.
+#[test]
+fn cold_sink_alone_drives_heat_from_hot_to_cold() {
+    const COUNT: usize = 256;
+    const SECONDS: f32 = 20.0;
+    let mut simulation = ConnectedChambers::seeded(COUNT);
+    simulation.set_hot_kelvin(MIN_HOT_KELVIN);
+    simulation.set_cold_kelvin(MIN_COLD_KELVIN);
+    simulation.set_pistons_running(false);
+    for _ in 0..(SECONDS / FIXED_DT) as usize {
+        simulation.step(FIXED_DT);
+    }
+    let heat = simulation.heat();
+    assert!(heat.hot > 0.0, "hot wall gave the gas {} units", heat.hot);
+    assert!(
+        heat.cold < 0.0,
+        "cold wall gave the gas {} units",
+        heat.cold
+    );
+}
+
 #[test]
 fn fixed_chamber_first_law_holds_during_heating_and_cooling() {
     const THERMAL_TEST_STEPS: usize = 1_200;
     const TEST_HOT_KELVIN: f32 = MAX_HOT_KELVIN;
     const RELATIVE_TOLERANCE: f32 = 2e-3;
-    let mut simulation = ConnectedChambers::new(TEST_COUNT);
+    let mut simulation = ConnectedChambers::seeded(TEST_COUNT);
     simulation.set_hot_kelvin(TEST_HOT_KELVIN);
     simulation.thermal.set_accommodation(1.0);
     simulation.set_pistons_running(false);
@@ -259,7 +299,7 @@ fn fixed_chamber_first_law_holds_during_heating_and_cooling() {
 #[test]
 fn reservoir_settings_survive_refill_and_heat_resets() {
     const TARGET_HOT_KELVIN: f32 = TEST_WARM_KELVIN;
-    let mut simulation = ConnectedChambers::new(64);
+    let mut simulation = ConnectedChambers::seeded(64);
     simulation.set_hot_kelvin(TARGET_HOT_KELVIN);
     simulation.set_particle_count(256);
     assert_eq!(simulation.hot_kelvin(), TARGET_HOT_KELVIN);
@@ -271,7 +311,7 @@ fn reservoir_settings_survive_refill_and_heat_resets() {
 #[test]
 fn passage_and_upper_caps_are_adiabatic() {
     const WALL_SPEED: f32 = 2.0;
-    let mut simulation = ConnectedChambers::new(2);
+    let mut simulation = ConnectedChambers::seeded(2);
     simulation.thermal.set_accommodation(1.0);
     simulation.set_hot_kelvin(MAX_HOT_KELVIN);
     simulation.set_pistons_running(false);
@@ -314,7 +354,7 @@ fn real_unit_measurements_conserve_helium_amount_on_transfer() {
 #[test]
 fn initial_gas_and_wall_temperatures_are_in_kelvin() {
     const ABSOLUTE_TOLERANCE_K: f64 = 0.02;
-    let mut simulation = ConnectedChambers::new(TEST_COUNT);
+    let mut simulation = ConnectedChambers::seeded(TEST_COUNT);
     let readings = simulation.measurements();
     assert!((readings.hot.temperature_kelvin.unwrap() - 300.0).abs() < ABSOLUTE_TOLERANCE_K);
     assert!((readings.cold.temperature_kelvin.unwrap() - 300.0).abs() < ABSOLUTE_TOLERANCE_K);
@@ -325,15 +365,15 @@ fn initial_gas_and_wall_temperatures_are_in_kelvin() {
 
 #[test]
 fn helium_amount_increases_with_initial_marker_count() {
-    let first = ConnectedChambers::new(TEST_COUNT);
-    let more = ConnectedChambers::new(2 * TEST_COUNT);
+    let first = ConnectedChambers::seeded(TEST_COUNT);
+    let more = ConnectedChambers::seeded(2 * TEST_COUNT);
     assert!((more.total_moles() - 2.0 * first.total_moles()).abs() < 1e-12);
 }
 
 #[test]
 fn particle_radius_stays_fixed_for_every_particle_preset() {
     for &count in &[256, 512, 1_024, 1_536, 2_048] {
-        let simulation = ConnectedChambers::new(count);
+        let simulation = ConnectedChambers::seeded(count);
         assert_eq!(PARTICLE_RADIUS, PARTICLE_RADIUS);
         assert_eq!(simulation.particles.len(), count);
         assert!(
@@ -349,7 +389,7 @@ fn particle_radius_stays_fixed_for_every_particle_preset() {
 fn alternate_geometry_survives_reset_and_particle_count_changes() {
     const TEST_SCALE: f32 = 2.2;
     let geometry = ChamberGeometry::scaled(TEST_SCALE);
-    let mut simulation = ConnectedChambers::with_geometry(TEST_COUNT, geometry);
+    let mut simulation = ConnectedChambers::with_geometry_seed(TEST_COUNT, geometry, TEST_SEED);
     simulation.set_hot_kelvin(TEST_WARM_KELVIN);
     assert_eq!(
         simulation.geometry().cylinder_radius,
@@ -368,16 +408,20 @@ fn alternate_geometry_survives_reset_and_particle_count_changes() {
 #[test]
 #[should_panic(expected = "chamber is too small")]
 fn undersized_chamber_rejects_particles_instead_of_shrinking_them() {
-    let _ = ConnectedChambers::with_geometry(2_048, ChamberGeometry::scaled(1.0));
+    let _ = ConnectedChambers::with_geometry_seed(2_048, ChamberGeometry::scaled(1.0), TEST_SEED);
 }
 
 #[test]
 fn helium_fill_and_volume_scale_together() {
     const DOUBLE_SCALE: f32 = 2.0;
     const RELATIVE_TOLERANCE: f64 = 1e-5;
-    let base = ConnectedChambers::with_geometry(TEST_COUNT, ChamberGeometry::scaled(1.0));
-    let doubled =
-        ConnectedChambers::with_geometry(TEST_COUNT, ChamberGeometry::scaled(DOUBLE_SCALE));
+    let base =
+        ConnectedChambers::with_geometry_seed(TEST_COUNT, ChamberGeometry::scaled(1.0), TEST_SEED);
+    let doubled = ConnectedChambers::with_geometry_seed(
+        TEST_COUNT,
+        ChamberGeometry::scaled(DOUBLE_SCALE),
+        TEST_SEED,
+    );
     let volume_ratio = doubled.volume_m3() / base.volume_m3();
     let moles_ratio = doubled.total_moles() / base.total_moles();
     assert!(volume_ratio > 1.0);
@@ -390,7 +434,7 @@ fn taller_chambers_expand_collision_grid_bounds() {
     geometry.cylinder_height = geometry.grid_side() * 1.1;
     geometry.connector_center_y =
         -geometry.cylinder_height / 2.0 - CONNECTOR_DROP_RADII * geometry.connector_radius;
-    let simulation = ConnectedChambers::with_geometry(TEST_COUNT, geometry);
+    let simulation = ConnectedChambers::with_geometry_seed(TEST_COUNT, geometry, TEST_SEED);
     assert!(simulation.geometry().grid_side() > geometry.cylinder_height);
     assert!(simulation.geometry().grid_side() / 2.0 >= -geometry.bottom());
     assert!(
@@ -406,7 +450,7 @@ fn taller_chambers_expand_collision_grid_bounds() {
 #[test]
 fn particle_centers_stay_within_the_gas_bounds() {
     const STEPS: usize = 240;
-    let mut simulation = ConnectedChambers::with_geometry_seed(TEST_COUNT, DEFAULT_GEOMETRY, 42);
+    let mut simulation = ConnectedChambers::seeded(TEST_COUNT);
     simulation.set_hot_kelvin(MAX_HOT_KELVIN);
     assert!(simulation.start_engine());
     let (lower, upper) = simulation.geometry().gas_bounds();
@@ -423,7 +467,7 @@ fn particle_centers_stay_within_the_gas_bounds() {
 #[test]
 fn initial_concentration_is_bounded_by_one_molar_across_the_system() {
     const LOCAL_CONCENTRATION_TOLERANCE: f64 = 0.10;
-    let full = ConnectedChambers::with_initial_concentration(1.0);
+    let full = ConnectedChambers::seeded_at_concentration(1.0);
     let initial = full.measurements();
     assert_eq!(full.particles.len(), MAX_SIMULATED_MARKERS);
     assert!((full.initial_concentration() - 1.0).abs() < 1e-12);
@@ -435,7 +479,7 @@ fn initial_concentration_is_bounded_by_one_molar_across_the_system() {
 #[test]
 fn concentration_controls_gas_amount_and_reset_preserves_it() {
     const INITIAL_CONCENTRATION: f32 = 0.25;
-    let mut simulation = ConnectedChambers::with_initial_concentration(INITIAL_CONCENTRATION);
+    let mut simulation = ConnectedChambers::seeded_at_concentration(INITIAL_CONCENTRATION);
     assert!(
         (simulation.initial_concentration() - INITIAL_CONCENTRATION as f64).abs()
             <= 0.5 / MAX_SIMULATED_MARKERS as f64
@@ -457,8 +501,9 @@ fn concentration_scaling_is_independent_of_geometry_size() {
     large_geometry.connector_center_y = -large_geometry.cylinder_height / 2.0
         - CONNECTOR_DROP_RADII * large_geometry.connector_radius;
     let marker_count = ConnectedChambers::markers_for_concentration(INITIAL_CONCENTRATION);
-    let original = ConnectedChambers::with_geometry(marker_count, ChamberGeometry::default());
-    let larger = ConnectedChambers::with_geometry(marker_count, large_geometry);
+    let original =
+        ConnectedChambers::with_geometry_seed(marker_count, ChamberGeometry::default(), TEST_SEED);
+    let larger = ConnectedChambers::with_geometry_seed(marker_count, large_geometry, TEST_SEED);
     assert!((original.initial_concentration() - larger.initial_concentration()).abs() < 1e-12);
     assert!(larger.total_moles() > original.total_moles());
 }
@@ -467,7 +512,7 @@ fn concentration_scaling_is_independent_of_geometry_size() {
 fn maximum_initial_concentration_gives_near_equal_ideal_pressures() {
     const EXPECTED_PRESSURE_PA: f64 = 1_000.0 * GAS_CONSTANT * 300.0;
     const RELATIVE_TOLERANCE: f64 = 0.10;
-    let simulation = ConnectedChambers::with_initial_concentration(1.0);
+    let simulation = ConnectedChambers::seeded_at_concentration(1.0);
     let readings = simulation.measurements();
     for pressure in [
         readings.hot.pressure_pa.unwrap(),
@@ -483,7 +528,7 @@ fn maximum_initial_concentration_gives_near_equal_ideal_pressures() {
 fn default_fill_uses_1024_markers_at_half_molar() {
     const CONCENTRATION_TOLERANCE: f64 = 1e-12;
     let simulation =
-        ConnectedChambers::with_initial_concentration(DEFAULT_INITIAL_CONCENTRATION_MOL_PER_L);
+        ConnectedChambers::seeded_at_concentration(DEFAULT_INITIAL_CONCENTRATION_MOL_PER_L);
     let regions = simulation.measurements();
     assert_eq!(simulation.particles.len(), DEFAULT_CONNECTED_MARKERS);
     assert!((simulation.initial_concentration() - 0.5).abs() < CONCENTRATION_TOLERANCE);
@@ -494,8 +539,7 @@ fn default_fill_uses_1024_markers_at_half_molar() {
 
 #[test]
 fn minimum_fill_represents_256_markers() {
-    let minimum =
-        ConnectedChambers::with_initial_concentration(MIN_INITIAL_CONCENTRATION_MOL_PER_L);
+    let minimum = ConnectedChambers::seeded_at_concentration(MIN_INITIAL_CONCENTRATION_MOL_PER_L);
     assert_eq!(minimum.particles.len(), MIN_CONNECTED_MARKERS);
     assert!((minimum.initial_concentration() - 0.125).abs() < 1e-12);
 }
@@ -503,7 +547,7 @@ fn minimum_fill_represents_256_markers() {
 #[test]
 fn resetting_refills_both_cylinders_at_the_same_temperature() {
     const TEMPERATURE_TOLERANCE_K: f64 = 0.02;
-    let mut simulation = ConnectedChambers::with_initial_concentration(0.5);
+    let mut simulation = ConnectedChambers::seeded_at_concentration(0.5);
     simulation.set_hot_kelvin(MAX_HOT_KELVIN);
     for _ in 0..100 {
         simulation.update(FIXED_DT);
@@ -589,7 +633,7 @@ fn moving_insulated_pistons_obey_first_law() {
 fn heating_and_piston_motion_track_heat_and_work_separately() {
     const TEST_STEPS: usize = 700;
     const RELATIVE_TOLERANCE: f32 = 5e-3;
-    let mut simulation = ConnectedChambers::new(256);
+    let mut simulation = ConnectedChambers::seeded(256);
     simulation.thermal.set_accommodation(1.0);
     simulation.set_hot_kelvin(MAX_HOT_KELVIN);
     simulation.kick_flywheel(KickDirection::Positive);
@@ -604,7 +648,7 @@ fn heating_and_piston_motion_track_heat_and_work_separately() {
 
 #[test]
 fn changing_fill_preserves_paused_piston_control() {
-    let mut simulation = ConnectedChambers::new(256);
+    let mut simulation = ConnectedChambers::seeded(256);
     simulation.set_pistons_running(false);
     simulation.set_particle_count(512);
     assert!(!simulation.power_pistons().running());
@@ -630,10 +674,9 @@ fn free_flywheel_tracks_gas_and_mechanical_energy_separately() {
 
 #[test]
 fn seeded_simulations_remain_identical_when_interleaved() {
-    const SEED: u64 = 42;
     const STEPS: usize = 200;
-    let mut first = ConnectedChambers::with_geometry_seed(TEST_COUNT, DEFAULT_GEOMETRY, SEED);
-    let mut second = ConnectedChambers::with_geometry_seed(TEST_COUNT, DEFAULT_GEOMETRY, SEED);
+    let mut first = ConnectedChambers::seeded(TEST_COUNT);
+    let mut second = ConnectedChambers::seeded(TEST_COUNT);
     first.set_hot_kelvin(MAX_HOT_KELVIN);
     second.set_hot_kelvin(MAX_HOT_KELVIN);
     for _ in 0..STEPS {
@@ -649,8 +692,7 @@ fn seeded_simulations_remain_identical_when_interleaved() {
 
 #[test]
 fn reservoir_controls_change_no_particles_until_an_impact() {
-    const SEED: u64 = 42;
-    let mut simulation = ConnectedChambers::with_geometry_seed(TEST_COUNT, DEFAULT_GEOMETRY, SEED);
+    let mut simulation = ConnectedChambers::seeded(TEST_COUNT);
     let before: Vec<_> = simulation.particles.iter().map(|p| p.velocity).collect();
     simulation.set_cold_kelvin(MIN_COLD_KELVIN);
     simulation.set_hot_kelvin(MAX_HOT_KELVIN);
@@ -908,7 +950,6 @@ fn rotation_holds_for_random_seeds() {
 
 #[test]
 fn starting_energy_grows_with_fill_above_the_default() {
-    const SEED: u64 = 42;
     let default_energy = starting_energy(DEFAULT_CONNECTED_MARKERS);
     assert_eq!(starting_energy(MIN_CONNECTED_MARKERS), default_energy);
     assert_eq!(starting_energy(MAX_SIMULATED_MARKERS), 2.0 * default_energy);
@@ -917,7 +958,7 @@ fn starting_energy_grows_with_fill_above_the_default() {
         DEFAULT_CONNECTED_MARKERS,
         MAX_SIMULATED_MARKERS,
     ] {
-        let mut simulation = ConnectedChambers::with_geometry_seed(count, DEFAULT_GEOMETRY, SEED);
+        let mut simulation = ConnectedChambers::seeded(count);
         assert!(simulation.start_engine());
         let energy = starting_energy(count);
         assert!((simulation.pistons.kinetic_energy() - energy).abs() < 1e-9 * energy);
@@ -934,10 +975,12 @@ fn starting_energy_grows_with_fill_above_the_default() {
 /// presses cannot overdrive the engine.
 #[test]
 fn repeated_start_presses_cannot_overdrive_the_engine() {
-    const SEED: u64 = 42;
     const FRAMES: usize = 240;
-    let mut simulation =
-        ConnectedChambers::with_geometry_seed(DEFAULT_CONNECTED_MARKERS, DEFAULT_GEOMETRY, SEED);
+    let mut simulation = ConnectedChambers::with_geometry_seed(
+        DEFAULT_CONNECTED_MARKERS,
+        DEFAULT_GEOMETRY,
+        TEST_SEED,
+    );
     simulation.set_hot_kelvin(MAX_HOT_KELVIN);
     let start_energy = starting_energy(DEFAULT_CONNECTED_MARKERS);
     for frame in 0..FRAMES {
@@ -1033,7 +1076,7 @@ fn one_start_completes_a_turn_at_every_fill() {
 
 #[test]
 fn reset_draws_a_new_random_gas() {
-    let mut simulation = ConnectedChambers::new(TEST_COUNT);
+    let mut simulation = ConnectedChambers::seeded(TEST_COUNT);
     let before: Vec<_> = simulation.particles.iter().map(|p| p.velocity).collect();
     simulation.reset();
     let after: Vec<_> = simulation.particles.iter().map(|p| p.velocity).collect();
@@ -1044,11 +1087,9 @@ fn reset_draws_a_new_random_gas() {
 #[test]
 #[ignore = "release-mode maximum-fill performance measurement"]
 fn maximum_fill_benchmark() {
-    const SEED: u64 = 42;
     const WARMUP_SECONDS: f32 = 2.0;
     const SAMPLE_SECONDS: f32 = 8.0;
-    let mut simulation =
-        ConnectedChambers::with_geometry_seed(MAX_SIMULATED_MARKERS, DEFAULT_GEOMETRY, SEED);
+    let mut simulation = ConnectedChambers::seeded(MAX_SIMULATED_MARKERS);
     simulation.set_hot_kelvin(MAX_HOT_KELVIN);
     simulation.start_engine();
     for _ in 0..(WARMUP_SECONDS / FIXED_DT) as usize {
@@ -1069,10 +1110,9 @@ fn maximum_fill_benchmark() {
 
 #[test]
 fn slow_frame_caps_catchup_without_larger_physics_steps() {
-    const SEED: u64 = 42;
     const SLOW_FRAME: f32 = 4.0 * MAX_FRAME_TIME;
-    let mut capped = ConnectedChambers::with_geometry_seed(TEST_COUNT, DEFAULT_GEOMETRY, SEED);
-    let mut reference = ConnectedChambers::with_geometry_seed(TEST_COUNT, DEFAULT_GEOMETRY, SEED);
+    let mut capped = ConnectedChambers::seeded(TEST_COUNT);
+    let mut reference = ConnectedChambers::seeded(TEST_COUNT);
     assert!(capped.update(SLOW_FRAME));
     for _ in 0..MAX_FIXED_STEPS_PER_FRAME {
         reference.step(FIXED_DT);
@@ -1092,10 +1132,9 @@ fn slow_frame_caps_catchup_without_larger_physics_steps() {
 /// frames dropped time and flashed the warning.
 #[test]
 fn uneven_thirty_fps_frames_keep_real_time() {
-    const SEED: u64 = 42;
     const FRAMES: usize = 240;
     const FRAME_TIMES: [f32; 6] = [1.0 / 30.0, 0.029, 0.0375, 0.0333, 0.041, 0.026];
-    let mut simulation = ConnectedChambers::with_geometry_seed(TEST_COUNT, DEFAULT_GEOMETRY, SEED);
+    let mut simulation = ConnectedChambers::seeded(TEST_COUNT);
     for frame in 0..FRAMES {
         let limited = simulation.update(FRAME_TIMES[frame % FRAME_TIMES.len()]);
         assert!(!limited, "frame {frame} dropped time");

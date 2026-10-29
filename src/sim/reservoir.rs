@@ -69,11 +69,6 @@ pub struct ThermalReservoirs {
 }
 
 impl ThermalReservoirs {
-    #[cfg(test)]
-    pub fn new() -> Self {
-        Self::with_seed(macroquad::rand::gen_range(0, u64::MAX))
-    }
-
     /// Reservoirs at 300 K whose wall impacts use their own seeded generator.
     pub fn with_seed(seed: u64) -> Self {
         let random = RandGenerator::new();
