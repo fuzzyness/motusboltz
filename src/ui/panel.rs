@@ -3,8 +3,9 @@
 //! column scrolls, by wheel or by dragging its scrollbar, whenever its
 //! content is taller than the window.
 //!
-//! Text is rebuilt at most `REFRESH_SECONDS` apart, not every frame. The
-//! loops are read from the engine each frame, since they are short.
+//! Text and the loops are rebuilt at most `REFRESH_SECONDS` apart, not
+//! every frame, and the app repaints the panel only when what it shows
+//! changes (see `needs_paint`).
 
 mod laws;
 mod plot;
@@ -102,6 +103,18 @@ const SECTION_TURN: &str = "LAST FULL TURN";
 const LAW_WORK: &str = "Work: area inside each P-V loop (last turn)";
 const WAITING_NOTE: &str = "Readings use whole turns only.";
 
+/// Everything that changes how the panel looks. The app keeps the painted
+/// panel as an image and repaints it only when this changes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Look {
+    refreshes: u64,
+    view: PanelView,
+    scroll: f32,
+    details: bool,
+    paused: bool,
+    height: f32,
+}
+
 /// What the panel shows, one tab each.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PanelView {
@@ -163,6 +176,10 @@ pub struct EnginePanel {
     loop_text: String,
     range: Option<PlotRange>,
     next_refresh: f64,
+    /// Text rebuilds so far, so a repaint follows each one.
+    refreshes: u64,
+    /// How the panel looked when last painted.
+    painted: Option<Look>,
     show_details: bool,
     view: PanelView,
     /// How far the content is scrolled up, in pixels.
@@ -186,6 +203,8 @@ impl EnginePanel {
             loop_text: String::new(),
             range: None,
             next_refresh: 0.0,
+            refreshes: 0,
+            painted: None,
             show_details: false,
             view: PanelView::All,
             scroll: 0.0,
@@ -222,6 +241,7 @@ impl EnginePanel {
     }
 
     fn refresh(&mut self, engine: &ConnectedChambers) {
+        self.refreshes += 1;
         self.now = now_readout(engine, self.show_details);
         self.turn = engine
             .cycle()
@@ -312,6 +332,22 @@ impl EnginePanel {
             .clamp(MIN_THUMB_HEIGHT.min(track.h), track.h);
         let top = track.y + (track.h - height) * self.scroll / self.max_scroll();
         Some(Rect::new(track.x, top, track.w, height))
+    }
+
+    /// Whether the panel looks different from when it was last painted, at
+    /// a window `height` points tall; if so, it counts as painted from now.
+    pub fn needs_paint(&mut self, paused: bool, height: f32) -> bool {
+        let look = Look {
+            refreshes: self.refreshes,
+            view: self.view,
+            scroll: self.scroll,
+            details: self.show_details,
+            paused,
+            height,
+        };
+        let changed = self.painted != Some(look);
+        self.painted = Some(look);
+        changed
     }
 
     /// Draws the column at the left edge, full height.

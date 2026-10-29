@@ -241,3 +241,31 @@ fn every_panel_state_draws_ascii_text() {
         assert!(text.is_ascii(), "non-ASCII panel text: {text:?}");
     }
 }
+
+#[test]
+fn repaints_only_when_the_panel_changes() {
+    let engine = engine();
+    let mut panel = EnginePanel::new();
+    assert!(panel.needs_paint(false, DEFAULT_HEIGHT), "never painted");
+    assert!(!panel.needs_paint(false, DEFAULT_HEIGHT), "nothing changed");
+
+    panel.update(&engine, 1.0);
+    assert!(panel.needs_paint(false, DEFAULT_HEIGHT), "text rebuilt");
+    panel.update(&engine, 1.0 + REFRESH_SECONDS / 2.0);
+    assert!(
+        !panel.needs_paint(false, DEFAULT_HEIGHT),
+        "too soon to rebuild"
+    );
+
+    assert!(panel.needs_paint(true, DEFAULT_HEIGHT), "paused");
+    assert!(panel.needs_paint(true, LAPTOP_HEIGHT), "window resized");
+    panel.select(PanelView::Loops);
+    assert!(panel.needs_paint(true, LAPTOP_HEIGHT), "other tab");
+    panel.toggle_details();
+    assert!(panel.needs_paint(true, LAPTOP_HEIGHT), "details shown");
+    panel.content_height = 2.0 * LAPTOP_HEIGHT;
+    panel.viewport_height = LAPTOP_HEIGHT - HEADER_HEIGHT;
+    panel.scroll_to(40.0);
+    assert!(panel.needs_paint(true, LAPTOP_HEIGHT), "scrolled");
+    assert!(!panel.needs_paint(true, LAPTOP_HEIGHT));
+}

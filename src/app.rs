@@ -6,6 +6,7 @@
 use macroquad::prelude::{
     Color,
     MouseButton,
+    Rect,
     Vec2,
     WHITE,
     clear_background,
@@ -49,8 +50,10 @@ use crate::ui::input::{
     shift_down,
     wheel_pixels, //
 };
+use crate::ui::layer::CachedLayer;
 use crate::ui::layout::{
     CONTROL_RIGHT_MARGIN,
+    PANEL_WIDTH,
     scene_span,
     scene_viewport, //
 };
@@ -133,6 +136,8 @@ struct App {
     simulation: ConnectedChambers,
     paused: bool,
     panel: EnginePanel,
+    /// The panel as last painted, repainted only when it changes.
+    panel_layer: CachedLayer,
     show_panel: bool,
     camera: OrbitCamera,
     scene: Scene,
@@ -146,6 +151,7 @@ impl App {
             ConnectedChambers::with_initial_concentration(DEFAULT_INITIAL_CONCENTRATION_MOL_PER_L);
         Self {
             panel: EnginePanel::new(),
+            panel_layer: CachedLayer::new(),
             show_panel: true,
             camera: initial_camera(simulation.geometry()),
             scene: Scene::new(&simulation),
@@ -248,7 +254,13 @@ impl App {
 
         let mut pen = Pen::screen();
         if self.show_panel {
-            self.panel.draw(&self.simulation, self.paused);
+            let stale = self.panel.needs_paint(self.paused, scene_height);
+            let (panel, simulation, paused) = (&mut self.panel, &self.simulation, self.paused);
+            self.panel_layer.draw(
+                Rect::new(0.0, 0.0, PANEL_WIDTH, scene_height),
+                stale,
+                || panel.draw(simulation, paused),
+            );
         } else {
             pen.text(TITLE, SCENE_TEXT_MARGIN, TITLE_Y, TITLE_FONT_SIZE, WHITE);
         }
