@@ -167,8 +167,24 @@ impl ThermalReservoirs {
             }
             return;
         }
-        particle.velocity -= 2.0 * incoming_speed * outward_normal;
+        particle.velocity = mirrored(particle.velocity, outward_normal);
     }
+}
+
+/// `velocity` mirrored across a wall with the given outward normal, which
+/// need not be exactly unit length. Computed in f64 and rounded once: in f32
+/// the normal's rounding and the arithmetic shortened the speed slightly on
+/// average, which over many bounces lost gas energy that no heat or work
+/// accounted for (about 0.03 units per 300 s at 1,024 particles, where the
+/// opening between the bores meets their curved walls).
+fn mirrored(velocity: Vec3, outward_normal: Vec3) -> Vec3 {
+    let normal = [outward_normal.x, outward_normal.y, outward_normal.z].map(f64::from);
+    let length = normal.iter().map(|c| c * c).sum::<f64>().sqrt();
+    let normal = normal.map(|c| c / length);
+    let velocity = [velocity.x, velocity.y, velocity.z].map(f64::from);
+    let along: f64 = velocity.iter().zip(&normal).map(|(v, n)| v * n).sum();
+    let [x, y, z] = [0, 1, 2].map(|axis| (velocity[axis] - 2.0 * along * normal[axis]) as f32);
+    Vec3::new(x, y, z)
 }
 
 #[cfg(test)]

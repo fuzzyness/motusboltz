@@ -1,5 +1,5 @@
 //! Simulation tests for `src/sim/engine.rs`: the fill, transport through
-//! the passage, wall heat, piston work, timestep limits, and the long
+//! the opening between the cylinders, wall heat, piston work, timestep limits, and the long
 //! started-engine regressions.
 
 use super::*;
@@ -10,10 +10,7 @@ use crate::sim::cycle::{
     loop_work, //
 };
 use crate::sim::gas::DYNAMICS_TIME_SCALE;
-use crate::sim::geometry::{
-    CONNECTOR_DROP_RADII,
-    DEFAULT_GEOMETRY, //
-};
+use crate::sim::geometry::DEFAULT_GEOMETRY;
 use crate::sim::reservoir::{
     MAX_COLD_KELVIN,
     MAX_HOT_KELVIN,
@@ -79,8 +76,7 @@ impl ConnectedChambers {
 const CYLINDER_OFFSET: f32 = DEFAULT_GEOMETRY.cylinder_offset;
 const CYLINDER_RADIUS: f32 = DEFAULT_GEOMETRY.cylinder_radius;
 const CYLINDER_HEIGHT: f32 = DEFAULT_GEOMETRY.cylinder_height;
-const CONNECTOR_CENTER_Y: f32 = DEFAULT_GEOMETRY.connector_center_y;
-const CONNECTOR_RADIUS: f32 = DEFAULT_GEOMETRY.connector_radius;
+const PASSAGE_RADIUS: f32 = DEFAULT_GEOMETRY.passage_radius;
 
 const POSITION_TOLERANCE: f32 = 1e-5;
 const ENERGY_TOLERANCE: f32 = 1e-3;
@@ -91,7 +87,8 @@ const TEST_COUNT: usize = 64;
 /// random-seed rotation sweep) are left to chance.
 const TEST_SEED: u64 = 42;
 const TRANSIT_SPEED: f32 = 2.0;
-const TRANSIT_HEIGHT: f32 = CONNECTOR_CENTER_Y;
+/// The opening's axis: one opening radius above the floors.
+const TRANSIT_HEIGHT: f32 = -CYLINDER_HEIGHT / 2.0 + PASSAGE_RADIUS;
 
 /// Disables wall heat transfer and piston motion for isolated transport tests.
 fn insulated(count: usize) -> ConnectedChambers {
@@ -127,30 +124,26 @@ fn initial_gas_is_distributed_without_overlaps() {
 }
 
 #[test]
-fn a_particle_can_cross_from_hot_to_cold_through_the_passage() {
+fn a_particle_can_cross_from_hot_to_cold_through_the_opening() {
     let mut simulation = insulated(1);
-    simulation.particles[0].position = vec3(
-        -CYLINDER_OFFSET,
-        -CYLINDER_HEIGHT / 2.0 + 2.0 * PARTICLE_RADIUS,
-        0.0,
-    );
-    simulation.particles[0].velocity = vec3(TRANSIT_SPEED, -TRANSIT_SPEED, 0.0);
+    simulation.particles[0].position = vec3(-CYLINDER_OFFSET, TRANSIT_HEIGHT, 0.0);
+    simulation.particles[0].velocity = vec3(TRANSIT_SPEED, 0.0, 0.0);
 
     let original_energy = simulation.kinetic_energy();
-    let mut saw_connector = false;
+    let mut saw_passage = false;
     let mut reached_cold = false;
     for _ in 0..TRANSFER_TEST_STEPS {
         simulation.update(FIXED_DT);
         let position = simulation.particles[0].position;
         assert!(simulation.contains(position));
-        saw_connector |= simulation.region(position) == Region::Passage;
+        saw_passage |= simulation.region(position) == Region::Passage;
         if simulation.region(position) == Region::Cold {
             reached_cold = true;
             break;
         }
     }
 
-    assert!(saw_connector);
+    assert!(saw_passage);
     assert!(
         reached_cold,
         "particle did not travel into the cold chamber"
@@ -159,27 +152,26 @@ fn a_particle_can_cross_from_hot_to_cold_through_the_passage() {
 }
 
 #[test]
-fn travel_through_the_passage_works_in_both_directions() {
+fn travel_through_the_opening_works_in_both_directions() {
     let mut simulation = insulated(1);
-    simulation.particles[0].position = vec3(
-        CYLINDER_OFFSET,
-        -CYLINDER_HEIGHT / 2.0 + 2.0 * PARTICLE_RADIUS,
-        0.0,
-    );
-    simulation.particles[0].velocity = vec3(-TRANSIT_SPEED, -TRANSIT_SPEED, 0.0);
+    simulation.particles[0].position = vec3(CYLINDER_OFFSET, TRANSIT_HEIGHT, 0.0);
+    simulation.particles[0].velocity = vec3(-TRANSIT_SPEED, 0.0, 0.0);
 
     let reached_hot = (0..TRANSFER_TEST_STEPS).any(|_| {
         simulation.update(FIXED_DT);
         simulation.region(simulation.particles[0].position) == Region::Hot
     });
-    assert!(reached_hot, "reverse passage must be open too");
+    assert!(reached_hot, "the opening must be open both ways");
 }
 
 #[test]
-fn cylinder_wall_is_closed_above_the_passage() {
-    const ABOVE_CONNECTOR_Y: f32 = 1.0;
+fn shared_wall_is_closed_above_the_opening() {
+    const ABOVE_OPENING_Y: f32 = 1.0;
+    const {
+        assert!(ABOVE_OPENING_Y > -CYLINDER_HEIGHT / 2.0 + 2.0 * PASSAGE_RADIUS + PARTICLE_RADIUS);
+    }
     let mut simulation = insulated(1);
-    simulation.particles[0].position = vec3(-CYLINDER_OFFSET, ABOVE_CONNECTOR_Y, 0.0);
+    simulation.particles[0].position = vec3(-CYLINDER_OFFSET, ABOVE_OPENING_Y, 0.0);
     simulation.particles[0].velocity = vec3(TRANSIT_SPEED, 0.0, 0.0);
     let original_energy = simulation.kinetic_energy();
 
@@ -193,7 +185,7 @@ fn cylinder_wall_is_closed_above_the_passage() {
 }
 
 #[test]
-fn passage_walls_reflect_without_changing_energy() {
+fn opening_walls_reflect_without_changing_energy() {
     let mut simulation = insulated(1);
     simulation.particles[0].position = vec3(0.0, TRANSIT_HEIGHT, 0.0);
     simulation.particles[0].velocity = vec3(0.0, 0.0, TRANSIT_SPEED);
@@ -309,14 +301,14 @@ fn reservoir_settings_survive_refill_and_heat_resets() {
 }
 
 #[test]
-fn passage_and_upper_caps_are_adiabatic() {
+fn opening_and_upper_caps_are_adiabatic() {
     const WALL_SPEED: f32 = 2.0;
     let mut simulation = ConnectedChambers::seeded(2);
     simulation.thermal.set_accommodation(1.0);
     simulation.set_hot_kelvin(MAX_HOT_KELVIN);
     simulation.set_pistons_running(false);
     let radius = PARTICLE_RADIUS;
-    simulation.particles[0].position = vec3(0.0, TRANSIT_HEIGHT, CONNECTOR_RADIUS - radius);
+    simulation.particles[0].position = vec3(0.0, TRANSIT_HEIGHT, PASSAGE_RADIUS - radius);
     simulation.particles[0].velocity = vec3(0.0, 0.0, WALL_SPEED);
     simulation.particles[1].position = vec3(-CYLINDER_OFFSET, CYLINDER_HEIGHT / 2.0 - radius, 0.0);
     simulation.particles[1].velocity = vec3(0.0, WALL_SPEED, 0.0);
@@ -432,11 +424,9 @@ fn helium_fill_and_volume_scale_together() {
 fn taller_chambers_expand_collision_grid_bounds() {
     let mut geometry = ChamberGeometry::default();
     geometry.cylinder_height = geometry.grid_side() * 1.1;
-    geometry.connector_center_y =
-        -geometry.cylinder_height / 2.0 - CONNECTOR_DROP_RADII * geometry.connector_radius;
     let simulation = ConnectedChambers::with_geometry_seed(TEST_COUNT, geometry, TEST_SEED);
-    assert!(simulation.geometry().grid_side() > geometry.cylinder_height);
-    assert!(simulation.geometry().grid_side() / 2.0 >= -geometry.bottom());
+    assert!(simulation.geometry().grid_side() >= geometry.cylinder_height);
+    assert!(simulation.geometry().grid_side() / 2.0 >= -geometry.floor());
     assert!(
         simulation
             .particles
@@ -498,8 +488,6 @@ fn concentration_scaling_is_independent_of_geometry_size() {
     const INITIAL_CONCENTRATION: f32 = 0.50;
     let mut large_geometry = ChamberGeometry::default();
     large_geometry.cylinder_height *= 1.25;
-    large_geometry.connector_center_y = -large_geometry.cylinder_height / 2.0
-        - CONNECTOR_DROP_RADII * large_geometry.connector_radius;
     let marker_count = ConnectedChambers::markers_for_concentration(INITIAL_CONCENTRATION);
     let original =
         ConnectedChambers::with_geometry_seed(marker_count, ChamberGeometry::default(), TEST_SEED);
@@ -736,6 +724,8 @@ struct CycleOutcome {
     starter_energy: f64,
     phase_energy: f64,
     phase_gas_work: f64,
+    /// Work the load took up to the last completed revolution.
+    phase_load_work: f64,
     final_starter_work: f64,
     heat: HeatTransfer,
     gas_residual: f64,
@@ -755,6 +745,7 @@ fn started_run(seed: u64, hot_kelvin: f32, dt: f32, duration: f32) -> CycleOutco
     let mut completed_turns = 0;
     let mut phase_energy = starter_energy;
     let mut phase_gas_work = 0.0;
+    let mut phase_load_work = 0.0;
     let mut recorded = Vec::new();
     for _ in 0..(duration / dt) as usize {
         simulation.step(dt);
@@ -770,6 +761,7 @@ fn started_run(seed: u64, hot_kelvin: f32, dt: f32, duration: f32) -> CycleOutco
             completed_turns = turns;
             phase_energy = simulation.pistons.kinetic_energy();
             phase_gas_work = simulation.piston_work_by_gas();
+            phase_load_work = simulation.pistons.load_work();
         }
     }
     CycleOutcome {
@@ -778,6 +770,7 @@ fn started_run(seed: u64, hot_kelvin: f32, dt: f32, duration: f32) -> CycleOutco
         starter_energy,
         phase_energy,
         phase_gas_work,
+        phase_load_work,
         final_starter_work: simulation.pistons.starter_work(),
         heat: simulation.heat(),
         gas_residual: simulation.energy_balance_error(),
@@ -789,21 +782,35 @@ fn started_run(seed: u64, hot_kelvin: f32, dt: f32, duration: f32) -> CycleOutco
 const ROTATION_DURATION: f32 = 120.0 * DYNAMICS_TIME_SCALE;
 const MIN_TURNS: usize = 4;
 const BALANCE_TOLERANCE: f64 = 0.05;
-const HOT_GAIN_RATIO: f64 = 1.5;
-const EQUILIBRIUM_REMAINING_RATIO: f64 = 0.6;
+/// A heated engine powering its load keeps at least this fraction of the
+/// Start energy in the flywheel (measured: 1.14 to 1.23 at 1200/300 K).
+const HOT_KEEP_RATIO: f64 = 0.8;
+/// ...while its gas does net work worth at least this fraction of the Start
+/// energy (measured: 1.14 to 1.24).
+const HOT_WORK_RATIO: f64 = 0.5;
+/// An engine with no temperature difference keeps less than this fraction
+/// (measured: 0.16 to 0.17 at its last full turn, after about 8 turns).
+const EQUILIBRIUM_REMAINING_RATIO: f64 = 0.4;
 /// The two P-V loop areas must add up to the measured gas work within this
 /// fraction of the gross work on both pistons. The remaining error comes
 /// from averaging pressure over 10-degree bins; measured: below 0.7%.
 const LOOP_WORK_TOLERANCE: f64 = 0.02;
 
 /// Panics with the seed in the message if a run misses the criteria: a
-/// heated engine must gain energy from gas work, an equilibrium engine
-/// must lose it, and both energy balances must close.
+/// heated engine must keep turning while its gas does net work for the
+/// load, an equilibrium engine must run down, and both energy balances
+/// must close.
 fn check_started_run(seed: u64, hot_kelvin: f32, dt: f32, outcome: &CycleOutcome) {
     let o = outcome;
     println!(
-        "seed={seed}, hot={hot_kelvin} K, dt={dt}: turns={}, phase energy={:.3}, gas work={:.3}, gas residual={:.6}, shaft residual={:.6}",
-        o.completed_turns, o.phase_energy, o.phase_gas_work, o.gas_residual, o.shaft_residual
+        "seed={seed}, hot={hot_kelvin} K, dt={dt}: turns={}, phase energy={:.3} of {:.3}, gas work={:.3}, load work={:.3}, gas residual={:.6}, shaft residual={:.6}",
+        o.completed_turns,
+        o.phase_energy,
+        o.starter_energy,
+        o.phase_gas_work,
+        o.phase_load_work,
+        o.gas_residual,
+        o.shaft_residual
     );
     let context = format!("seed {seed}, hot {hot_kelvin} K, dt {dt}");
     assert!(o.completed_turns >= MIN_TURNS, "too few turns: {context}");
@@ -813,10 +820,14 @@ fn check_started_run(seed: u64, hot_kelvin: f32, dt: f32, outcome: &CycleOutcome
     assert!(o.shaft_residual.abs() < BALANCE_TOLERANCE, "{context}");
     if hot_kelvin > MAX_COLD_KELVIN {
         assert!(
-            o.phase_energy > HOT_GAIN_RATIO * o.starter_energy,
-            "heated engine did not gain energy: {context}"
+            o.phase_energy > HOT_KEEP_RATIO * o.starter_energy,
+            "heated engine slowed down under its load: {context}"
         );
-        assert!(o.phase_gas_work > 0.0, "{context}");
+        assert!(
+            o.phase_gas_work > HOT_WORK_RATIO * o.starter_energy,
+            "heated gas did too little work: {context}"
+        );
+        assert!(o.phase_load_work > 0.0, "{context}");
         assert!(o.heat.hot > 0.0 && o.heat.cold < 0.0, "{context}");
     } else {
         assert!(
@@ -1010,7 +1021,8 @@ fn repeated_start_presses_cannot_overdrive_the_engine() {
 #[test]
 #[ignore = "long one-press start regression; run in release mode"]
 fn one_start_completes_a_turn_at_every_fill() {
-    /// Measured first turns: about 10 to 17 s per unit of time scale.
+    /// Measured first turns: about 5 to 9 s per unit of time scale (15.5 to
+    /// 25.4 s at 3; before v0.6's lighter flywheel, 31 to 51 s).
     const MAX_FIRST_TURN: f64 = 25.0 * DYNAMICS_TIME_SCALE as f64;
     const WARM_UPS: [f32; 3] = [0.0, 2.0 * DYNAMICS_TIME_SCALE, 7.0 * DYNAMICS_TIME_SCALE];
     let mut cases = Vec::new();

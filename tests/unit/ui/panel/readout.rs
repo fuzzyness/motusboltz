@@ -139,5 +139,11 @@ fn details_add_lines() {
             .iter()
             .any(|text| text.starts_with("Balance error"))
     );
+    assert!(
+        detailed
+            .details
+            .iter()
+            .any(|text| text.starts_with("Shaft: to load"))
+    );
     assert_eq!(waiting_text(&engine), WAITING_START);
 }

@@ -15,15 +15,17 @@ use crate::sim::units::{
 };
 
 /// Requested piston travel; `PowerPistons::new` uses less if the geometry
-/// cannot fit it with the required passage clearance.
+/// cannot fit it above the opening between the cylinders.
 const STROKE_METERS: f64 = 0.048;
 /// Minimum gap between a piston at bottom dead center and the top of the
-/// passage opening, in particle radii.
+/// opening, in particle radii, so the pistons never cover it.
 const PASSAGE_CLEARANCE_RADII: f32 = 2.0;
-/// Flywheel inertia before pacing scaling, in reduced units. Large enough to
-/// carry the crank through compression and to keep shaft motion slow compared
-/// with gas transport through the passage and heating at the walls.
-const REFERENCE_FLYWHEEL_INERTIA: f64 = 16_000.0;
+/// Flywheel inertia before pacing scaling, in reduced units. Light enough
+/// that Start brings the engine straight to its running speed (four times
+/// lighter than before v0.6, when a heated engine took about 10 minutes to
+/// stop speeding up), and heavy enough to carry the crank through
+/// compression: at 1200/100 K the speed varies about 6% within a turn.
+const REFERENCE_FLYWHEEL_INERTIA: f64 = 4_000.0;
 const FLYWHEEL_INERTIA: f64 =
     REFERENCE_FLYWHEEL_INERTIA * (DYNAMICS_TIME_SCALE as f64) * (DYNAMICS_TIME_SCALE as f64);
 /// Connecting-rod length divided by crank radius.
@@ -31,25 +33,32 @@ const ROD_TO_CRANK_RATIO: f32 = 3.0;
 /// Bearing friction torque per unit angular speed, before pacing scaling.
 const REFERENCE_BEARING_DRAG: f32 = 0.15;
 /// External load (fan-like) torque per unit squared angular speed, before
-/// pacing scaling.
-const REFERENCE_LOAD_DRAG: f32 = 0.08;
+/// pacing scaling. Its work is the engine's useful output. Measured with
+/// 1,024 particles at 1200/100 K: this load takes about 95% of the most
+/// power the engine can give (a third of it turned 1.25 times faster but
+/// took only 65%), and holds efficiency near 1.3%. With a load 300 times
+/// lighter, as before v0.6, the engine sped up until friction alone used
+/// its work, and efficiency faded to about 0.3%.
+const REFERENCE_LOAD_DRAG: f32 = 24.0;
 // Scaled so drag torque at a given crank phase is unchanged by the pacing
 // scale: the linear term scales once, the quadratic term twice.
 const BEARING_DRAG: f32 = REFERENCE_BEARING_DRAG * DYNAMICS_TIME_SCALE;
 const LOAD_DRAG: f32 = REFERENCE_LOAD_DRAG * DYNAMICS_TIME_SCALE * DYNAMICS_TIME_SCALE;
 /// Flywheel energy Start gives a shaft at rest, at the default fill or
 /// below, booked as starter work. At the default fill it carries the crank
-/// past the first compression with a wide margin and is close to the
-/// heated engine's running speed. The hidden additive kick adds a change in
-/// speed worth this much from rest.
+/// past the first compression with a wide margin and brings it close to the
+/// heated engine's running speed (21 s per turn from Start, about 19 s
+/// settled at 1200/100 K). The hidden additive kick adds a change in speed
+/// worth this much from rest.
 const STARTER_ENERGY: f64 = 1_600.0;
 
 /// Flywheel energy Start gives a shaft at rest for `count` particles. The
 /// first compression resists in proportion to the amount of gas: from rest
 /// at 1200/300 K, the crank needed about 0.9 to 1.3 units per particle to
-/// finish its first turn. So above the default fill the energy grows with
-/// the particle count (3,200 at 2,048 particles), and below it the default
-/// is kept, so a small fill still starts at a watchable speed.
+/// finish its first turn (measured on the engine before v0.6; the one_start
+/// regression rechecks every fill). So above the default fill the energy
+/// grows with the particle count (3,200 at 2,048 particles), and below it
+/// the default is kept, so a small fill still starts at a watchable speed.
 pub fn starting_energy(count: usize) -> f64 {
     STARTER_ENERGY * (count as f64 / DEFAULT_CONNECTED_MARKERS as f64).max(1.0)
 }
@@ -111,17 +120,17 @@ pub struct PowerPistons {
     starter_work: f64,
     back_pressure_work: f64,
     drag_loss: f64,
+    load_work: f64,
     gas_impulse: [f64; 2],
 }
 
 impl PowerPistons {
     pub fn new(geometry: ChamberGeometry, particle_radius: f32) -> Self {
         let top = geometry.cylinder_height / 2.0;
-        let tube_top = -geometry.cylinder_height / 2.0 + geometry.connector_radius;
-        let safe_stroke = top - tube_top - PASSAGE_CLEARANCE_RADII * particle_radius;
+        let safe_stroke = top - geometry.passage_top() - PASSAGE_CLEARANCE_RADII * particle_radius;
         assert!(
             safe_stroke > 0.0,
-            "connecting passage leaves no piston clearance"
+            "the opening leaves no room for the pistons"
         );
         let stroke = ((STROKE_METERS / METERS_PER_UNIT) as f32).min(safe_stroke);
         let crank_radius = stroke / 2.0;
@@ -152,6 +161,7 @@ impl PowerPistons {
             starter_work: 0.0,
             back_pressure_work: 0.0,
             drag_loss: 0.0,
+            load_work: 0.0,
             gas_impulse: [0.0; 2],
         }
     }
@@ -227,7 +237,8 @@ impl PowerPistons {
             self.area * (self.position_at(self.angle) + self.position_at(self.angle + FRAC_PI_2));
         let before = self.kinetic_energy();
         let speed = self.angular_velocity;
-        let drag = BEARING_DRAG as f64 * speed + LOAD_DRAG as f64 * speed * speed.abs();
+        let load = LOAD_DRAG as f64 * speed * speed.abs();
+        let drag = BEARING_DRAG as f64 * speed + load;
         let next = speed - drag * dt as f64 / self.inertia;
         self.angular_velocity = if speed.signum() == next.signum() {
             next
@@ -235,7 +246,13 @@ impl PowerPistons {
             0.0
         };
         // Drag stops the shaft rather than reversing it within one step.
-        self.drag_loss += (before - self.kinetic_energy()).max(0.0);
+        let loss = (before - self.kinetic_energy()).max(0.0);
+        self.drag_loss += loss;
+        // Both torques act at the same speed, so the energy splits between
+        // them in proportion to their torques.
+        if drag != 0.0 {
+            self.load_work += loss * load / drag;
+        }
 
         self.angular_velocity +=
             self.back_pressure_torque() as f64 * dt as f64 / (2.0 * self.inertia);
@@ -395,12 +412,17 @@ impl PowerPistons {
     pub fn drag_loss(&self) -> f64 {
         self.drag_loss
     }
+    /// The part of `drag_loss` taken by the external load: the engine's
+    /// useful output since the last refill. The rest is bearing friction.
+    pub fn load_work(&self) -> f64 {
+        self.load_work
+    }
 
-    /// Gas volume below both piston faces plus the passage.
+    /// Gas volume below both piston faces plus the opening between them.
     pub fn volume_m3(&self, geometry: ChamberGeometry) -> f64 {
         self.cylinder_volume_m3(geometry, self.hot)
             + self.cylinder_volume_m3(geometry, self.cold)
-            + geometry.connector_volume_m3()
+            + geometry.passage_volume_m3()
     }
 
     /// Gas volume between one cylinder's floor and the given piston face.

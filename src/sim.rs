@@ -1,6 +1,7 @@
-//! The physics: helium particles in two cylinders joined by a U passage,
-//! hot and cold walls, and pistons that turn a flywheel. Nothing here draws
-//! or reads input; `engine::ConnectedChambers` ties the parts together.
+//! The physics: helium particles in two side-by-side cylinders joined by an
+//! opening through the wall between them, hot and cold walls, and pistons
+//! that turn a flywheel. Nothing here draws or reads input;
+//! `engine::ConnectedChambers` ties the parts together.
 
 pub mod cycle;
 pub mod engine;

@@ -9,8 +9,8 @@ use macroquad::rand::RandGenerator;
 /// mass and flywheel inertia scale with its square and drag scales to match
 /// (`pistons.rs`), so temperatures, energies and the ratio of gas speed to
 /// shaft speed are unchanged; only the pace of the animation changes. A
-/// heated engine at the default fill takes about 15 s per turn per unit of
-/// scale (about 45 s at 3). The physics work per real second grows as the
+/// heated engine at the default fill takes about 6.5 to 7.5 s per turn per
+/// unit of scale (19 s at 1200/100 K and 22 s at 1200/300 K, at 3). The physics work per real second grows as the
 /// scale drops, because faster particles need more substeps.
 pub const DYNAMICS_TIME_SCALE: f32 = 3.0;
 const REFERENCE_PARTICLE_MASS: f32 = 0.001;

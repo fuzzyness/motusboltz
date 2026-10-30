@@ -105,7 +105,7 @@ const CONCENTRATION_PRESETS: [f32; 5] = [
 /// Longest frame time the camera keys act over, so a stalled frame does
 /// not swing the view.
 const MAX_CAMERA_DT: f32 = 0.1;
-/// Extra zoom-out so the passage, crank and flywheel all fit the first view.
+/// Extra zoom-out so the cylinders, crank and flywheel all fit the first view.
 const CAMERA_FRAMING_MARGIN: f32 = 1.25;
 
 fn initial_camera(geometry: ChamberGeometry) -> OrbitCamera {

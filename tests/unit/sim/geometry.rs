@@ -1,66 +1,67 @@
-//! Shape tests for `src/sim/geometry.rs`: the U passage, containment and
-//! projection back inside the walls.
+//! Shape tests for `src/sim/geometry.rs`: the opening between the bores,
+//! containment and projection back inside the walls.
 
 use super::*;
 use crate::sim::engine::PARTICLE_RADIUS;
 
 const POSITION_TOLERANCE: f32 = 1e-5;
-const CYLINDER_HEIGHT: f32 = DEFAULT_GEOMETRY.cylinder_height;
-const CONNECTOR_CENTER_Y: f32 = DEFAULT_GEOMETRY.connector_center_y;
-const CONNECTOR_RADIUS: f32 = DEFAULT_GEOMETRY.connector_radius;
 
 #[test]
-fn u_passage_connects_floor_openings_and_stays_within_grid() {
+fn opening_joins_both_bores_through_the_shared_wall() {
     let geometry = DEFAULT_GEOMETRY;
-    let floor = -geometry.cylinder_height / 2.0;
-    for x in [-geometry.cylinder_offset, geometry.cylinder_offset] {
-        let junction = vec3(x, floor + PARTICLE_RADIUS, 0.0);
-        assert!(geometry.within_connector(junction, PARTICLE_RADIUS));
-        assert!(geometry.within_cylinder(
-            junction,
-            x,
-            PARTICLE_RADIUS,
-            geometry.cylinder_height / 2.0
-        ));
+    let top = geometry.cylinder_height / 2.0;
+    let center_y = geometry.passage_center_y();
+    // The middle of the wall, on the opening's axis: passage, not cylinder.
+    let middle = vec3(0.0, center_y, 0.0);
+    assert!(geometry.within_passage(middle, PARTICLE_RADIUS));
+    for x in [geometry.hot_center_x(), geometry.cold_center_x()] {
+        assert!(!geometry.within_cylinder(middle, x, PARTICLE_RADIUS, top));
     }
-    const PATH_STEPS: usize = 100;
-    for (a, b) in geometry.connector_segments() {
-        for step in 0..=PATH_STEPS {
-            let point = a.lerp(b, step as f32 / PATH_STEPS as f32);
-            assert!(geometry.within_connector(point, PARTICLE_RADIUS));
-            assert!(
-                point.abs().max_element() + geometry.connector_radius
-                    <= geometry.grid_side() / 2.0 + POSITION_TOLERANCE
-            );
-        }
+    // Each end of the opening reaches into its bore.
+    for side in [-1.0, 1.0] {
+        let mouth = vec3(side * geometry.cylinder_offset / 2.0, center_y, 0.0);
+        assert!(geometry.within_passage(mouth, PARTICLE_RADIUS));
+        assert!(geometry.contains(mouth, PARTICLE_RADIUS, top, top));
     }
-    assert!(!geometry.within_connector(Vec3::ZERO, PARTICLE_RADIUS));
-}
-
-#[test]
-fn u_passage_projection_covers_legs_elbows_and_bottom() {
-    let geometry = DEFAULT_GEOMETRY;
-    for (a, b) in geometry.connector_segments() {
-        for center in [a, (a + b) / 2.0, b] {
-            for normal in [Vec3::X, Vec3::Y, Vec3::Z, -Vec3::X, -Vec3::Y, -Vec3::Z] {
-                let outside = center + normal * geometry.connector_radius * 2.0;
-                let projected = geometry.project_to_connector(outside, PARTICLE_RADIUS);
-                assert!(geometry.within_connector(projected, PARTICLE_RADIUS));
-            }
-        }
+    // The wall above the opening and the floor below it are solid.
+    let above = vec3(0.0, geometry.passage_top() + PARTICLE_RADIUS, 0.0);
+    assert!(!geometry.contains(above, PARTICLE_RADIUS, top, top));
+    let below = vec3(0.0, geometry.floor(), 0.0);
+    assert!(!geometry.contains(below, PARTICLE_RADIUS, top, top));
+    // The whole axis stays inside the collision grid.
+    let (start, end) = geometry.passage_axis();
+    for point in [start, end] {
+        assert!(
+            point.abs().max_element() + geometry.passage_radius
+                <= geometry.grid_side() / 2.0 + POSITION_TOLERANCE
+        );
     }
 }
 
 #[test]
-fn connector_sits_below_center_with_clearance_for_rounded_bottoms() {
-    let bottom = -CYLINDER_HEIGHT / 2.0;
-    let top = CYLINDER_HEIGHT / 2.0;
-    assert!(CONNECTOR_CENTER_Y + CONNECTOR_RADIUS < bottom);
-    const {
-        assert!(CONNECTOR_CENTER_Y + CONNECTOR_RADIUS < 0.0);
+fn opening_is_flush_with_the_floors_and_below_the_tops() {
+    let geometry = DEFAULT_GEOMETRY;
+    assert!(
+        (geometry.passage_center_y() - geometry.passage_radius - geometry.floor()).abs() < 1e-6
+    );
+    assert!(geometry.passage_top() < geometry.cylinder_height / 2.0);
+    assert!(geometry.shared_wall_thickness() > 2.0 * PARTICLE_RADIUS);
+    // The opening's lowest particles rest on the floor's level.
+    let lowest = vec3(0.0, geometry.floor() + PARTICLE_RADIUS, 0.0);
+    assert!(geometry.within_passage(lowest, PARTICLE_RADIUS));
+}
+
+#[test]
+fn passage_projection_lands_inside_from_every_side() {
+    let geometry = DEFAULT_GEOMETRY;
+    let (start, end) = geometry.passage_axis();
+    for center in [start, (start + end) / 2.0, end] {
+        for normal in [Vec3::X, Vec3::Y, Vec3::Z, -Vec3::X, -Vec3::Y, -Vec3::Z] {
+            let outside = center + normal * geometry.passage_radius * 2.0;
+            let projected = geometry.project_to_passage(outside, PARTICLE_RADIUS);
+            assert!(geometry.within_passage(projected, PARTICLE_RADIUS));
+        }
     }
-    assert!(CONNECTOR_CENTER_Y + CONNECTOR_RADIUS < top);
-    assert!(bottom - CONNECTOR_CENTER_Y > PARTICLE_RADIUS);
 }
 
 /// A radial clamp at the exact wall can round back *outside* after the
@@ -86,58 +87,62 @@ fn projected_spheres_remain_inside_cylinders_at_all_angles() {
 }
 
 #[test]
-fn round_tube_has_no_rectangular_corner_voids() {
+fn round_opening_has_no_square_corners() {
     let geometry = DEFAULT_GEOMETRY;
-    let usable_radius = geometry.connector_radius - PARTICLE_RADIUS;
-    let center = vec3(0.0, geometry.connector_center_y, 0.0);
-    assert!(geometry.within_connector(center, PARTICLE_RADIUS));
+    let usable_radius = geometry.passage_radius - PARTICLE_RADIUS;
+    let center = vec3(0.0, geometry.passage_center_y(), 0.0);
+    assert!(geometry.within_passage(center, PARTICLE_RADIUS));
     let corner = center + vec3(0.0, usable_radius * 0.8, usable_radius * 0.8);
-    assert!(!geometry.within_connector(corner, PARTICLE_RADIUS));
+    assert!(!geometry.within_passage(corner, PARTICLE_RADIUS));
 }
 
 #[test]
-fn circular_passage_projection_stays_inside_for_all_wall_angles() {
+fn passage_projection_stays_inside_for_all_wall_angles() {
     let geometry = DEFAULT_GEOMETRY;
-    let usable_radius = geometry.connector_radius - PARTICLE_RADIUS;
+    let usable_radius = geometry.passage_radius - PARTICLE_RADIUS;
     for angle in 0..360 {
         let theta = (angle as f32).to_radians();
         let outside = vec3(
             0.0,
-            geometry.connector_center_y + (usable_radius + 0.3) * theta.cos(),
+            geometry.passage_center_y() + (usable_radius + 0.3) * theta.cos(),
             (usable_radius + 0.3) * theta.sin(),
         );
-        let inside = geometry.project_to_connector(outside, PARTICLE_RADIUS);
+        let inside = geometry.project_to_passage(outside, PARTICLE_RADIUS);
         assert!(
-            geometry.within_connector(inside, PARTICLE_RADIUS),
-            "round tube projection failed at {angle} degrees: {inside:?}"
+            geometry.within_passage(inside, PARTICLE_RADIUS),
+            "round opening projection failed at {angle} degrees: {inside:?}"
         );
     }
 }
 
+/// An independent midpoint sum over slices across the opening: each slice at
+/// depth z is 2 sqrt(r^2 - z^2) tall and runs between the two bore walls,
+/// 2 (offset - sqrt(R^2 - z^2)) long.
 #[test]
-fn tube_volume_uses_circular_cross_section() {
+fn passage_volume_counts_only_the_opening_between_the_bores() {
+    const SLICES: usize = 200_000;
     let geometry = DEFAULT_GEOMETRY;
-    // Independent midpoint integration of the exposed union cross sections.
-    const SLICES: usize = 20_000;
-    let radius = geometry.connector_radius as f64;
+    let r = geometry.passage_radius as f64;
+    let bore = geometry.cylinder_radius as f64;
     let offset = geometry.cylinder_offset as f64;
-    let lower = (geometry.connector_center_y - geometry.connector_radius) as f64;
-    let upper = -geometry.cylinder_height as f64 / 2.0;
-    let dy = (upper - lower) / SLICES as f64;
-    let pi = std::f64::consts::PI;
-    let mut volume = 0.0;
-    for slice in 0..SLICES {
-        let y = lower + (slice as f64 + 0.5) * dy - geometry.connector_center_y as f64;
-        let h = (radius * radius - y * y).max(0.0).sqrt();
-        let area = if y < 0.0 {
-            4.0 * offset * h + pi * h * h
-        } else {
-            let overlap = h * (radius * radius - h * h).max(0.0).sqrt()
-                + radius * radius * (h / radius).asin();
-            4.0 * offset * h + 2.0 * pi * radius * radius - 2.0 * overlap
-        };
-        volume += area * dy;
-    }
+    let dz = 2.0 * r / SLICES as f64;
+    let volume: f64 = (0..SLICES)
+        .map(|slice| {
+            let z = -r + (slice as f64 + 0.5) * dz;
+            2.0 * (r * r - z * z).sqrt() * 2.0 * (offset - (bore * bore - z * z).sqrt()) * dz
+        })
+        .sum();
     let expected = volume * METERS_PER_UNIT.powi(3);
-    assert!((geometry.connector_volume_m3() / expected - 1.0).abs() < 1e-5);
+    assert!((geometry.passage_volume_m3() / expected - 1.0).abs() < 1e-5);
+    // Far smaller than a cylinder: the opening is short.
+    let cylinder = std::f64::consts::PI * bore * bore * geometry.cylinder_height as f64;
+    assert!(volume < 0.05 * cylinder);
+}
+
+#[test]
+#[should_panic(expected = "the bores need a wall between them")]
+fn touching_bores_are_rejected() {
+    let mut geometry = DEFAULT_GEOMETRY;
+    geometry.cylinder_offset = geometry.cylinder_radius;
+    geometry.validate(PARTICLE_RADIUS);
 }

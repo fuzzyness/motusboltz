@@ -60,8 +60,9 @@
       <h2>Run the engine</h2>
       <p class="section-intro">
         This is a model of a real machine, the Stirling engine, patented by the Scottish minister Robert
-        Stirling in 1816. Ours has two cylinders joined by a tube along the bottom. Gas moves back and
-        forth between them while two pistons, linked to one wheel, rise and fall.
+        Stirling in 1816. Ours has two cylinders side by side, joined by an opening low in the wall
+        between them. Gas moves back and forth through it while two pistons, linked to one wheel, rise
+        and fall.
       </p>
 
       <div class="run-layout">
@@ -82,11 +83,15 @@
           <svg viewBox="0 0 560 430" role="img"
             aria-labelledby="diagram-title diagram-desc">
             <title id="diagram-title">Parts of the engine</title>
-            <desc id="diagram-desc">Two cylinders stand side by side. The left one is heated and the right
-              one is cooled. A tube joins their bottoms. Each cylinder has a piston connected by a rod to a
-              shaft with a flywheel. Heat flows into the hot cylinder through its walls and out of the cold
+            <desc id="diagram-desc">Two cylinders stand side by side in one block. The left one is heated
+              and the right one is cooled. An opening low in the wall between them lets the gas move across.
+              Each cylinder has a piston connected by a rod to a shaft with a flywheel. Heat flows into the hot cylinder through its walls and out of the cold
               cylinder through its walls, and work turns the flywheel.</desc>
             <defs>
+              <linearGradient id="opening-gas">
+                <stop offset="0" class="opening-hot" />
+                <stop offset="1" class="opening-cold" />
+              </linearGradient>
               <marker id="arrow-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7"
                 markerHeight="7" orient="auto-start-reverse">
                 <path d="M0 0L10 5L0 10z" class="fill-hot" />
@@ -101,58 +106,59 @@
               </marker>
             </defs>
 
-            <!-- Connecting tube: drawn first so the cylinders sit over its ends. -->
-            <path class="tube" d="M160 326 V388 H400 V326" />
-            <path class="tube-inner" d="M160 326 V388 H400 V326" />
-            <circle class="dot-hot" cx="160" cy="362" r="5" />
-            <circle class="dot-hot" cx="232" cy="388" r="5" />
-            <circle class="dot-cold" cx="330" cy="388" r="5" />
-            <circle class="dot-cold" cx="400" cy="358" r="5" />
+            <!-- The block: two bores, the wall between them, and the opening
+              low in that wall. Fills first, outlines over them. -->
+            <rect class="bore-hot" x="150" y="170" width="120" height="160" />
+            <rect class="bore-cold" x="290" y="170" width="120" height="160" />
+            <rect class="opening" x="270" y="272" width="20" height="58" />
+            <rect class="wall" x="270" y="170" width="20" height="102" />
+            <path class="outline-hot" d="M270 272 V170 H150 V330 H270" />
+            <path class="outline-cold" d="M290 272 V170 H410 V330 H290" />
+            <path class="opening-edge" d="M270 330 H290" />
 
-            <!-- Hot cylinder, its gas and piston. -->
-            <rect class="cylinder-hot" x="100" y="170" width="120" height="160" rx="3" />
+            <!-- Gas: hot dots, cold dots, and two crossing through the opening. -->
             <g class="dots-hot">
-              <circle cx="122" cy="246" r="5" /><circle cx="154" cy="236" r="5" />
-              <circle cx="192" cy="258" r="5" /><circle cx="134" cy="286" r="5" />
-              <circle cx="172" cy="300" r="5" /><circle cx="202" cy="292" r="5" />
-              <circle cx="118" cy="314" r="5" /><circle cx="160" cy="268" r="5" />
+              <circle cx="172" cy="246" r="5" /><circle cx="204" cy="236" r="5" />
+              <circle cx="242" cy="258" r="5" /><circle cx="184" cy="286" r="5" />
+              <circle cx="222" cy="300" r="5" /><circle cx="252" cy="292" r="5" />
+              <circle cx="168" cy="314" r="5" /><circle cx="210" cy="268" r="5" />
             </g>
-            <rect class="piston" x="104" y="208" width="112" height="12" rx="2" />
-
-            <!-- Cold cylinder, its gas and piston. -->
-            <rect class="cylinder-cold" x="340" y="170" width="120" height="160" rx="3" />
+            <circle class="dot-hot" cx="276" cy="316" r="5" />
+            <circle class="dot-cold" cx="286" cy="292" r="5" />
             <g class="dots-cold">
-              <circle cx="362" cy="292" r="5" /><circle cx="392" cy="304" r="5" />
-              <circle cx="424" cy="290" r="5" /><circle cx="376" cy="316" r="5" />
-              <circle cx="410" cy="318" r="5" /><circle cx="442" cy="310" r="5" />
+              <circle cx="312" cy="292" r="5" /><circle cx="342" cy="304" r="5" />
+              <circle cx="374" cy="290" r="5" /><circle cx="326" cy="316" r="5" />
+              <circle cx="360" cy="318" r="5" /><circle cx="392" cy="310" r="5" />
             </g>
-            <rect class="piston" x="344" y="258" width="112" height="12" rx="2" />
 
-            <!-- Rods, shaft and flywheel. -->
-            <path class="rod" d="M160 208 L172 82" />
-            <path class="rod" d="M400 258 L388 82" />
-            <path class="shaft" d="M150 82 H410" />
+            <!-- Pistons, rods, shaft and flywheel. -->
+            <rect class="piston" x="154" y="208" width="112" height="12" rx="2" />
+            <rect class="piston" x="294" y="248" width="112" height="12" rx="2" />
+            <path class="rod" d="M210 208 L222 82" />
+            <path class="rod" d="M350 248 L338 82" />
+            <path class="shaft" d="M200 82 H360" />
             <circle class="wheel" cx="280" cy="82" r="44" />
             <path class="spokes" d="M280 38 V126 M242 60 L318 104 M242 104 L318 60" />
 
             <!-- Energy flows. -->
-            <path class="flow-hot" d="M38 248 H92" marker-end="url(#arrow-hot)" />
-            <path class="flow-hot" d="M38 292 H92" marker-end="url(#arrow-hot)" />
-            <path class="flow-cold" d="M468 268 H522" marker-end="url(#arrow-cold)" />
-            <path class="flow-cold" d="M468 312 H522" marker-end="url(#arrow-cold)" />
+            <path class="flow-hot" d="M88 248 H142" marker-end="url(#arrow-hot)" />
+            <path class="flow-hot" d="M88 292 H142" marker-end="url(#arrow-hot)" />
+            <path class="flow-cold" d="M418 268 H472" marker-end="url(#arrow-cold)" />
+            <path class="flow-cold" d="M418 312 H472" marker-end="url(#arrow-cold)" />
             <path class="flow-work" d="M232 44 A58 58 0 0 1 328 44" marker-end="url(#arrow-work)" />
 
             <!-- Labels. -->
-            <text class="label label-hot" x="24" y="208">Heat in</text>
-            <text class="label label-hot" x="24" y="228">(Q hot)</text>
-            <text class="label label-cold" x="470" y="228">Heat out</text>
-            <text class="label label-cold" x="470" y="248">(Q cold)</text>
+            <text class="label label-hot" x="40" y="208">Heat in</text>
+            <text class="label label-hot" x="40" y="228">(Q hot)</text>
+            <text class="label label-cold" x="420" y="228">Heat out</text>
+            <text class="label label-cold" x="420" y="248">(Q cold)</text>
             <text class="label label-work" x="338" y="30">Work turns the wheel (W)</text>
-            <text class="label" x="136" y="352" text-anchor="end">Hot cylinder</text>
-            <text class="label" x="424" y="352">Cold cylinder</text>
-            <text class="label" x="280" y="418" text-anchor="middle">Connecting tube</text>
-            <text class="label label-quiet" x="226" y="219">Piston</text>
-            <text class="label label-quiet" x="180" y="134">Rod</text>
+            <text class="label" x="210" y="354" text-anchor="middle">Hot cylinder</text>
+            <text class="label" x="350" y="354" text-anchor="middle">Cold cylinder</text>
+            <path class="leader" d="M280 334 V376" />
+            <text class="label" x="280" y="394" text-anchor="middle">Opening between them</text>
+            <text class="label label-quiet" x="142" y="219" text-anchor="end">Piston</text>
+            <text class="label label-quiet" x="208" y="150" text-anchor="end">Rod</text>
             <text class="label label-quiet" x="280" y="146" text-anchor="middle">Flywheel</text>
           </svg>
           <figcaption>Heat flows in through the walls of the hot cylinder and out through the walls of the
@@ -381,8 +387,8 @@
               <h4>In the engine</h4>
               <p>In one run with 2,048 particles at 1200&nbsp;K and 100&nbsp;K, the Laws tab showed, per
                 turn:</p>
-              <p class="readout">2724.2 − 2572.3 = 125.0 + 26.9 J</p>
-              <p>Both sides come to 151.9&nbsp;J. Open the Laws tab and watch the two sides match, turn
+              <p class="readout">4996.3 − 4879.9 = 107.6 + 8.8 J</p>
+              <p>Both sides come to 116.4&nbsp;J. Open the Laws tab and watch the two sides match, turn
                 after turn.</p>
             </div>
             <div class="everyday">
@@ -411,9 +417,9 @@
           <div class="pair">
             <div class="in-engine">
               <h4>In the engine</h4>
-              <p>In the run above, <b>dS surr</b> was +23.5&nbsp;J/K per turn. The gas ends each turn
+              <p>In the run above, <b>dS surr</b> was +44.6&nbsp;J/K per turn. The gas ends each turn
                 where it started, so this is also the entropy change of the whole universe.</p>
-              <p>Efficiency was 4.6%, far below the Carnot limit of 1 − 100/1200 = 91.7%. Most of the
+              <p>Efficiency was 2.2%, far below the Carnot limit of 1 − 100/1200 = 91.7%. Most of the
                 heat walked straight through the gas.</p>
               <p class="try">Try it: set both reservoirs to 300&nbsp;K and press Start. With no temperature
                 difference, no heat flows through, and the wheel slows down turn after turn.</p>
@@ -574,22 +580,26 @@
         simplifies, so you know which numbers to trust.</p>
       <ul class="limits">
         <li><b>Each dot stands for a crowd of atoms.</b> At the largest fill, 2,048 dots carry
-          0.277&nbsp;mol of helium, so each dot stands for about 8&nbsp;×&nbsp;10<sup>19</sup> atoms. The
+          0.299&nbsp;mol of helium, so each dot stands for about 9&nbsp;×&nbsp;10<sup>19</sup> atoms. The
           dots are drawn far bigger than atoms so you can see them.</li>
         <li><b>The engine runs slowly.</b> Motion is slowed down so you can follow single particles.
           Times and rpm are in model units, not real seconds.</li>
         <li><b>Pressure on the Now tab is an estimate.</b> The ~ sign marks an ideal gas estimate,
           <var>P</var> = <var>nRT</var>/<var>V</var>, from each cylinder's particles. The P-V loops use the
           real pushes of particles on the pistons.</li>
-        <li><b>The two sides can hold very different pressures.</b> The connecting tube is narrow
-          compared with how far a particle travels between collisions, so the hot side can keep a higher
-          pressure than the cold side. Real gases do the same in very thin tubes.</li>
+        <li><b>The two sides can show different pressures.</b> At the largest fill the Now tab's
+          estimates for the hot and cold sides differ about two to one. The estimate treats the dots as
+          points, so it reads low where they crowd closest, on the cold side. Measuring the real push of
+          the gas on the walls, a planned improvement, will show how much of the difference is real.</li>
         <li><b>There is no regenerator.</b> Real Stirling engines store heat in a mesh between the
           cylinders and reuse it on the next stroke. Stirling's 1816 patent already had one, which he
           called the economiser. Ours lets that heat go, which keeps its efficiency low.</li>
         <li><b>The walls never warm up or cool down.</b> They stay at the slider temperatures no matter
           how much heat they give or take. Heat crosses only the cylinder walls and floors: the pistons
-          and the tube are insulated.</li>
+          and the opening between the cylinders are insulated.</li>
+        <li><b>The hot and cold cylinders share a wall.</b> In the model, each side of that wall keeps
+          its own cylinder's temperature. In a real engine, metal touching both sides would carry heat
+          straight across, so real engines keep the hot and cold parts apart or insulate them.</li>
       </ul>
     </section>
   </main>

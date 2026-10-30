@@ -116,6 +116,11 @@ pub fn now_readout(engine: &ConnectedChambers, details: bool) -> NowReadout {
             engine.energy_joules(pistons.starter_work())
         ),
         format!(
+            "Shaft: to load {:.1} J | friction {:.1} J",
+            engine.energy_joules(pistons.load_work()),
+            engine.energy_joules(pistons.drag_loss() - pistons.load_work())
+        ),
+        format!(
             "Balance error: gas {:+.4} J | shaft {:+.4} J",
             engine.energy_joules(engine.energy_balance_error()),
             engine.energy_joules(engine.mechanical_balance_error())

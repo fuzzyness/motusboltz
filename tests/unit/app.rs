@@ -35,7 +35,7 @@ fn build_label_names_this_version() {
 }
 
 #[test]
-fn initial_camera_frames_lower_passage_and_longer_linkage() {
+fn initial_camera_frames_the_floors_and_the_flywheel() {
     let geometry = DEFAULT_GEOMETRY;
     let pistons = PowerPistons::new(geometry, PARTICLE_RADIUS);
     let camera = initial_camera(geometry).camera();
@@ -49,8 +49,8 @@ fn initial_camera_frames_lower_passage_and_longer_linkage() {
             vec3(0.0, pistons.shaft_height() + WHEEL_RADIUS, 0.0),
             vec3(0.0, pistons.shaft_height(), WHEEL_RADIUS),
             vec3(0.0, pistons.shaft_height(), -WHEEL_RADIUS),
-            vec3(geometry.hot_center_x(), geometry.bottom(), 0.0),
-            vec3(geometry.cold_center_x(), geometry.bottom(), 0.0),
+            vec3(geometry.hot_center_x(), geometry.floor(), 0.0),
+            vec3(geometry.cold_center_x(), geometry.floor(), 0.0),
             vec3(geometry.hot_center_x() - geometry.cylinder_radius, 0.0, 0.0),
             vec3(
                 geometry.cold_center_x() + geometry.cylinder_radius,

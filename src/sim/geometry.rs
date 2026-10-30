@@ -1,5 +1,6 @@
-//! Shape of the engine: two matching vertical cylinders joined below their
-//! floors by a U passage, and the tests for whether a particle fits inside.
+//! Shape of the engine: two matching vertical cylinders side by side in one
+//! block, joined by a round opening through the wall between them, and the
+//! tests for whether a particle fits inside.
 
 use macroquad::prelude::{
     Vec3,
@@ -14,21 +15,33 @@ pub const WALL_PROJECTION_MARGIN: f32 = 16.0 * f32::EPSILON;
 
 /// Linear scale of the default chamber geometry.
 pub const DEFAULT_CHAMBER_SCALE: f32 = 1.8;
-/// Depth of the passage centerline below the cylinder floors, in passage
-/// radii; must be at least one so the whole bottom run sits below the floors.
-pub const CONNECTOR_DROP_RADII: f32 = 1.5;
-/// Passage radius per unit of chamber scale; about half the bore radius, so
-/// particles can move between cylinders within one engine cycle.
-const CONNECTOR_RADIUS_PER_SCALE: f32 = 0.714;
+/// Bore radius per unit of chamber scale.
+const CYLINDER_RADIUS_PER_SCALE: f32 = 1.4;
+/// Thickness of the wall between the two bores, per unit of chamber scale.
+const SHARED_WALL_PER_SCALE: f32 = 0.28;
+/// Cylinder height per unit of chamber scale: room for the full stroke
+/// above the opening (see `pistons.rs`).
+const CYLINDER_HEIGHT_PER_SCALE: f32 = 4.62;
+/// Opening radius per unit of chamber scale. Gas sloshing between the
+/// cylinders limits how fast the engine turns, so the opening is wide: with
+/// 1,024 particles at 1200/100 K and almost no load, a radius of 0.9
+/// settled at 16.5 s per turn against 23.7 s for 0.5 (and 26.5 s for the
+/// U passage below the floors used before v0.6).
+const PASSAGE_RADIUS_PER_SCALE: f32 = 0.9;
+/// Number of intervals in the Simpson's rule sum for the passage volume.
+const VOLUME_INTERVALS: usize = 512;
 
-/// Dimensions of two matching cylinders and their lower connecting passage.
+/// Dimensions of two matching cylinders and the opening between them.
 #[derive(Clone, Copy, Debug)]
 pub struct ChamberGeometry {
+    /// Distance from the middle of the shared wall to each cylinder's axis.
     pub cylinder_offset: f32,
     pub cylinder_radius: f32,
     pub cylinder_height: f32,
-    pub connector_center_y: f32,
-    pub connector_radius: f32,
+    /// Radius of the straight, round opening through the shared wall. Its
+    /// axis runs between the cylinder axes, one radius above the floors, so
+    /// its lowest line is flush with them.
+    pub passage_radius: f32,
 }
 
 impl ChamberGeometry {
@@ -36,11 +49,10 @@ impl ChamberGeometry {
     /// so a test can change one dimension at a time.
     pub const fn scaled(scale: f32) -> Self {
         Self {
-            cylinder_offset: 2.1 * scale,
-            cylinder_radius: 1.4 * scale,
-            cylinder_height: 3.6 * scale,
-            connector_center_y: -(1.8 + CONNECTOR_DROP_RADII * CONNECTOR_RADIUS_PER_SCALE) * scale,
-            connector_radius: CONNECTOR_RADIUS_PER_SCALE * scale,
+            cylinder_offset: (CYLINDER_RADIUS_PER_SCALE + SHARED_WALL_PER_SCALE / 2.0) * scale,
+            cylinder_radius: CYLINDER_RADIUS_PER_SCALE * scale,
+            cylinder_height: CYLINDER_HEIGHT_PER_SCALE * scale,
+            passage_radius: PASSAGE_RADIUS_PER_SCALE * scale,
         }
     }
 
@@ -49,90 +61,102 @@ impl ChamberGeometry {
     /// # Panics
     ///
     /// Panics if any dimension is non-finite or too small for the particle
-    /// radius, if the cylinders overlap, if the passage is not narrower than
-    /// the bore, or if its horizontal run is not entirely below the floors.
+    /// radius, if the bores touch or overlap, if the opening is not
+    /// narrower than the bore, or if the opening leaves no room above it.
     pub fn validate(self, particle_radius: f32) {
         let Self {
             cylinder_offset: offset,
             cylinder_radius: radius,
             cylinder_height: height,
-            connector_center_y: center_y,
-            connector_radius: tube_radius,
+            passage_radius,
         } = self;
         assert!(particle_radius.is_finite() && particle_radius > 0.0);
         assert!(offset.is_finite() && radius.is_finite() && height.is_finite());
-        assert!(center_y.is_finite() && tube_radius.is_finite());
+        assert!(passage_radius.is_finite());
         assert!(radius > particle_radius && height > 2.0 * particle_radius);
-        assert!(offset > radius);
-        assert!(tube_radius > particle_radius && tube_radius < radius);
-        assert!(center_y + tube_radius <= -height / 2.0);
-        assert!(tube_radius + 2.0 * particle_radius < height);
+        assert!(
+            self.shared_wall_thickness() > 0.0,
+            "the bores need a wall between them"
+        );
+        assert!(passage_radius > particle_radius && passage_radius < radius);
+        assert!(2.0 * (passage_radius + particle_radius) < height);
     }
 
-    pub fn bottom(self) -> f32 {
-        self.connector_center_y - self.connector_radius
+    /// Height of both cylinder floors, the lowest place gas can be.
+    pub fn floor(self) -> f32 {
+        -self.cylinder_height / 2.0
+    }
+
+    /// Thickness of the wall between the bores.
+    pub fn shared_wall_thickness(self) -> f32 {
+        2.0 * (self.cylinder_offset - self.cylinder_radius)
+    }
+
+    /// Height of the opening's axis: one radius above the floors.
+    pub fn passage_center_y(self) -> f32 {
+        self.floor() + self.passage_radius
+    }
+
+    /// Height of the opening's highest line; the pistons stay above it.
+    pub fn passage_top(self) -> f32 {
+        self.floor() + 2.0 * self.passage_radius
     }
 
     /// Side of the cubic collision grid, centered on the origin; large enough
-    /// to contain both cylinders and the entire lower passage.
+    /// to contain both cylinders.
     pub fn grid_side(self) -> f32 {
-        (2.0 * (self.cylinder_offset + self.cylinder_radius))
-            .max(self.cylinder_height)
-            .max(-2.0 * self.bottom())
+        (2.0 * (self.cylinder_offset + self.cylinder_radius)).max(self.cylinder_height)
     }
 
     /// Corners of the smallest box holding every place a particle center
-    /// can be: both cylinders up to their tops and the passage below them.
+    /// can be: both cylinders from their floors up to their tops.
     pub fn gas_bounds(self) -> (Vec3, Vec3) {
         let half_width = self.cylinder_offset + self.cylinder_radius;
         (
-            vec3(-half_width, self.bottom(), -self.cylinder_radius),
+            vec3(-half_width, self.floor(), -self.cylinder_radius),
             vec3(half_width, self.cylinder_height / 2.0, self.cylinder_radius),
         )
     }
 
-    /// Centerlines of the three capsules forming the U: a leg down from each
-    /// cylinder floor and the bottom run between them. Capsules overlap at
-    /// the corners, which gives rounded elbows.
-    pub fn connector_segments(self) -> [(Vec3, Vec3); 3] {
-        let floor = -self.cylinder_height / 2.0;
-        let left = vec3(-self.cylinder_offset, self.connector_center_y, 0.0);
-        let right = vec3(self.cylinder_offset, self.connector_center_y, 0.0);
-        [
-            (vec3(left.x, floor, 0.0), left),
-            (left, right),
-            (right, vec3(right.x, floor, 0.0)),
-        ]
+    /// The opening's axis, from the hot cylinder's axis to the cold one's.
+    /// The parts of the round tube around it that lie inside the bores add
+    /// nothing; the part between them is the passage.
+    pub fn passage_axis(self) -> (Vec3, Vec3) {
+        let y = self.passage_center_y();
+        (
+            vec3(-self.cylinder_offset, y, 0.0),
+            vec3(self.cylinder_offset, y, 0.0),
+        )
     }
 
-    /// Closest point on any passage centerline; shared by containment and
-    /// wall projection.
-    fn connector_axis_point(self, position: Vec3) -> Vec3 {
-        let mut closest = Vec3::ZERO;
-        let mut distance = f32::INFINITY;
-        for segment in self.connector_segments() {
-            let point = segment_point(segment, position);
-            let squared = position.distance_squared(point);
-            if squared < distance {
-                closest = point;
-                distance = squared;
-            }
+    /// Volume of the opening outside both bores: for each point of its
+    /// round cross section, the length between the two bore walls, summed
+    /// with Simpson's rule. With z = r sin(t), the cross section's width
+    /// 2 sqrt(r^2 - z^2) and the bore walls' distance from the axes,
+    /// sqrt(R^2 - z^2), give a smooth integrand in t.
+    pub fn passage_volume_m3(self) -> f64 {
+        let r = self.passage_radius as f64;
+        let bore = self.cylinder_radius as f64;
+        let offset = self.cylinder_offset as f64;
+        let half_pi = std::f64::consts::FRAC_PI_2;
+        let step = std::f64::consts::PI / VOLUME_INTERVALS as f64;
+        // Integral of sqrt(r^2 - z^2) sqrt(R^2 - z^2) dz over [-r, r].
+        let mut overlap = 0.0;
+        for index in 0..=VOLUME_INTERVALS {
+            let t = -half_pi + index as f64 * step;
+            let weight = if index == 0 || index == VOLUME_INTERVALS {
+                1.0
+            } else if index % 2 == 1 {
+                4.0
+            } else {
+                2.0
+            };
+            let (sin, cos) = t.sin_cos();
+            overlap += weight * r * r * cos * cos * (bore * bore - r * r * sin * sin).sqrt();
         }
-        closest
-    }
-
-    /// Exact volume of the union of the three capsules below the cylinder
-    /// floors, with the elbow overlaps counted once. The capsule ends that
-    /// poke above the floors lie inside the cylinders and are excluded.
-    /// Assumes each leg is at least one passage radius long, which
-    /// `validate` enforces.
-    pub fn connector_volume_m3(self) -> f64 {
-        let radius = self.connector_radius as f64;
-        let leg = (-self.cylinder_height / 2.0 - self.connector_center_y) as f64;
-        let pi = std::f64::consts::PI;
-        (pi * radius.powi(2) * (2.0 * self.cylinder_offset as f64 + 2.0 * leg)
-            + (2.0 * pi - 8.0) / 3.0 * radius.powi(3))
-            * METERS_PER_UNIT.powi(3)
+        overlap *= step / 3.0;
+        let volume = 2.0 * std::f64::consts::PI * r * r * offset - 4.0 * overlap;
+        volume * METERS_PER_UNIT.powi(3)
     }
 
     /// Horizontal position of the hot cylinder's axis (the left one).
@@ -156,13 +180,11 @@ impl ChamberGeometry {
     }
 
     /// Whether a sphere of `radius` centered at `position` fits inside the
-    /// passage: within reach of any of its centerlines, so the search stops
-    /// at the first that fits.
-    pub fn within_connector(self, position: Vec3, radius: f32) -> bool {
-        let limit = self.connector_radius - radius;
-        self.connector_segments().into_iter().any(|segment| {
-            position.distance_squared(segment_point(segment, position)) <= limit * limit
-        })
+    /// round opening between the cylinders (or the parts of the same tube
+    /// inside the bores).
+    pub fn within_passage(self, position: Vec3, radius: f32) -> bool {
+        let limit = self.passage_radius - radius;
+        position.distance_squared(segment_point(self.passage_axis(), position)) <= limit * limit
     }
 
     /// Whether a sphere fits anywhere in the connected gas volume, with the
@@ -170,7 +192,7 @@ impl ChamberGeometry {
     pub fn contains(self, position: Vec3, radius: f32, hot_top: f32, cold_top: f32) -> bool {
         self.within_cylinder(position, self.hot_center_x(), radius, hot_top)
             || self.within_cylinder(position, self.cold_center_x(), radius, cold_top)
-            || self.within_connector(position, radius)
+            || self.within_passage(position, radius)
     }
 
     /// Closest position where a sphere fits inside one cylinder, kept a
@@ -200,14 +222,14 @@ impl ChamberGeometry {
         )
     }
 
-    /// Closest position where a sphere fits inside the passage, measured to
-    /// the nearest centerline and kept a rounding margin inside the wall.
-    pub fn project_to_connector(self, position: Vec3, radius: f32) -> Vec3 {
-        let center = self.connector_axis_point(position);
+    /// Closest position where a sphere fits inside the opening's tube,
+    /// measured to its axis and kept a rounding margin inside the wall.
+    pub fn project_to_passage(self, position: Vec3, radius: f32) -> Vec3 {
+        let center = segment_point(self.passage_axis(), position);
         let delta = position - center;
         let inset =
-            (self.grid_side() * WALL_PROJECTION_MARGIN).min((self.connector_radius - radius) * 0.5);
-        let limit = self.connector_radius - radius - inset;
+            (self.grid_side() * WALL_PROJECTION_MARGIN).min((self.passage_radius - radius) * 0.5);
+        let limit = self.passage_radius - radius - inset;
         center + delta * (limit / delta.length().max(limit)).min(1.0)
     }
 }

@@ -70,6 +70,7 @@
 	--work-tint: #f8edcd;
 	--engine-mark: #2b3a4e;
 	--piston: #c9d2dc;
+	--wall: #aab6c3;
 
 	/* The instrument band, matching the engine's own colors. */
 	--instrument: #0c121e;
@@ -100,6 +101,7 @@
 		--work-tint: #312810;
 		--engine-mark: #8fa2b6;
 		--piston: #4a5a6e;
+		--wall: #34465c;
 		--focus: #6cc0f5;
 		color-scheme: dark;
 	}
@@ -552,28 +554,49 @@ main > .section:first-child {
 	font-size: 0.92rem;
 }
 
-.diagram .tube {
-	fill: none;
-	stroke: var(--ink-2);
-	stroke-width: 34;
-}
-
-.diagram .tube-inner {
-	fill: none;
-	stroke: var(--paper-raised);
-	stroke-width: 30;
-}
-
-.diagram .cylinder-hot {
+.diagram .bore-hot {
 	fill: var(--hot-tint);
-	stroke: var(--hot);
-	stroke-width: 3;
 }
 
-.diagram .cylinder-cold {
+.diagram .bore-cold {
 	fill: var(--cold-tint);
-	stroke: var(--cold);
+}
+
+/* The opening's gas, shading from the hot side to the cold side. */
+.diagram .opening {
+	fill: url(#opening-gas);
+}
+
+.diagram .wall {
+	fill: var(--wall);
+}
+
+.diagram .outline-hot,
+.diagram .outline-cold,
+.diagram .opening-edge {
+	fill: none;
 	stroke-width: 3;
+	stroke-linejoin: round;
+}
+
+.diagram .outline-hot {
+	stroke: var(--hot);
+}
+
+.diagram .outline-cold {
+	stroke: var(--cold);
+}
+
+.diagram .opening-edge {
+	stroke: var(--ink-2);
+}
+
+.diagram .opening-hot {
+	stop-color: var(--hot-tint);
+}
+
+.diagram .opening-cold {
+	stop-color: var(--cold-tint);
 }
 
 .diagram .dots-hot,

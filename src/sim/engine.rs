@@ -85,7 +85,7 @@ const MAX_CRANK_STEP_RADIANS: f32 = 0.02;
 pub enum Region {
     /// The heated cylinder, on the left (negative x).
     Hot,
-    /// Below both cylinder floors, in the U passage.
+    /// In the opening between the cylinders, outside both bores.
     Passage,
     /// The cooled cylinder, on the right (positive x).
     Cold,
@@ -99,10 +99,10 @@ pub struct ChamberMeasurements {
     pub cold: GasMeasurements,
 }
 
-/// The complete simulation: gas particles in two cylinders joined by the U
-/// passage, thermal cylinder walls, and pistons coupled to the flywheel.
-/// Pistons and the passage are insulated; only cylinder sides and floors
-/// exchange heat.
+/// The complete simulation: gas particles in two cylinders joined by an
+/// opening through the wall between them, thermal cylinder walls, and
+/// pistons coupled to the flywheel. Pistons and the opening are insulated;
+/// only cylinder sides and floors exchange heat.
 pub struct ConnectedChambers {
     pub particles: Vec<Particle>,
     flashes: Vec<f32>,
@@ -269,7 +269,7 @@ impl ConnectedChambers {
             let spacing = 2.0 * geometry.cylinder_radius / divisions as f32;
             let half_width = geometry.cylinder_offset + geometry.cylinder_radius;
             let x_divisions = (2.0 * half_width / spacing).ceil() as usize;
-            let full_height = geometry.cylinder_height / 2.0 - geometry.bottom();
+            let full_height = geometry.cylinder_height;
             let y_divisions = (full_height / spacing).ceil() as usize;
             let x_spacing = 2.0 * half_width / x_divisions as f32;
             let y_spacing = full_height / y_divisions as f32;
@@ -281,7 +281,7 @@ impl ConnectedChambers {
             let mut sites = Vec::new();
 
             for iy in 0..y_divisions {
-                let y = geometry.bottom() + (iy as f32 + 0.5) * y_spacing;
+                let y = geometry.floor() + (iy as f32 + 0.5) * y_spacing;
                 for iz in 0..divisions {
                     let z = -geometry.cylinder_radius + (iz as f32 + 0.5) * spacing;
                     for ix in 0..x_divisions {
@@ -494,7 +494,7 @@ impl ConnectedChambers {
     }
 
     /// Classifies a particle center. A position inside either cylinder counts
-    /// as that cylinder, so only the part of the passage below the floors
+    /// as that cylinder, so only the part of the opening between the bores
     /// counts as passage.
     pub fn region(&self, position: Vec3) -> Region {
         let geometry = self.geometry;
@@ -553,7 +553,7 @@ impl ConnectedChambers {
                 Self::beyond_thermal_wall(geometry, position, geometry.cold_center_x(), radius)
                     .then_some(ReservoirSide::Cold),
             ),
-            (geometry.project_to_connector(position, radius), None),
+            (geometry.project_to_passage(position, radius), None),
         ];
         let (mut nearest, mut wall) = candidates[0];
         let mut distance_sq = position.distance_squared(nearest);

@@ -1,10 +1,7 @@
-//! The cylinders, pistons and U passage: tube outlines and solid piston
-//! discs, built once and moved each frame rather than rebuilt.
+//! The cylinders, pistons and the opening between them: tube outlines and
+//! solid piston discs, built once and moved each frame rather than rebuilt.
 
-use std::f32::consts::{
-    FRAC_PI_2,
-    TAU, //
-};
+use std::f32::consts::TAU;
 
 use macroquad::models::{
     Mesh,
@@ -152,7 +149,7 @@ impl CylinderFrame {
 
 const HOT_FRAME_COLOR: Color = Color::from_rgba(241, 145, 92, 255);
 const COLD_FRAME_COLOR: Color = Color::from_rgba(110, 189, 255, 255);
-const CONNECTOR_COLOR: Color = Color::from_rgba(180, 224, 209, 255);
+const PASSAGE_COLOR: Color = Color::from_rgba(180, 224, 209, 255);
 const PISTON_COLOR: Color = Color::from_rgba(184, 193, 203, 255);
 const PISTON_BOTTOM_COLOR: Color = Color::from_rgba(108, 132, 158, 255);
 const PISTON_THICKNESS: f32 = 0.10;
@@ -219,7 +216,7 @@ impl PistonDisc {
 }
 
 /// Both cylinder frames (orange hot, blue cold), the pistons and the
-/// passage outline.
+/// outline of the opening between them.
 pub struct ConnectedChamberVisual {
     hot: CylinderFrame,
     cold: CylinderFrame,
@@ -243,7 +240,7 @@ impl ConnectedChamberVisual {
         }
     }
 
-    /// Draws the frames and passage, with the pistons at the given heights.
+    /// Draws the frames and opening, with the pistons at the given heights.
     pub fn draw(&mut self, hot_face_y: f32, cold_face_y: f32) {
         self.hot.draw();
         self.cold.draw();
@@ -251,66 +248,40 @@ impl ConnectedChamberVisual {
         self.cold_piston.draw(cold_face_y);
 
         for &(a, b) in &self.passage_lines {
-            draw_line_3d(a, b, CONNECTOR_COLOR);
+            draw_line_3d(a, b, PASSAGE_COLOR);
         }
     }
 }
 
-/// Line segments outlining the passage capsules, computed once. Edges inside
-/// another capsule or above the cylinder floors are left out, so elbows and
-/// floor openings do not look like closed internal walls.
+/// Line segments outlining the opening, computed once: the two rims where
+/// the round tube meets each bore wall, and lines along the tube between
+/// them. The parts of the tube inside the bores are open gas, so they are
+/// not drawn.
 fn passage_wireframe(geometry: ChamberGeometry) -> Vec<(Vec3, Vec3)> {
-    const RING_SEGMENTS: usize = 24;
-    const CAP_STEPS: usize = 6;
-    const LONGITUDINAL_STRIDE: usize = 3;
-    const SURFACE_TOLERANCE: f32 = 0.999;
-    let sections = geometry.connector_segments();
-    let radius = geometry.connector_radius;
+    const RIM_SEGMENTS: usize = 32;
+    const LONGITUDINAL_STRIDE: usize = 4;
+    let radius = geometry.passage_radius;
+    let center_y = geometry.passage_center_y();
+    // A point of the rim on the hot (side -1) or cold (side 1) bore wall.
+    let rim = |angle: f32, side: f32| {
+        let (sin, cos) = angle.sin_cos();
+        let z = radius * sin;
+        let wall = (geometry.cylinder_radius.powi(2) - z * z).sqrt();
+        vec3(
+            side * (geometry.cylinder_offset - wall),
+            center_y - radius * cos,
+            z,
+        )
+    };
     let mut lines = Vec::new();
-    for (section, &(start, end)) in sections.iter().enumerate() {
-        let direction = (end - start).normalize();
-        let across = direction.cross(Vec3::Z);
-        let mut add = |a: Vec3, b: Vec3| {
-            let middle = (a + b) / 2.0;
-            if middle.y > -geometry.cylinder_height / 2.0 {
-                return;
-            }
-            let hidden = sections.iter().enumerate().any(|(other, &(c, d))| {
-                if other == section {
-                    return false;
-                }
-                let axis = d - c;
-                let nearest =
-                    c + axis * ((middle - c).dot(axis) / axis.length_squared()).clamp(0.0, 1.0);
-                middle.distance_squared(nearest) < radius * radius * SURFACE_TOLERANCE
-            });
-            if !hidden {
-                lines.push((a, b));
-            }
-        };
-        for segment in 0..RING_SEGMENTS {
-            let angle = TAU * segment as f32 / RING_SEGMENTS as f32;
-            let next = TAU * (segment + 1) as f32 / RING_SEGMENTS as f32;
-            let radial = |angle: f32| across * angle.cos() + Vec3::Z * angle.sin();
-            if segment % LONGITUDINAL_STRIDE == 0 {
-                add(start + radial(angle) * radius, end + radial(angle) * radius);
-            }
-            for (center, sign) in [(start, -1.0), (end, 1.0)] {
-                for step in 0..CAP_STEPS {
-                    let latitude = FRAC_PI_2 * step as f32 / CAP_STEPS as f32;
-                    let next_latitude = FRAC_PI_2 * (step + 1) as f32 / CAP_STEPS as f32;
-                    let point = |angle: f32, latitude: f32| {
-                        center
-                            + radius
-                                * (radial(angle) * latitude.cos()
-                                    + direction * sign * latitude.sin())
-                    };
-                    add(point(angle, latitude), point(next, latitude));
-                    if segment % LONGITUDINAL_STRIDE == 0 {
-                        add(point(angle, latitude), point(angle, next_latitude));
-                    }
-                }
-            }
+    for segment in 0..RIM_SEGMENTS {
+        let angle = TAU * segment as f32 / RIM_SEGMENTS as f32;
+        let next = TAU * (segment + 1) as f32 / RIM_SEGMENTS as f32;
+        for side in [-1.0, 1.0] {
+            lines.push((rim(angle, side), rim(next, side)));
+        }
+        if segment % LONGITUDINAL_STRIDE == 0 {
+            lines.push((rim(angle, -1.0), rim(angle, 1.0)));
         }
     }
     lines

@@ -12,7 +12,7 @@ impl ChamberGeometry {
     }
 
     fn total_volume_m3(self) -> f64 {
-        2.0 * self.cylinder_volume_m3() + self.connector_volume_m3()
+        2.0 * self.cylinder_volume_m3() + self.passage_volume_m3()
     }
 }
 
@@ -28,7 +28,7 @@ fn initial_pistons_are_a_quarter_cycle_out_of_phase() {
     assert!((pistons.cold().face_y - pistons.position_at(FRAC_PI_2)).abs() < EPSILON);
     assert!(pistons.stroke() <= (STROKE_METERS / METERS_PER_UNIT) as f32);
     assert!(
-        -geometry.cylinder_height / 2.0 + geometry.connector_radius + PARTICLE_RADIUS
+        geometry.passage_top() + PARTICLE_RADIUS
             < geometry.cylinder_height / 2.0 - pistons.stroke()
     );
 }
@@ -105,14 +105,14 @@ fn cold_piston_impulse_affects_the_same_rotor() {
 }
 
 #[test]
-fn increased_stroke_preserves_open_passage() {
+fn full_stroke_keeps_the_opening_uncovered() {
     let geometry = ChamberGeometry::default();
     let pistons = PowerPistons::new(geometry, PARTICLE_RADIUS);
     const EXPECTED_SAFE_STROKE: f32 = 4.8;
     assert!((pistons.stroke() - EXPECTED_SAFE_STROKE).abs() < EPSILON);
     assert!(
         geometry.cylinder_height / 2.0 - pistons.stroke() - PARTICLE_RADIUS
-            > -geometry.cylinder_height / 2.0 + geometry.connector_radius
+            > geometry.passage_top()
     );
 }
 
@@ -259,4 +259,24 @@ fn starting_energy_sets_the_starting_speed() {
     pistons.set_starting_energy(2.0 * STARTER_ENERGY);
     pistons.start();
     assert!((pistons.kinetic_energy() - 2.0 * STARTER_ENERGY).abs() < EPSILON as f64);
+}
+
+/// A coasting shaft loses its energy to the bearing and the load only, and
+/// the load's share is booked separately: it is most of the loss, because
+/// the load's torque grows with the square of the speed.
+#[test]
+fn coasting_shaft_splits_its_loss_between_bearing_and_load() {
+    const STEPS: usize = 2_400;
+    const RELATIVE_TOLERANCE: f64 = 1e-9;
+    let mut pistons = PowerPistons::new(ChamberGeometry::default(), PARTICLE_RADIUS);
+    assert!(pistons.start());
+    let start = pistons.kinetic_energy();
+    for _ in 0..STEPS {
+        pistons.advance(TEST_DT);
+    }
+    let lost = start - pistons.kinetic_energy() + pistons.back_pressure_work();
+    assert!(pistons.load_work() > 0.0);
+    assert!(pistons.load_work() < pistons.drag_loss());
+    assert!(pistons.load_work() > 0.5 * pistons.drag_loss());
+    assert!((pistons.drag_loss() - lost).abs() < RELATIVE_TOLERANCE * start + 1e-6);
 }
