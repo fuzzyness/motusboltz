@@ -1,9 +1,9 @@
 //! The on-screen controls. Panel, Keys and scenery toggles at the top left
-//! of the uncovered scene; a row of Reset, Pause, Slow and Tracers centered along
-//! the bottom, with a large Start button above it whenever pressing it
-//! would help; and in the column at the right, the hot, cold and helium
-//! sliders. None of them sits on a background of its own, so the scene
-//! shows around them.
+//! of the uncovered scene; a row of Reset, Start or Pause, Slow and Tracers
+//! centered along the bottom, where Start takes Pause's place whenever
+//! pressing it would help (Space does whichever is shown); and in the
+//! column at the right, the hot, cold and helium sliders. None of them
+//! sits on a background of its own, so the scene shows around them.
 
 use macroquad::prelude::{
     Color,
@@ -17,6 +17,7 @@ use macroquad::prelude::{
 
 use crate::ui::button::{
     self,
+    Hue,
     LABEL_SIZE,
     Label,
     Look, //
@@ -39,17 +40,15 @@ const ROW_HEIGHT: f32 = 36.0;
 const ROW_GAP: f32 = 10.0;
 /// Bottom row's distance from the bottom of the window.
 const ROW_BOTTOM_MARGIN: f32 = 18.0;
-const START_HEIGHT: f32 = 48.0;
-const START_LABEL_SIZE: f32 = 21.0;
-const START_EXTRA_WIDTH: f32 = 40.0;
-/// Gap between the Start button and the row below it.
-const START_GAP: f32 = 14.0;
 /// Smallest label size the bottom row shrinks to on a narrow scene.
 const MIN_ROW_LABEL_SIZE: f32 = 12.0;
-/// The tip over Start when the sides are at one temperature, and its gap.
+/// The tip over the row when Start is offered with the sides at one
+/// temperature, and its gap.
 const NO_GAP_TIP: &str = "Tip: drag Hot side up first, or the flywheel will run down.";
 const TIP_SIZE: f32 = 15.0;
-const TIP_GAP: f32 = 12.0;
+const TIP_GAP: f32 = 16.0;
+/// How far the shade behind the tip reaches past its text.
+const TIP_PAD: f32 = 7.0;
 const TIP_COLOR: Color = Color::from_rgba(200, 212, 225, 255);
 /// The shade behind the sliders and other loose text over the sky.
 pub const BACKING: Color = Color::new(0.06, 0.09, 0.15, 0.62);
@@ -73,12 +72,22 @@ const TOGGLES: [Action; 3] = [
     Action::ToggleKeys,
     Action::ToggleScenery,
 ];
-const ROW: [Action; 4] = [
-    Action::ResetGas,
-    Action::TogglePause,
-    Action::ToggleSlow,
-    Action::ToggleTracers,
-];
+/// Start and Pause take turns in one place in the bottom row.
+const SHARED: [Action; 2] = [Action::Start, Action::TogglePause];
+
+/// The bottom row for `states`: Start while it is offered, Pause otherwise.
+fn row(states: ButtonStates) -> [Action; 4] {
+    [
+        Action::ResetGas,
+        if states.start {
+            Action::Start
+        } else {
+            Action::TogglePause
+        },
+        Action::ToggleSlow,
+        Action::ToggleTracers,
+    ]
+}
 
 /// The settings that change which buttons show and how they look.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -88,7 +97,7 @@ pub struct ButtonStates {
     pub tracers: bool,
     pub panel: bool,
     pub keys: bool,
-    /// Whether Start is offered (see `StartPrompt`).
+    /// Whether Start is offered, in Pause's place (see `StartPrompt`).
     pub start: bool,
     /// Both sides are at the same temperature, so a tip shows over Start.
     pub no_gap: bool,
@@ -124,21 +133,25 @@ impl Action {
             Self::TogglePause => ("Pause", "Space"),
             Self::ToggleSlow => ("Slow", "L"),
             Self::ToggleTracers => ("Tracers", "F"),
-            Self::Start => ("Start the engine", "Enter"),
+            Self::Start => ("Start", "Space"),
         };
         Label { text, key }
     }
 
+    /// Each button in the bottom row has a color of its own, as on the
+    /// Dreamcast's menu; the toggles share a pearl gray. Start always glows,
+    /// to draw the eye.
     fn look(self, states: ButtonStates) -> Look {
-        let on = match self {
-            Self::ToggleKeys => states.keys,
-            Self::TogglePause => states.paused,
-            Self::ToggleSlow => states.slow,
-            Self::ToggleTracers => states.tracers,
-            Self::Start => return Look::Primary,
-            Self::TogglePanel | Self::ToggleScenery | Self::ResetGas => false,
+        let (hue, on) = match self {
+            Self::TogglePanel | Self::ToggleScenery => (Hue::Pearl, false),
+            Self::ToggleKeys => (Hue::Pearl, states.keys),
+            Self::ResetGas => (Hue::Coral, false),
+            Self::Start => (Hue::Amber, true),
+            Self::TogglePause => (Hue::Mint, states.paused),
+            Self::ToggleSlow => (Hue::Cyan, states.slow),
+            Self::ToggleTracers => (Hue::Orchid, states.tracers),
         };
-        if on { Look::On } else { Look::Plain }
+        Look { hue, on }
     }
 }
 
@@ -188,21 +201,22 @@ pub fn place_buttons(pen: &Pen, area: SceneArea, states: ButtonStates) -> Vec<Pl
     }
 
     // The bottom row, centered, shrinking its labels if the scene is narrow.
+    let row = row(states);
     let room = area.width - 2.0 * MARGIN;
-    let natural: f32 = ROW
+    let natural: f32 = row
         .iter()
         .map(|&action| widest(pen, action, LABEL_SIZE))
         .sum::<f32>()
-        + ROW_GAP * (ROW.len() - 1) as f32;
+        + ROW_GAP * (row.len() - 1) as f32;
     let size = (LABEL_SIZE * (room / natural).min(1.0)).max(MIN_ROW_LABEL_SIZE);
-    let widths: Vec<f32> = ROW
+    let widths: Vec<f32> = row
         .iter()
         .map(|&action| widest(pen, action, size))
         .collect();
-    let total = widths.iter().sum::<f32>() + ROW_GAP * (ROW.len() - 1) as f32;
+    let total = widths.iter().sum::<f32>() + ROW_GAP * (row.len() - 1) as f32;
     let row_y = area.height - ROW_BOTTOM_MARGIN - ROW_HEIGHT;
     let mut x = area.left + (area.width - total) / 2.0;
-    for (&action, width) in ROW.iter().zip(widths) {
+    for (&action, width) in row.iter().zip(widths) {
         placed.push(Placed {
             action,
             rect: Rect::new(x, row_y, width, ROW_HEIGHT),
@@ -211,23 +225,6 @@ pub fn place_buttons(pen: &Pen, area: SceneArea, states: ButtonStates) -> Vec<Pl
             size,
         });
         x += width + ROW_GAP;
-    }
-
-    if states.start {
-        let label = Action::Start.label(states);
-        let width = button::width(pen, label, START_LABEL_SIZE) + START_EXTRA_WIDTH;
-        placed.push(Placed {
-            action: Action::Start,
-            rect: Rect::new(
-                area.left + (area.width - width) / 2.0,
-                row_y - START_GAP - START_HEIGHT,
-                width,
-                START_HEIGHT,
-            ),
-            label,
-            look: Look::Primary,
-            size: START_LABEL_SIZE,
-        });
     }
     placed
 }
@@ -247,12 +244,21 @@ pub fn slider_column(width: f32) -> Rect {
 /// How far the shade reaches past what it is behind.
 const BACKING_PAD: f32 = 14.0;
 
-/// Width that fits the action's label in every state, so a button does not
-/// change size when its label changes.
+/// Width that fits the action's label in every state, and in the shared
+/// place both Start's and Pause's, so a button does not change size when
+/// its label changes.
 fn widest(pen: &Pen, action: Action, size: f32) -> f32 {
-    [ButtonStates::default(), ButtonStates::ALL_ON]
-        .map(|states| button::width(pen, action.label(states), size))
-        .into_iter()
+    let actions: &[Action] = if SHARED.contains(&action) {
+        &SHARED
+    } else {
+        &[action]
+    };
+    actions
+        .iter()
+        .flat_map(|&action| {
+            [ButtonStates::default(), ButtonStates::ALL_ON]
+                .map(|states| button::width(pen, action.label(states), size))
+        })
         .fold(0.0, f32::max)
 }
 
@@ -339,7 +345,18 @@ impl Controls {
                 let size = pen.fitted_size(NO_GAP_TIP, area.width - 2.0 * MARGIN, TIP_SIZE);
                 let width = pen.measure(NO_GAP_TIP, size);
                 let x = area.left + (area.width - width) / 2.0;
-                pen.text(NO_GAP_TIP, x, placed.rect.y - TIP_GAP, size, TIP_COLOR);
+                let baseline = placed.rect.y - TIP_GAP;
+                // A shade behind it, so it reads over the bright cloud.
+                let height = pen.text_height(NO_GAP_TIP, size);
+                pen.round_rect(
+                    x - TIP_PAD,
+                    baseline - height - TIP_PAD,
+                    width + 2.0 * TIP_PAD,
+                    height + 2.0 * TIP_PAD,
+                    BACKING_RADIUS,
+                    BACKING,
+                );
+                pen.text(NO_GAP_TIP, x, baseline, size, TIP_COLOR);
             }
             button::draw(
                 pen,

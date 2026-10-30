@@ -21,6 +21,10 @@ use macroquad::prelude::{
 };
 
 use crate::sim::engine::ConnectedChambers;
+use crate::ui::button::{
+    self,
+    Hue, //
+};
 use crate::ui::layout::PANEL_WIDTH;
 use crate::ui::pen::{
     Pen,
@@ -87,7 +91,6 @@ const HOT_COLOR: Color = Color::from_rgba(255, 160, 90, 255);
 const COLD_COLOR: Color = Color::from_rgba(95, 190, 255, 255);
 const WORK_COLOR: Color = Color::from_rgba(255, 218, 110, 255);
 const TAB_COLOR: Color = Color::from_rgba(38, 52, 68, 255);
-const TAB_SELECTED_COLOR: Color = Color::from_rgba(70, 92, 116, 255);
 const SCROLL_TRACK_COLOR: Color = Color::from_rgba(38, 52, 68, 255);
 const SCROLL_THUMB_COLOR: Color = Color::from_rgba(120, 140, 160, 255);
 
@@ -401,18 +404,17 @@ impl EnginePanel {
         for (index, mode) in MODES.into_iter().enumerate() {
             let tab = tab_rect(index);
             let selected = mode == self.mode;
-            pen.round_rect(
-                tab.x,
-                tab.y,
-                tab.w,
-                tab.h,
-                TAB_HEIGHT / 2.0,
-                if selected {
-                    TAB_SELECTED_COLOR
-                } else {
-                    TAB_COLOR
-                },
-            );
+            // The chosen view is a glossy pill like the buttons; the other
+            // stays a flat, dark one.
+            if selected {
+                let look = button::Look {
+                    hue: Hue::Cyan,
+                    on: false,
+                };
+                button::pill(pen, tab, look, false);
+            } else {
+                pen.round_rect(tab.x, tab.y, tab.w, tab.h, TAB_HEIGHT / 2.0, TAB_COLOR);
+            }
             let label = mode.label();
             let size = pen.fitted_size_weight(label, tab.w, TAB_SIZE, Weight::Semibold);
             pen.heading(

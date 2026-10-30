@@ -72,8 +72,8 @@ fn buttons_stay_in_the_free_scene_without_overlapping() {
     }
 }
 
-/// The bottom row and Start are centered on the window, so showing or
-/// hiding the panel does not move them.
+/// The bottom row is centered on the window, so showing or hiding the
+/// panel does not move it.
 #[test]
 fn bottom_row_stays_put_when_the_panel_is_hidden() {
     let pen = Pen::offline();
@@ -98,6 +98,39 @@ fn bottom_row_stays_put_when_the_panel_is_hidden() {
                 .collect::<Vec<_>>()
         };
         assert_eq!(row(true), row(false), "at {width}x{height}");
+    }
+}
+
+/// Start and Pause take turns in one place: exactly one of them shows, in
+/// the same spot and at the same width.
+#[test]
+fn start_and_pause_share_one_place() {
+    let pen = Pen::offline();
+    let area = SceneArea {
+        edge: 340.0,
+        left: 340.0,
+        width: 760.0,
+        height: 900.0,
+    };
+    let shared = |states: ButtonStates| {
+        let shown: Vec<Placed> = place_buttons(&pen, area, states)
+            .into_iter()
+            .filter(|button| SHARED.contains(&button.action))
+            .collect();
+        assert_eq!(shown.len(), 1, "{states:?}");
+        (shown[0].action, shown[0].rect)
+    };
+    for base in [ButtonStates::default(), ButtonStates::ALL_ON] {
+        let (start, start_rect) = shared(ButtonStates {
+            start: true,
+            ..base
+        });
+        let (pause, pause_rect) = shared(ButtonStates {
+            start: false,
+            ..base
+        });
+        assert_eq!((start, pause), (Action::Start, Action::TogglePause));
+        assert_eq!(start_rect, pause_rect);
     }
 }
 
@@ -126,7 +159,8 @@ fn start_shows_only_when_offered() {
 fn labels_name_their_keys_and_use_font_characters() {
     let off = ButtonStates::default();
     let on = ButtonStates::ALL_ON;
-    assert_eq!(Action::Start.label(off).key, "Enter");
+    assert_eq!(Action::Start.label(off).key, "Space");
+    assert_eq!(Action::TogglePause.label(off).key, "Space");
     assert_eq!(Action::TogglePanel.label(off).text, "Show panel");
     assert_eq!(Action::TogglePanel.label(on).text, "Hide panel");
     assert_eq!(Action::TogglePause.label(on).text, "Resume");

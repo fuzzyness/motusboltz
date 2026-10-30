@@ -21,7 +21,7 @@ const AT_REST_TURNS_PER_MINUTE: f64 = 0.2;
 /// flagged. Measured mismatches are about 0.001 J per turn.
 pub const LEDGER_TOLERANCE_JOULES: f64 = 0.05;
 
-pub const WAITING_START: &str = "Press Start (Enter) to turn the flywheel.";
+pub const WAITING_START: &str = "Press Start (Space) to turn the flywheel.";
 pub const WAITING_GAP: &str = "No temperature difference: drag Hot side up.";
 pub const WAITING_TURN: &str = "Waiting for the flywheel to finish a turn.";
 pub const WAITING_SETTINGS: &str = "New settings: waiting for a full turn.";

@@ -248,11 +248,14 @@ impl App {
         if keys.reset_gas || events.action == Some(Action::ResetGas) {
             self.simulation.reset();
         }
-        if keys.pause || events.action == Some(Action::TogglePause) {
-            self.paused = !self.paused;
-        }
-        if keys.start || events.action == Some(Action::Start) {
+        // Space does what the shared button shows: Start while it is
+        // offered (which also lifts a pause), Pause or Resume otherwise.
+        let offered = self.start_prompt.shown();
+        if events.action == Some(Action::Start) || (keys.go && offered) {
+            self.paused = false;
             self.simulation.start_engine();
+        } else if events.action == Some(Action::TogglePause) || keys.go {
+            self.paused = !self.paused;
         }
         if keys.slow || events.action == Some(Action::ToggleSlow) {
             self.slow = !self.slow;

@@ -9,8 +9,9 @@ use macroquad::prelude::{
     mouse_wheel, //
 };
 
-const START_KEYS: [KeyCode; 2] = [KeyCode::Enter, KeyCode::KpEnter];
-const PAUSE_KEY: KeyCode = KeyCode::Space;
+/// Starts the engine while Start is offered, and otherwise pauses or
+/// resumes.
+const GO_KEY: KeyCode = KeyCode::Space;
 const RESET_GAS_KEY: KeyCode = KeyCode::T;
 const DETAILS_KEY: KeyCode = KeyCode::I;
 const PANEL_KEY: KeyCode = KeyCode::G;
@@ -51,9 +52,8 @@ const ZOOM_OUT_KEYS: [KeyCode; 2] = [KeyCode::Minus, KeyCode::KpSubtract];
 
 /// Every key binding the Keys list shows, as (keys, what they do). The
 /// hidden kick is left out.
-pub const SHORTCUTS: [(&str, &str); 14] = [
-    ("Enter", "Start the engine"),
-    ("Space", "Pause or resume"),
+pub const SHORTCUTS: [(&str, &str); 13] = [
+    ("Space", "Start, pause or resume"),
     ("L", "Slow motion"),
     ("F", "Follow particles (tracers)"),
     ("T", "Reset with fresh gas"),
@@ -83,8 +83,8 @@ const MAX_WHEEL_PIXELS: f32 = 200.0;
 /// One-shot commands from keys pressed this frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct KeyCommands {
-    pub start: bool,
-    pub pause: bool,
+    /// Start, or pause and resume (see `GO_KEY`).
+    pub go: bool,
     pub reset_gas: bool,
     pub details: bool,
     pub panel: bool,
@@ -106,8 +106,7 @@ impl KeyCommands {
     /// The commands for the keys that `pressed` reports.
     pub fn from_pressed(pressed: impl Fn(KeyCode) -> bool) -> Self {
         Self {
-            start: START_KEYS.into_iter().any(&pressed),
-            pause: pressed(PAUSE_KEY),
+            go: pressed(GO_KEY),
             reset_gas: pressed(RESET_GAS_KEY),
             details: pressed(DETAILS_KEY),
             panel: pressed(PANEL_KEY),

@@ -57,10 +57,13 @@ fn minus_and_equal_zoom_out_and_in() {
 
 #[test]
 fn command_keys_map_to_their_commands() {
-    assert!(KeyCommands::from_pressed(only(&[KeyCode::Enter])).start);
-    assert!(KeyCommands::from_pressed(only(&[KeyCode::KpEnter])).start);
     assert!(KeyCommands::from_pressed(only(&[KeyCode::I])).details);
-    assert!(KeyCommands::from_pressed(only(&[KeyCode::Space])).pause);
+    assert!(KeyCommands::from_pressed(only(&[KeyCode::Space])).go);
+    // Space now starts the engine; Enter does nothing.
+    assert_eq!(
+        KeyCommands::from_pressed(only(&[KeyCode::Enter])),
+        KeyCommands::default()
+    );
     assert!(KeyCommands::from_pressed(only(&[KeyCode::T])).reset_gas);
     assert!(KeyCommands::from_pressed(only(&[KeyCode::G])).panel);
     assert!(KeyCommands::from_pressed(only(&[KeyCode::R])).camera_reset);
@@ -92,9 +95,7 @@ fn shortcuts_list_the_bindings_in_ascii_without_the_hidden_kick() {
         assert_ne!(keys, "K");
     }
     let listed: Vec<&str> = SHORTCUTS.iter().map(|&(keys, _)| keys).collect();
-    for keys in [
-        "Enter", "Space", "L", "F", "T", "1 to 5", "I", "G", "H", "R",
-    ] {
+    for keys in ["Space", "L", "F", "T", "1 to 5", "I", "G", "H", "R"] {
         assert!(listed.contains(&keys), "{keys} missing from the list");
     }
 }
