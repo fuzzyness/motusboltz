@@ -101,6 +101,10 @@ const EMBER_RISE: f32 = 1.6;
 const EMBER_HALF_SIZE: f32 = 0.014;
 const EMBER_COLOR: Color = Color::from_rgba(255, 210, 120, 255);
 const EMBER_OPACITY: f32 = 0.9;
+/// How much hotter it gets while each new spark fades in, and while the
+/// flames first fade in as the burner lights.
+const REVEAL_SPAN: f32 = 0.08;
+const FIRST_SHARE: f32 = 0.08;
 
 /// The flames' light on the floor around the hot half, centered on its
 /// axis and reaching this many burner radii out.
@@ -164,6 +168,8 @@ impl Fire {
         let unit = self.unit;
         let top = self.floor + BURNER_HEIGHT * unit;
         let clock = seconds as f32;
+        // The flames fade in from nothing as the burner lights.
+        let kindle = smoothstep(0.0, FIRST_SHARE, heat);
         let place = |point: Vec2, y: f32| Vec3::new(point.x, y, point.y);
         self.sprites.flat(
             place(self.path.axis(), self.floor + ABOVE_FLOOR),
@@ -180,13 +186,14 @@ impl Fire {
                 place(point, top + half),
                 half,
                 half * 1.4,
-                with_alpha(PORT_COLOR, PORT_OPACITY * heat.sqrt()),
+                with_alpha(PORT_COLOR, PORT_OPACITY * kindle * heat.sqrt()),
             );
         }
 
         let reach = FLAME_HEIGHT * unit * (FLAME_LOWEST_SHARE + (1.0 - FLAME_LOWEST_SHARE) * heat);
         let root = mix_color(ROOT_LOW, ROOT_HIGH, heat);
-        let opacity = FLAME_OPACITY_LOW + (FLAME_OPACITY_HIGH - FLAME_OPACITY_LOW) * heat;
+        let opacity =
+            kindle * (FLAME_OPACITY_LOW + (FLAME_OPACITY_HIGH - FLAME_OPACITY_LOW) * heat);
         let width = FLAME_HALF_WIDTH * unit * (0.6 + 0.4 * heat);
         let length = self.path.length();
         for flame in 0..FLAMES {
@@ -222,8 +229,13 @@ impl Fire {
             );
         }
 
-        let shown = (heat * EMBERS as f32).round() as u32;
-        for ember in 0..shown {
+        for ember in 0..EMBERS {
+            // Each spark fades in at its own heat, so more come smoothly.
+            let appears = ember as f32 / EMBERS as f32;
+            let presence = smoothstep(appears, appears + REVEAL_SPAN, heat);
+            if presence <= 0.0 {
+                break;
+            }
             let life = age(seconds, EMBER_RATE, unit_hash(ember, SALT_EMBER));
             let drift = 0.04 * (clock * 2.0 + ember as f32).sin() * life;
             let (point, out) = self.path.at(unit_hash(ember, SALT_PLACE) + drift);
@@ -232,7 +244,7 @@ impl Fire {
                 top + EMBER_RISE * reach * life,
             );
             let half = EMBER_HALF_SIZE * unit;
-            let alpha = EMBER_OPACITY * smoothstep(0.0, 0.1, life) * (1.0 - life);
+            let alpha = EMBER_OPACITY * presence * smoothstep(0.0, 0.1, life) * (1.0 - life);
             self.sprites
                 .facing(facing, center, half, half, with_alpha(EMBER_COLOR, alpha));
         }

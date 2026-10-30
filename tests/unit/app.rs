@@ -2,7 +2,7 @@
 //! fill presets.
 
 use super::*;
-use crate::graphics::shaft::WHEEL_RADIUS;
+use crate::graphics::assembly::flywheel_radius;
 use crate::sim::engine::PARTICLE_RADIUS;
 use crate::sim::geometry::DEFAULT_GEOMETRY;
 use crate::sim::pistons::PowerPistons;
@@ -53,10 +53,11 @@ fn initial_camera_frames_the_engine_in_the_clear_span() {
             // The span's edges in clip space.
             let clip_x = |x: f32| 2.0 * x / width - 1.0;
             let (low, high) = (clip_x(left), clip_x(left + span));
+            let wheel = flywheel_radius(geometry);
             for point in [
-                vec3(0.0, pistons.shaft_height() + WHEEL_RADIUS, 0.0),
-                vec3(0.0, pistons.shaft_height(), WHEEL_RADIUS),
-                vec3(0.0, pistons.shaft_height(), -WHEEL_RADIUS),
+                vec3(0.0, pistons.shaft_height() + wheel, 0.0),
+                vec3(0.0, pistons.shaft_height(), wheel),
+                vec3(0.0, pistons.shaft_height(), -wheel),
                 vec3(geometry.hot_center_x(), geometry.floor(), 0.0),
                 vec3(geometry.cold_center_x(), geometry.floor(), 0.0),
                 vec3(geometry.hot_center_x() - geometry.cylinder_radius, 0.0, 0.0),

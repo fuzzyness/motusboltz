@@ -134,6 +134,10 @@ const PUFF_SIZE_OLD: f32 = 0.55;
 const PUFF_OPACITY_LOW: f32 = 0.08;
 const PUFF_OPACITY_HIGH: f32 = 0.2;
 const RISING_SHARE: f32 = 0.25;
+/// How much colder it gets while each new puff fades in, and while the
+/// mist first fades in.
+const REVEAL_SPAN: f32 = 0.08;
+const FIRST_SHARE: f32 = 0.08;
 const RISE: f32 = 0.45;
 /// A sinking puff settles with this share of its size above the floor, so
 /// it never sinks through.
@@ -249,9 +253,19 @@ impl Ice {
         );
 
         let heap_top = self.heights.iter().copied().fold(0.0, f32::max);
-        let shown = (PUFFS as f32 * (FEWEST_PUFFS + (1.0 - FEWEST_PUFFS) * cold)).ceil() as u32;
-        let peak = PUFF_OPACITY_LOW + (PUFF_OPACITY_HIGH - PUFF_OPACITY_LOW) * cold;
-        for puff in 0..shown.min(PUFFS) {
+
+        // The mist fades in from nothing at the first sign of cold.
+        let peak = smoothstep(0.0, FIRST_SHARE, cold)
+            * (PUFF_OPACITY_LOW + (PUFF_OPACITY_HIGH - PUFF_OPACITY_LOW) * cold);
+        for puff in 0..PUFFS {
+            // The first share of puffs shows at the first sign of cold; each
+            // of the rest fades in at its own coldness, so the mist
+            // thickens smoothly.
+            let appears = (puff as f32 / PUFFS as f32 - FEWEST_PUFFS) / (1.0 - FEWEST_PUFFS);
+            let presence = smoothstep(appears, appears + REVEAL_SPAN, cold);
+            if presence <= 0.0 {
+                break;
+            }
             let life = age(seconds, PUFF_RATE, unit_hash(puff, SALT_PUFF));
             let (point, outward) = self.wall.at(unit_hash(puff, SALT_PLACE));
             let start_out = 0.1 * unit * (1.0 + 2.0 * unit_hash(puff, SALT_DEPTH));
@@ -270,7 +284,7 @@ impl Ice {
                     start_y + (settled - start_y) * smoothstep(0.0, 0.45, life),
                 )
             };
-            let alpha = peak * (PI * life).sin();
+            let alpha = peak * presence * (PI * life).sin();
             let spot = point + outward * out;
             self.sprites.facing(
                 facing,

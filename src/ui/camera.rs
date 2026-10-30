@@ -15,8 +15,13 @@ use macroquad::prelude::{
 
 use crate::ui::input::CameraKeys;
 
-const INITIAL_POSITION: Vec3 = Vec3::new(8.4, 5.6, 8.4);
-const ORBIT_CENTER: Vec3 = Vec3::ZERO;
+/// Where the camera starts, from the point it turns around, before the
+/// view's scale.
+const INITIAL_OFFSET: Vec3 = Vec3::new(8.4, 5.6, 8.4);
+/// The point the camera turns around: above the block's middle, halfway up
+/// the whole engine from the floor to the top of the flywheel, so all of it
+/// fits the first view.
+const ORBIT_CENTER: Vec3 = Vec3::new(0.0, 2.6, 0.0);
 
 const ORBIT_SENSITIVITY: f32 = 0.005;
 const POLE_MARGIN: f32 = 0.01;
@@ -69,7 +74,7 @@ impl OrbitCamera {
     /// Frames a larger or smaller chamber and preserves that view on reset.
     pub fn with_scale(view_scale: f32) -> Self {
         assert!(view_scale.is_finite() && view_scale > 0.0);
-        let offset = INITIAL_POSITION - ORBIT_CENTER;
+        let offset = INITIAL_OFFSET;
         let distance = offset.length();
 
         Self {

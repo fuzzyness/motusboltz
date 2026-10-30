@@ -119,7 +119,7 @@ const SLOW_MOTION_FACTOR: f32 = 0.25;
 /// opening, few enough to follow by eye.
 const FOLLOWED_PARTICLES: usize = 5;
 /// Extra zoom-out so the cylinders, crank and flywheel all fit the first view.
-const CAMERA_FRAMING_MARGIN: f32 = 1.25;
+const CAMERA_FRAMING_MARGIN: f32 = 1.42;
 
 fn initial_camera(geometry: ChamberGeometry) -> OrbitCamera {
     OrbitCamera::with_scale(
@@ -323,15 +323,13 @@ impl App {
         // camera keeps the engine at the window's middle.
         let camera = self.camera.camera();
         clear_background(BACKGROUND_COLOR);
+        let seconds = macroquad::time::get_time();
+        self.scene.follow_reservoirs(&self.simulation, seconds);
         self.scene
-            .draw_backdrop(&self.simulation, &camera, screen_width(), screen_height());
+            .draw_backdrop(&camera, screen_width(), screen_height());
         draw_to(&camera);
-        self.scene.draw(
-            &self.simulation,
-            &camera,
-            BACKGROUND_COLOR,
-            macroquad::time::get_time(),
-        );
+        self.scene
+            .draw(&self.simulation, &camera, BACKGROUND_COLOR, seconds);
         draw_to_screen();
 
         // Measure every string first, then draw (see `Pen` for why).

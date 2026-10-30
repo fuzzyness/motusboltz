@@ -1,7 +1,7 @@
-//! The cylinders, pistons and the opening between them: the solid engine
-//! block (see `block.rs`), or tube outlines where its shader cannot be
-//! built, and solid piston discs, built once and moved each frame rather
-//! than rebuilt.
+//! The cylinders and the opening between them: the solid engine block (see
+//! `block.rs`), or tube outlines where its shader cannot be built. The
+//! pistons are drawn with the rest of the moving parts (see
+//! `assembly.rs`).
 
 use std::f32::consts::TAU;
 
@@ -154,71 +154,6 @@ impl CylinderFrame {
 const HOT_FRAME_COLOR: Color = Color::from_rgba(241, 145, 92, 255);
 const COLD_FRAME_COLOR: Color = Color::from_rgba(110, 189, 255, 255);
 const PASSAGE_COLOR: Color = Color::from_rgba(180, 224, 209, 255);
-const PISTON_COLOR: Color = Color::from_rgba(184, 193, 203, 255);
-const PISTON_BOTTOM_COLOR: Color = Color::from_rgba(108, 132, 158, 255);
-const PISTON_THICKNESS: f32 = 0.10;
-const PISTON_EDGE_CLEARANCE: f32 = 0.04;
-
-/// Piston disc built once; each frame shifts its vertices to the face
-/// height instead of rebuilding the mesh.
-struct PistonDisc {
-    mesh: Mesh,
-    y: f32,
-}
-
-impl PistonDisc {
-    fn new(center_x: f32, chamber_radius: f32) -> Self {
-        let mut mesh = Mesh {
-            vertices: Vec::new(),
-            indices: Vec::new(),
-            texture: None,
-        };
-        let radius = chamber_radius - PISTON_EDGE_CLEARANCE;
-        mesh.vertices.push(Vertex::new2(
-            vec3(center_x, PISTON_THICKNESS, 0.0),
-            Vec2::ZERO,
-            PISTON_COLOR,
-        ));
-        mesh.vertices.push(Vertex::new2(
-            vec3(center_x, 0.0, 0.0),
-            Vec2::ZERO,
-            PISTON_BOTTOM_COLOR,
-        ));
-        for index in 0..CYLINDER_RING_SEGMENTS {
-            let angle = TAU * index as f32 / CYLINDER_RING_SEGMENTS as f32;
-            let (sin, cos) = angle.sin_cos();
-            for (y, color) in [(PISTON_THICKNESS, PISTON_COLOR), (0.0, PISTON_BOTTOM_COLOR)] {
-                mesh.vertices.push(Vertex::new2(
-                    vec3(center_x + radius * cos, y, radius * sin),
-                    Vec2::ZERO,
-                    color,
-                ));
-            }
-        }
-        for index in 0..CYLINDER_RING_SEGMENTS {
-            let next = (index + 1) % CYLINDER_RING_SEGMENTS;
-            let upper = (2 + 2 * index) as u16;
-            let lower = upper + 1;
-            let next_upper = (2 + 2 * next) as u16;
-            let next_lower = next_upper + 1;
-            mesh.indices.extend([0, next_upper, upper]);
-            mesh.indices.extend([1, lower, next_lower]);
-            mesh.indices.extend([upper, next_upper, lower]);
-            mesh.indices.extend([next_upper, next_lower, lower]);
-        }
-        Self { mesh, y: 0.0 }
-    }
-
-    fn draw(&mut self, face_y: f32) {
-        let delta = face_y - self.y;
-        for vertex in &mut self.mesh.vertices {
-            vertex.position.y += delta;
-        }
-        self.y = face_y;
-        draw_mesh(&self.mesh);
-    }
-}
-
 /// Whether the solid block is ready. It is built on the first draw, since
 /// its shader needs the window; if the shader cannot be built, the outline
 /// frames are drawn instead.
@@ -229,14 +164,12 @@ enum Block {
 }
 
 /// The engine block (or, failing that, both cylinder frames, orange hot and
-/// blue cold, and the outline of the opening) and the pistons.
+/// blue cold, and the outline of the opening).
 pub struct ConnectedChamberVisual {
     geometry: ChamberGeometry,
     block: Block,
     hot: CylinderFrame,
     cold: CylinderFrame,
-    hot_piston: PistonDisc,
-    cold_piston: PistonDisc,
     passage_lines: Vec<(Vec3, Vec3)>,
 }
 
@@ -251,15 +184,13 @@ impl ConnectedChamberVisual {
             block: Block::Untried,
             hot: CylinderFrame::at_x(dimensions, HOT_FRAME_COLOR, geometry.hot_center_x()),
             cold: CylinderFrame::at_x(dimensions, COLD_FRAME_COLOR, geometry.cold_center_x()),
-            hot_piston: PistonDisc::new(geometry.hot_center_x(), geometry.cylinder_radius),
-            cold_piston: PistonDisc::new(geometry.cold_center_x(), geometry.cylinder_radius),
             passage_lines: passage_wireframe(geometry),
         }
     }
 
     /// Draws the block (or the frames and opening) with its window toward
-    /// `camera`, and the pistons at the given heights.
-    pub fn draw(&mut self, camera: &Camera3D, hot_face_y: f32, cold_face_y: f32) {
+    /// `camera`.
+    pub fn draw(&mut self, camera: &Camera3D) {
         if let Block::Untried = self.block {
             self.block = match EngineBlock::new(self.geometry) {
                 Some(block) => Block::Ready(block),
@@ -275,8 +206,6 @@ impl ConnectedChamberVisual {
                 draw_line_3d(a, b, PASSAGE_COLOR);
             }
         }
-        self.hot_piston.draw(hot_face_y);
-        self.cold_piston.draw(cold_face_y);
     }
 }
 

@@ -287,7 +287,7 @@ impl EngineBlock {
 }
 
 /// The direction toward the key light for a camera at `eye`.
-fn key_light(eye: Vec3) -> Vec3 {
+pub(super) fn key_light(eye: Vec3) -> Vec3 {
     let toward = cut_normal(eye);
     let left = vec3(toward.z, 0.0, -toward.x);
     (Vec3::Y * LIGHT_UP + toward * LIGHT_TOWARD_CAMERA + left * LIGHT_LEFT).normalize()

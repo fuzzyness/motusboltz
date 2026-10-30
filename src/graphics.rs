@@ -1,17 +1,19 @@
 //! 3D drawing of the particles, tracer trails, cylinders, the opening
-//! between them, pistons, crank and flywheel, the burner and ice that
-//! stand for the two reservoirs, and the background. Drawing only;
+//! between them, the pistons, rods, crankshaft and flywheel, the burner
+//! and ice that stand for the two reservoirs, and the background. Drawing only;
 //! nothing here affects the physics.
 
+pub mod assembly;
 pub mod backdrop;
 pub mod block;
 pub mod chamber;
 pub mod fire;
 pub mod floor;
 pub mod ice;
+pub mod levels;
 pub mod outline;
 pub mod particles;
-pub mod shaft;
+pub mod solid;
 pub mod sprites;
 pub mod trails;
 
@@ -24,23 +26,18 @@ use crate::sim::engine::{
     ConnectedChambers,
     PARTICLE_RADIUS, //
 };
+use assembly::Assembly;
 use backdrop::Backdrop;
 use block::BlockShape;
 use chamber::ConnectedChamberVisual;
-use fire::{
-    Fire,
-    heat_level, //
-};
+use fire::Fire;
 use floor::FloorGrid;
-use ice::{
-    Ice,
-    cold_level, //
-};
+use ice::Ice;
+use levels::ReservoirLevels;
 use particles::{
     ParticleRenderer,
     camera_light_direction, //
 };
-use shaft::ShaftVisual;
 use sprites::{
     Facing,
     SpriteMaterials, //
@@ -86,7 +83,7 @@ fn shade(color: Color, brightness: f32) -> Color {
 pub struct Scene {
     chamber: ConnectedChamberVisual,
     floor: FloorGrid,
-    shaft: ShaftVisual,
+    assembly: Assembly,
     particles: ParticleRenderer,
     trails: TrailRenderer,
     fire: Fire,
@@ -95,6 +92,9 @@ pub struct Scene {
     /// still show, without flames or mist.
     sprite_materials: Option<SpriteMaterials>,
     backdrop: Backdrop,
+    /// How strongly the burner, ice and glows show, easing after the
+    /// sliders.
+    levels: ReservoirLevels,
     /// The followed particles' indices this frame, reused.
     followed: Vec<usize>,
     /// A cylinder enclosing the whole apparatus, for the particle depth fade.
@@ -108,13 +108,14 @@ impl Scene {
         Self {
             chamber: ConnectedChamberVisual::new(geometry),
             floor: FloorGrid::new(shape.base),
-            shaft: ShaftVisual::new(geometry),
+            assembly: Assembly::new(geometry, simulation.power_pistons()),
             particles: ParticleRenderer::new(),
             trails: TrailRenderer::new(),
             fire: Fire::new(shape),
             ice: Ice::new(shape),
             sprite_materials: SpriteMaterials::load(),
             backdrop: Backdrop::new(geometry),
+            levels: ReservoirLevels::default(),
             followed: Vec::new(),
             extent: CylinderDimensions {
                 radius: geometry.cylinder_offset + geometry.cylinder_radius,
@@ -123,22 +124,18 @@ impl Scene {
         }
     }
 
+    /// Eases the burner, ice and glows toward the reservoirs' settings at
+    /// `seconds` on the clock. Called once a frame, before drawing.
+    pub fn follow_reservoirs(&mut self, simulation: &ConnectedChambers, seconds: f64) {
+        self.levels
+            .follow(simulation.hot_kelvin(), simulation.cold_kelvin(), seconds);
+    }
+
     /// Fills the window behind the engine. The screen camera must be set;
     /// `camera` is the 3D view the engine will be drawn with.
-    pub fn draw_backdrop(
-        &mut self,
-        simulation: &ConnectedChambers,
-        camera: &Camera3D,
-        width: f32,
-        height: f32,
-    ) {
-        self.backdrop.draw(
-            camera,
-            width,
-            height,
-            heat_level(simulation.hot_kelvin()),
-            cold_level(simulation.cold_kelvin()),
-        );
+    pub fn draw_backdrop(&mut self, camera: &Camera3D, width: f32, height: f32) {
+        self.backdrop
+            .draw(camera, width, height, self.levels.heat, self.levels.cold);
     }
 
     /// Draws the engine as it is now. The 3D camera must already be set;
@@ -154,17 +151,15 @@ impl Scene {
     ) {
         let pistons = simulation.power_pistons();
         let facing = Facing::toward(camera);
-        self.fire
-            .build(heat_level(simulation.hot_kelvin()), seconds, facing);
+        self.fire.build(self.levels.heat, seconds, facing);
         self.ice.build(
-            cold_level(simulation.cold_kelvin()),
+            self.levels.cold,
             seconds,
             camera_light_direction(camera),
             facing,
         );
-        self.chamber
-            .draw(camera, pistons.hot().face_y, pistons.cold().face_y);
-        self.shaft.draw(pistons);
+        self.chamber.draw(camera);
+        self.assembly.draw(pistons, camera);
         self.fire.draw_burner();
         self.ice.draw_solid();
         self.followed.clear();
