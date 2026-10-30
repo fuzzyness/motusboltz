@@ -1,8 +1,8 @@
 //! The main loop. Each frame reads the input, steps the simulation, updates
-//! the panel and camera, and draws the scene with the panel on the left and
-//! the sliders on the right, and the buttons over the scene. Under the
-//! toggles at the scene's top left go the frame rate (in the Advanced view)
-//! and the warning when physics time is dropped.
+//! the panel and camera, and draws the background, then the scene with the
+//! panel on the left and the sliders on the right, and the buttons over the
+//! scene. Under the toggles at the scene's top left go the frame rate (in
+//! the Advanced view) and the warning when physics time is dropped.
 
 use macroquad::prelude::{
     Color,
@@ -71,6 +71,8 @@ use crate::ui::pen::Pen;
 use crate::ui::shortcuts;
 use crate::ui::start_prompt::StartPrompt;
 
+/// The background's middle tone: the plain background where its shader
+/// cannot be built, and the color distant particles fade toward.
 const BACKGROUND_COLOR: Color = Color::from_rgba(12, 18, 30, 255);
 /// Baseline of the build label above the bottom of the window.
 const BUILD_LABEL_BOTTOM_Y: f32 = 24.0;
@@ -321,8 +323,15 @@ impl App {
         // camera keeps the engine at the window's middle.
         let camera = self.camera.camera();
         clear_background(BACKGROUND_COLOR);
+        self.scene
+            .draw_backdrop(&self.simulation, &camera, screen_width(), screen_height());
         draw_to(&camera);
-        self.scene.draw(&self.simulation, &camera, BACKGROUND_COLOR);
+        self.scene.draw(
+            &self.simulation,
+            &camera,
+            BACKGROUND_COLOR,
+            macroquad::time::get_time(),
+        );
         draw_to_screen();
 
         // Measure every string first, then draw (see `Pen` for why).

@@ -72,7 +72,7 @@ const COMFORTABLE_PLOT_SIDE: f32 = 200.0;
 
 /// The panel's background, drawn behind it every frame by the app:
 /// translucent, so the scene shows through faintly.
-pub const BACKGROUND: Color = Color::new(19.0 / 255.0, 29.0 / 255.0, 43.0 / 255.0, 0.75);
+pub const BACKGROUND: Color = Color::new(19.0 / 255.0, 29.0 / 255.0, 43.0 / 255.0, 0.62);
 const TEXT: Color = Color::from_rgba(215, 226, 238, 255);
 const QUIET: Color = Color::from_rgba(150, 165, 180, 255);
 const SECTION: Color = Color::from_rgba(120, 140, 160, 255);

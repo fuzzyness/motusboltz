@@ -83,7 +83,7 @@ fn kinetic_energy_color(energy: f32) -> Color {
 }
 
 /// Places the light in camera space so orbiting does not darken every sphere.
-fn camera_light_direction(camera: &Camera3D) -> Vec3 {
+pub(super) fn camera_light_direction(camera: &Camera3D) -> Vec3 {
     let forward = (camera.target - camera.position).normalize();
     let right = forward.cross(camera.up).normalize();
     let up = right.cross(forward).normalize();
