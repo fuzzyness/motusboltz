@@ -1,9 +1,12 @@
-//! The background behind the engine: deep blue, a little lighter toward
-//! the floor and darker at the window's corners, with a warm glow behind
-//! the hot cylinder and a cool one behind the cold cylinder, each as
-//! strong as its reservoir is hot or cold. The glows follow the cylinders
-//! as the camera turns. One full-window quad drawn before the scene, so it
-//! costs one draw call; without its shader the plain clear color stays.
+//! The background behind the engine, in one of two sceneries. The sky: a
+//! blue sky with drifting clouds above the horizon and a sea of clouds
+//! below it, seen along each pixel's line of sight, so it turns with the
+//! camera. The grid: deep blue, a little lighter toward the floor and
+//! darker at the window's corners. Both add a warm glow behind the hot
+//! cylinder and a cool one behind the cold cylinder, each as strong as its
+//! reservoir is hot or cold, following the cylinders as the camera turns.
+//! One full-window quad drawn before the scene, so it costs one draw call;
+//! without its shader the plain clear color stays.
 
 use macroquad::models::{
     Mesh,
@@ -86,6 +89,119 @@ void main() {
     gl_FragColor = vec4(color, 1.0) * texture2D(Texture, uv);
 }"#;
 
+/// Each pixel's line of sight comes from `Unproject` (the camera's view
+/// and projection, inverted). Above the horizon: the sky, brighter toward
+/// the sun, with thin clouds on a high layer. Below it: the tops of a sea
+/// of clouds on a layer under the engine, lit from the sun's side and
+/// fading into haze in the distance. The noise is value noise from a hash
+/// with no sine (see the grid's shader).
+const SKY_FRAGMENT: &str = r#"#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+
+varying vec2 uv;
+
+uniform sampler2D Texture;
+uniform vec4 Hot;
+uniform vec4 Cold;
+uniform float Aspect;
+uniform mat4 Unproject;
+uniform vec3 Eye;
+uniform float Time;
+uniform float Sea;
+
+const vec3 SUN = vec3(0.55, 0.42, -0.72);
+const vec3 ZENITH = vec3(0.13, 0.36, 0.86);
+const vec3 HORIZON = vec3(0.66, 0.82, 1.0);
+const vec3 GAP = vec3(0.42, 0.58, 0.88);
+
+float hash(vec2 p) {
+    vec3 q = fract(vec3(p.xyx) * 0.1031);
+    q += dot(q, q.yzx + 33.33);
+    return fract((q.x + q.y) * q.z);
+}
+
+float noise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
+               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+
+float fbm(vec2 p) {
+    float sum = 0.0;
+    float weight = 0.5;
+    for (int octave = 0; octave < 5; octave++) {
+        sum += weight * noise(p);
+        p = p * 2.03 + vec2(17.1, 9.3);
+        weight *= 0.5;
+    }
+    return sum;
+}
+
+vec3 glow(vec4 spot, vec3 color) {
+    vec2 d = (uv - spot.xy) * vec2(Aspect, 1.0) / max(spot.z, 0.001);
+    return color * spot.w * exp(-2.2 * dot(d, d));
+}
+
+void main() {
+    vec2 ndc = vec2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    vec4 near = Unproject * vec4(ndc, -1.0, 1.0);
+    vec4 far = Unproject * vec4(ndc, 0.0, 1.0);
+    vec3 ray = normalize(far.xyz / far.w - near.xyz / near.w);
+    vec3 sun = normalize(SUN);
+    float toward_sun = max(dot(ray, sun), 0.0);
+    vec3 sky = mix(HORIZON, ZENITH, smoothstep(0.0, 0.6, ray.y));
+    sky += vec3(1.0, 0.85, 0.6) * (0.25 * pow(toward_sun, 8.0) + 0.6 * pow(toward_sun, 200.0));
+    vec3 color;
+    if (ray.y > 0.0) {
+        // Thin clouds high above, thinning toward the horizon.
+        vec2 high = ray.xz / max(ray.y, 0.05) * 0.9 + vec2(Time * 0.01, 0.0);
+        float cover = smoothstep(0.52, 0.78, fbm(high)) * smoothstep(0.02, 0.25, ray.y);
+        color = mix(sky, vec3(1.0), cover * 0.85);
+    } else {
+        // The sea of clouds below: where this line of sight meets it.
+        float distance = (Sea - Eye.y) / min(ray.y, -0.001);
+        vec2 place = (Eye.xz + ray.xz * distance) * 0.045 + vec2(Time * 0.012, Time * 0.004);
+        float density = fbm(place);
+        float lit = fbm(place + sun.xz * 0.12);
+        float cloud = smoothstep(0.4, 0.58, density);
+        float shade = clamp(0.78 + (density - lit) * 2.2, 0.55, 1.08);
+        color = mix(GAP, vec3(1.0, 0.99, 0.97) * shade, cloud);
+        // Haze hides the far, streaky part of the sea.
+        color = mix(color, HORIZON, 1.0 - exp(-distance * 0.007));
+    }
+    color += 0.55 * glow(Hot, vec3(1.0, 0.45, 0.15));
+    color += 0.55 * glow(Cold, vec3(0.2, 0.5, 1.0));
+    gl_FragColor = vec4(color, 1.0) * texture2D(Texture, uv);
+}"#;
+
+/// Which background and floor the engine is shown in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Scenery {
+    /// A blue sky above a sea of clouds, the engine standing on a cloud.
+    #[default]
+    Sky,
+    /// Deep blue with a grid on the floor.
+    Grid,
+}
+
+impl Scenery {
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::Sky => Self::Grid,
+            Self::Grid => Self::Sky,
+        }
+    }
+}
+
+/// How far below the floor the sea of clouds lies, in bore radii.
+const SEA_DEPTH: f32 = 7.0;
+
 /// Strength of each glow at full heat or cold.
 const HOT_GLOW: f32 = 0.38;
 const COLD_GLOW: f32 = 0.3;
@@ -120,30 +236,43 @@ pub fn spot(matrix: Mat4, axis_x: f32, bottom: f32, top: f32) -> Option<Spot> {
 }
 
 pub struct Backdrop {
-    material: Option<Material>,
+    grid: Option<Material>,
+    sky: Option<Material>,
     mesh: Mesh,
     geometry: ChamberGeometry,
 }
 
 impl Backdrop {
     pub fn new(geometry: ChamberGeometry) -> Self {
-        let material = load_material(
-            ShaderSource::Glsl {
-                vertex: BACKDROP_VERTEX,
-                fragment: BACKDROP_FRAGMENT,
-            },
-            MaterialParams {
-                uniforms: vec![
-                    UniformDesc::new("Hot", UniformType::Float4),
-                    UniformDesc::new("Cold", UniformType::Float4),
-                    UniformDesc::new("Aspect", UniformType::Float1),
-                ],
-                ..Default::default()
-            },
-        )
-        .ok();
+        let material = |fragment, sky: bool| {
+            let mut uniforms = vec![
+                UniformDesc::new("Hot", UniformType::Float4),
+                UniformDesc::new("Cold", UniformType::Float4),
+                UniformDesc::new("Aspect", UniformType::Float1),
+            ];
+            if sky {
+                uniforms.extend([
+                    UniformDesc::new("Unproject", UniformType::Mat4),
+                    UniformDesc::new("Eye", UniformType::Float3),
+                    UniformDesc::new("Time", UniformType::Float1),
+                    UniformDesc::new("Sea", UniformType::Float1),
+                ]);
+            }
+            load_material(
+                ShaderSource::Glsl {
+                    vertex: BACKDROP_VERTEX,
+                    fragment,
+                },
+                MaterialParams {
+                    uniforms,
+                    ..Default::default()
+                },
+            )
+            .ok()
+        };
         Self {
-            material,
+            grid: material(BACKDROP_FRAGMENT, false),
+            sky: material(SKY_FRAGMENT, true),
             mesh: Mesh {
                 vertices: Vec::new(),
                 indices: vec![0, 1, 2, 0, 2, 3],
@@ -153,11 +282,26 @@ impl Backdrop {
         }
     }
 
-    /// Fills the `width` by `height` window, in screen points, with the
-    /// screen camera set. `heat` and `cold` are the reservoirs' levels
-    /// (see `heat_level` and `cold_level`).
-    pub fn draw(&mut self, camera: &Camera3D, width: f32, height: f32, heat: f32, cold: f32) {
-        let Some(material) = &self.material else {
+    /// Fills the `width` by `height` view, in screen points, in `scenery`,
+    /// with a 2D camera over it set. `heat` and `cold` are the reservoirs'
+    /// levels (see `heat_level` and `cold_level`); `seconds` drifts the
+    /// clouds.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw(
+        &mut self,
+        scenery: Scenery,
+        camera: &Camera3D,
+        width: f32,
+        height: f32,
+        heat: f32,
+        cold: f32,
+        seconds: f64,
+    ) {
+        let material = match scenery {
+            Scenery::Sky => self.sky.as_ref().or(self.grid.as_ref()),
+            Scenery::Grid => self.grid.as_ref(),
+        };
+        let Some(material) = material else {
             return;
         };
         let matrix = camera.matrix();
@@ -177,6 +321,13 @@ impl Backdrop {
             uniform(self.geometry.cold_center_x(), COLD_GLOW * cold),
         );
         material.set_uniform("Aspect", width / height.max(1.0));
+        if scenery == Scenery::Sky && self.sky.is_some() {
+            material.set_uniform("Unproject", matrix.inverse());
+            material.set_uniform("Eye", camera.position);
+            // Wrapped, so the clouds stay smooth however long it runs.
+            material.set_uniform("Time", (seconds % 100_000.0) as f32);
+            material.set_uniform("Sea", floor - SEA_DEPTH * self.geometry.cylinder_radius);
+        }
         self.mesh.vertices.clear();
         for (x, y) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
             self.mesh.vertices.push(Vertex::new2(

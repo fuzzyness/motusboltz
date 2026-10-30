@@ -123,15 +123,16 @@ const ROUND_SEGMENTS: usize = 40;
 const SMALL_SEGMENTS: usize = 20;
 const WEB_STEPS: usize = 12;
 
-/// Finishes: color and polish (see `solid.rs`).
-const ALUMINIUM: Color = finish(206, 211, 217, 0.55);
-const ALUMINIUM_INSIDE: Color = finish(146, 151, 159, 0.25);
-const RING_GROOVE: Color = finish(74, 78, 86, 0.2);
-const STEEL: Color = finish(158, 164, 174, 0.7);
-const BRIGHT_STEEL: Color = finish(200, 205, 214, 0.95);
-const BRASS: Color = finish(214, 166, 78, 0.85);
-const BRASS_DARK: Color = finish(176, 132, 58, 0.6);
-const PAINT: Color = finish(62, 72, 90, 0.3);
+/// Finishes: color and polish (see `solid.rs`), saturated in the style of
+/// a PS2 demo.
+const ALUMINIUM: Color = finish(214, 222, 236, 0.7);
+const ALUMINIUM_INSIDE: Color = finish(140, 150, 175, 0.3);
+const RING_GROOVE: Color = finish(50, 56, 80, 0.2);
+const STEEL: Color = finish(140, 156, 190, 0.75);
+const BRIGHT_STEEL: Color = finish(210, 218, 235, 0.95);
+const BRASS: Color = finish(255, 186, 36, 0.85);
+const BRASS_DARK: Color = finish(214, 132, 20, 0.6);
+const PAINT: Color = finish(48, 72, 170, 0.35);
 
 /// The crank angle of each cylinder's crank relative to the shaft angle,
 /// as in the simulation: the cold crank a quarter turn ahead.

@@ -7,29 +7,38 @@ pub mod assembly;
 pub mod backdrop;
 pub mod block;
 pub mod chamber;
+pub mod cloud;
 pub mod fire;
 pub mod floor;
 pub mod ice;
 pub mod levels;
 pub mod outline;
 pub mod particles;
+pub mod soft_view;
 pub mod solid;
 pub mod sprites;
 pub mod trails;
 
 use macroquad::prelude::{
     Camera3D,
-    Color, //
+    Color,
+    clear_background, //
 };
 
 use crate::sim::engine::{
     ConnectedChambers,
     PARTICLE_RADIUS, //
 };
+use crate::ui::draw_target::{
+    draw_to,
+    draw_to_screen, //
+};
 use assembly::Assembly;
 use backdrop::Backdrop;
+pub use backdrop::Scenery;
 use block::BlockShape;
 use chamber::ConnectedChamberVisual;
+use cloud::CloudFloor;
 use fire::Fire;
 use floor::FloorGrid;
 use ice::Ice;
@@ -38,6 +47,7 @@ use particles::{
     ParticleRenderer,
     camera_light_direction, //
 };
+use soft_view::SoftView;
 use sprites::{
     Facing,
     SpriteMaterials, //
@@ -48,6 +58,10 @@ use trails::TrailRenderer;
 /// every mesh must fit within them.
 pub const DRAW_CALL_VERTEX_CAPACITY: usize = 16_384;
 pub const DRAW_CALL_INDEX_CAPACITY: usize = 60_000;
+
+/// What distant particles fade toward in the sky: the haze near the
+/// horizon, a little, so they stay bright.
+const SKY_FADE: Color = Color::from_rgba(176, 204, 240, 255);
 
 /// Radius and height, in model units, of a vertical cylinder centered on
 /// the origin. Used for cylinder frames and for the depth-fade extent.
@@ -92,6 +106,9 @@ pub struct Scene {
     /// still show, without flames or mist.
     sprite_materials: Option<SpriteMaterials>,
     backdrop: Backdrop,
+    /// What the engine stands on in the sky scenery.
+    cloud: CloudFloor,
+    soft: SoftView,
     /// How strongly the burner, ice and glows show, easing after the
     /// sliders.
     levels: ReservoirLevels,
@@ -115,6 +132,8 @@ impl Scene {
             ice: Ice::new(shape),
             sprite_materials: SpriteMaterials::load(),
             backdrop: Backdrop::new(geometry),
+            cloud: CloudFloor::new(shape),
+            soft: SoftView::new(),
             levels: ReservoirLevels::default(),
             followed: Vec::new(),
             extent: CylinderDimensions {
@@ -124,28 +143,73 @@ impl Scene {
         }
     }
 
-    /// Eases the burner, ice and glows toward the reservoirs' settings at
-    /// `seconds` on the clock. Called once a frame, before drawing.
-    pub fn follow_reservoirs(&mut self, simulation: &ConnectedChambers, seconds: f64) {
-        self.levels
-            .follow(simulation.hot_kelvin(), simulation.cold_kelvin(), seconds);
-    }
-
-    /// Fills the window behind the engine. The screen camera must be set;
-    /// `camera` is the 3D view the engine will be drawn with.
-    pub fn draw_backdrop(&mut self, camera: &Camera3D, width: f32, height: f32) {
-        self.backdrop
-            .draw(camera, width, height, self.levels.heat, self.levels.cold);
-    }
-
-    /// Draws the engine as it is now. The 3D camera must already be set;
-    /// distant particles fade toward `background`. The flames and mist are
-    /// animated by `seconds`, the clock, so they keep moving while the
-    /// simulation is paused.
-    pub fn draw(
+    /// Draws the background and the engine for one frame into a softened
+    /// view (see `soft_view.rs`), or straight to the screen where that
+    /// cannot be built, and leaves the screen camera set. The window is
+    /// `width` by `height` in screen points at `dpi`; `background` is the
+    /// clear color; `seconds` is the clock, which eases the reservoir
+    /// effects toward the sliders and animates the flames, mist and clouds
+    /// (so they keep moving while the simulation is paused).
+    #[allow(clippy::too_many_arguments)]
+    pub fn render(
         &mut self,
         simulation: &ConnectedChambers,
         camera: &Camera3D,
+        scenery: Scenery,
+        background: Color,
+        seconds: f64,
+        width: f32,
+        height: f32,
+        dpi: f32,
+    ) {
+        self.levels
+            .follow(simulation.hot_kelvin(), simulation.cold_kelvin(), seconds);
+        // Macroquad's camera is not `Clone`; copy it field by field.
+        let mut camera = Camera3D {
+            position: camera.position,
+            target: camera.target,
+            up: camera.up,
+            fovy: camera.fovy,
+            aspect: camera.aspect,
+            projection: camera.projection,
+            render_target: None,
+            viewport: camera.viewport,
+            z_near: camera.z_near,
+            z_far: camera.z_far,
+        };
+        if let Some(target) = self.soft.target(width, height, dpi) {
+            draw_to(&SoftView::flat_camera(&target, width, height));
+            clear_background(background);
+            camera.render_target = Some(target);
+        }
+        self.backdrop.draw(
+            scenery,
+            &camera,
+            width,
+            height,
+            self.levels.heat,
+            self.levels.cold,
+            seconds,
+        );
+        draw_to(&camera);
+        let fade = match scenery {
+            Scenery::Sky => SKY_FADE,
+            Scenery::Grid => background,
+        };
+        self.draw(simulation, &camera, scenery, fade, seconds);
+        draw_to_screen();
+        self.soft.present(width, height);
+    }
+
+    /// Draws the engine as it is now in `scenery`. The 3D camera must
+    /// already be set; distant particles fade toward `background`. The flames and mist are
+    /// animated by `seconds`, the clock, so they keep moving while the
+    /// simulation is paused.
+    fn draw(
+        &mut self,
+        simulation: &ConnectedChambers,
+        camera: &Camera3D,
+        scenery: Scenery,
         background: Color,
         seconds: f64,
     ) {
@@ -162,6 +226,9 @@ impl Scene {
         self.assembly.draw(pistons, camera);
         self.fire.draw_burner();
         self.ice.draw_solid();
+        if scenery == Scenery::Sky {
+            self.cloud.draw(camera, camera_light_direction(camera));
+        }
         self.followed.clear();
         if let Some(tracers) = simulation.tracers() {
             self.followed.extend(tracers.indices());
@@ -177,7 +244,9 @@ impl Scene {
         );
         // The see-through grid and trails after everything solid, so they
         // blend over it.
-        self.floor.draw();
+        if scenery == Scenery::Grid {
+            self.floor.draw();
+        }
         if let Some(tracers) = simulation.tracers() {
             self.trails.draw(tracers, &simulation.particles, camera);
         }

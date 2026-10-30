@@ -18,6 +18,7 @@ const CAMERA_RESET_KEY: KeyCode = KeyCode::R;
 const SLOW_KEY: KeyCode = KeyCode::L;
 const KEYS_KEY: KeyCode = KeyCode::H;
 const TRACERS_KEY: KeyCode = KeyCode::F;
+const SCENERY_KEY: KeyCode = KeyCode::V;
 /// The additive kick, which can overdrive the engine. Left out of the help
 /// text on purpose; it exists for testing.
 const KICK_KEY: KeyCode = KeyCode::K;
@@ -50,7 +51,7 @@ const ZOOM_OUT_KEYS: [KeyCode; 2] = [KeyCode::Minus, KeyCode::KpSubtract];
 
 /// Every key binding the Keys list shows, as (keys, what they do). The
 /// hidden kick is left out.
-pub const SHORTCUTS: [(&str, &str); 13] = [
+pub const SHORTCUTS: [(&str, &str); 14] = [
     ("Enter", "Start the engine"),
     ("Space", "Pause or resume"),
     ("L", "Slow motion"),
@@ -60,6 +61,7 @@ pub const SHORTCUTS: [(&str, &str); 13] = [
     ("I", "Simple or advanced readings"),
     ("G", "Show or hide the panel"),
     ("H", "Show or hide these keys"),
+    ("V", "Sky or grid scenery"),
     ("Drag, WASD", "Turn the view"),
     ("Shift + either", "Move the view"),
     ("Wheel, - =", "Zoom"),
@@ -90,6 +92,7 @@ pub struct KeyCommands {
     pub camera_reset: bool,
     pub slow: bool,
     pub tracers: bool,
+    pub scenery: bool,
     pub kick: bool,
     /// Index of the fill preset chosen with keys 1 to 5.
     pub fill_preset: Option<usize>,
@@ -112,6 +115,7 @@ impl KeyCommands {
             camera_reset: pressed(CAMERA_RESET_KEY),
             slow: pressed(SLOW_KEY),
             tracers: pressed(TRACERS_KEY),
+            scenery: pressed(SCENERY_KEY),
             kick: pressed(KICK_KEY),
             fill_preset: FILL_KEYS.into_iter().position(&pressed),
         }

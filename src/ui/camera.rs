@@ -23,6 +23,14 @@ const INITIAL_OFFSET: Vec3 = Vec3::new(8.4, 5.6, 8.4);
 /// fits the first view.
 const ORBIT_CENTER: Vec3 = Vec3::new(0.0, 2.6, 0.0);
 
+/// The nearest and farthest distances drawn. The softened view's depth
+/// buffer has 16 bits, so the range is kept as tight as the scene allows
+/// (the camera never comes closer than `MIN_DISTANCE` times the view's
+/// scale, at least 4, to the orbit center); a far range of 10,000 with a
+/// near of 0.01 left surfaces flickering through each other.
+const NEAR: f32 = 1.0;
+const FAR: f32 = 400.0;
+
 const ORBIT_SENSITIVITY: f32 = 0.005;
 const POLE_MARGIN: f32 = 0.01;
 const MAX_PITCH: f32 = FRAC_PI_2 - POLE_MARGIN;
@@ -203,6 +211,8 @@ impl OrbitCamera {
             position: ORBIT_CENTER + orbit_offset + pan,
             target: ORBIT_CENTER + pan,
             up: Vec3::Y,
+            z_near: NEAR,
+            z_far: FAR,
             ..Default::default()
         }
     }

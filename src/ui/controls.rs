@@ -1,5 +1,5 @@
-//! The on-screen controls. Panel and Keys toggles at the top left of the
-//! uncovered scene; a row of Reset, Pause, Slow and Tracers centered along
+//! The on-screen controls. Panel, Keys and scenery toggles at the top left
+//! of the uncovered scene; a row of Reset, Pause, Slow and Tracers centered along
 //! the bottom, with a large Start button above it whenever pressing it
 //! would help; and in the column at the right, the hot, cold and helium
 //! sliders. None of them sits on a background of its own, so the scene
@@ -21,8 +21,15 @@ use crate::ui::button::{
     Label,
     Look, //
 };
+use crate::ui::layout::{
+    CONTROL_WIDTH,
+    control_left, //
+};
 use crate::ui::pen::Pen;
-use crate::ui::slider::Slider;
+use crate::ui::slider::{
+    self,
+    Slider, //
+};
 
 /// Inset of the toggles and the bottom row from the free part's edges.
 pub const MARGIN: f32 = 16.0;
@@ -44,12 +51,16 @@ const NO_GAP_TIP: &str = "Tip: drag Hot side up first, or the flywheel will run 
 const TIP_SIZE: f32 = 15.0;
 const TIP_GAP: f32 = 12.0;
 const TIP_COLOR: Color = Color::from_rgba(200, 212, 225, 255);
+/// The shade behind the sliders and other loose text over the sky.
+pub const BACKING: Color = Color::new(0.06, 0.09, 0.15, 0.62);
+pub const BACKING_RADIUS: f32 = 12.0;
 
 /// On-screen button actions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
     TogglePanel,
     ToggleKeys,
+    ToggleScenery,
     ResetGas,
     TogglePause,
     ToggleSlow,
@@ -57,7 +68,11 @@ pub enum Action {
     Start,
 }
 
-const TOGGLES: [Action; 2] = [Action::TogglePanel, Action::ToggleKeys];
+const TOGGLES: [Action; 3] = [
+    Action::TogglePanel,
+    Action::ToggleKeys,
+    Action::ToggleScenery,
+];
 const ROW: [Action; 4] = [
     Action::ResetGas,
     Action::TogglePause,
@@ -77,6 +92,8 @@ pub struct ButtonStates {
     pub start: bool,
     /// Both sides are at the same temperature, so a tip shows over Start.
     pub no_gap: bool,
+    /// The sky scenery is shown (the grid otherwise).
+    pub sky: bool,
 }
 
 impl ButtonStates {
@@ -89,6 +106,7 @@ impl ButtonStates {
         keys: true,
         start: true,
         no_gap: true,
+        sky: true,
     };
 }
 
@@ -99,6 +117,8 @@ impl Action {
             Self::TogglePanel if states.panel => ("Hide panel", "G"),
             Self::TogglePanel => ("Show panel", "G"),
             Self::ToggleKeys => ("Keys", "H"),
+            Self::ToggleScenery if states.sky => ("Grid view", "V"),
+            Self::ToggleScenery => ("Sky view", "V"),
             Self::ResetGas => ("Reset", "T"),
             Self::TogglePause if states.paused => ("Resume", "Space"),
             Self::TogglePause => ("Pause", "Space"),
@@ -116,7 +136,7 @@ impl Action {
             Self::ToggleSlow => states.slow,
             Self::ToggleTracers => states.tracers,
             Self::Start => return Look::Primary,
-            Self::TogglePanel | Self::ResetGas => false,
+            Self::TogglePanel | Self::ToggleScenery | Self::ResetGas => false,
         };
         if on { Look::On } else { Look::Plain }
     }
@@ -211,6 +231,21 @@ pub fn place_buttons(pen: &Pen, area: SceneArea, states: ButtonStates) -> Vec<Pl
     }
     placed
 }
+
+/// The area behind the sliders for a window `width` points wide.
+pub fn slider_column(width: f32) -> Rect {
+    let left = control_left(width) - BACKING_PAD;
+    let (top, bottom) = slider::column_span();
+    Rect::new(
+        left,
+        top - BACKING_PAD,
+        CONTROL_WIDTH + 2.0 * BACKING_PAD,
+        bottom - top + 2.0 * BACKING_PAD,
+    )
+}
+
+/// How far the shade reaches past what it is behind.
+const BACKING_PAD: f32 = 14.0;
 
 /// Width that fits the action's label in every state, so a button does not
 /// change size when its label changes.
@@ -313,6 +348,18 @@ impl Controls {
                 placed.look,
                 self.hovered == Some(placed.action),
                 placed.size,
+            );
+        }
+        if states.sky {
+            // Over a bright sky, white labels need a shade behind them.
+            let column = slider_column(macroquad::prelude::screen_width());
+            pen.round_rect(
+                column.x,
+                column.y,
+                column.w,
+                column.h,
+                BACKING_RADIUS,
+                BACKING,
             );
         }
         self.hot.draw(pen);

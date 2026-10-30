@@ -15,11 +15,15 @@ use macroquad::prelude::{
     is_mouse_button_pressed,
     mouse_position,
     next_frame,
+    screen_dpi_scale,
     screen_height,
     screen_width, //
 };
 
-use crate::graphics::Scene;
+use crate::graphics::{
+    Scene,
+    Scenery, //
+};
 use crate::sim::engine::ConnectedChambers;
 use crate::sim::geometry::ChamberGeometry;
 use crate::sim::pistons::KickDirection;
@@ -34,15 +38,13 @@ use crate::ui::camera::{
 };
 use crate::ui::controls::{
     Action,
+    BACKING,
+    BACKING_RADIUS,
     ButtonStates,
     Controls,
     MARGIN,
     SceneArea,
     TOGGLES_BOTTOM, //
-};
-use crate::ui::draw_target::{
-    draw_to,
-    draw_to_screen, //
 };
 use crate::ui::fonts;
 use crate::ui::frame_stats::{
@@ -152,6 +154,8 @@ struct App {
     /// Tracers stay on through refills, which choose new particles.
     tracers: bool,
     show_keys: bool,
+    /// The sky with a cloud to stand on, or the dark grid.
+    scenery: Scenery,
     start_prompt: StartPrompt,
     panel: EnginePanel,
     /// The panel as last painted, repainted only when it changes.
@@ -183,6 +187,7 @@ impl App {
             slow: false,
             tracers: false,
             show_keys: false,
+            scenery: Scenery::default(),
             start_prompt: StartPrompt::new(),
             frame_stats: FrameStats::new(),
             simulation,
@@ -210,6 +215,7 @@ impl App {
             keys: self.show_keys,
             start: self.start_prompt.shown(),
             no_gap: self.simulation.hot_kelvin() <= self.simulation.cold_kelvin(),
+            sky: self.scenery == Scenery::Sky,
         }
     }
 
@@ -269,6 +275,9 @@ impl App {
         if keys.keys || events.action == Some(Action::ToggleKeys) {
             self.show_keys = !self.show_keys;
         }
+        if keys.scenery || events.action == Some(Action::ToggleScenery) {
+            self.scenery = self.scenery.toggled();
+        }
         if keys.camera_reset {
             self.camera.reset();
         }
@@ -323,14 +332,16 @@ impl App {
         // camera keeps the engine at the window's middle.
         let camera = self.camera.camera();
         clear_background(BACKGROUND_COLOR);
-        let seconds = macroquad::time::get_time();
-        self.scene.follow_reservoirs(&self.simulation, seconds);
-        self.scene
-            .draw_backdrop(&camera, screen_width(), screen_height());
-        draw_to(&camera);
-        self.scene
-            .draw(&self.simulation, &camera, BACKGROUND_COLOR, seconds);
-        draw_to_screen();
+        self.scene.render(
+            &self.simulation,
+            &camera,
+            self.scenery,
+            BACKGROUND_COLOR,
+            macroquad::time::get_time(),
+            screen_width(),
+            screen_height(),
+            screen_dpi_scale(),
+        );
 
         // Measure every string first, then draw (see `Pen` for why).
         let panel_stale = self.show_panel && self.panel.needs_paint(self.status(), area.height);
@@ -356,10 +367,22 @@ impl App {
                 });
             }
         }
+        let label_right = screen_width() - CONTROL_RIGHT_MARGIN;
+        let label_y = screen_height() - BUILD_LABEL_BOTTOM_Y;
+        if self.scenery == Scenery::Sky {
+            let width = pen.measure(BUILD_LABEL, BUILD_LABEL_FONT_SIZE);
+            backing(
+                pen,
+                label_right - width,
+                label_y,
+                width,
+                BUILD_LABEL_FONT_SIZE,
+            );
+        }
         pen.text_right(
             BUILD_LABEL,
-            screen_width() - CONTROL_RIGHT_MARGIN,
-            screen_height() - BUILD_LABEL_BOTTOM_Y,
+            label_right,
+            label_y,
             BUILD_LABEL_FONT_SIZE,
             BUILD_LABEL_COLOR,
         );
@@ -395,18 +418,31 @@ impl App {
             .limited(macroquad::time::get_time())
             .then(|| (LIMITED_TEXT.to_owned(), WARNING_COLOR));
         let mut y = top;
+        let room = area.right() - area.edge - 2.0 * MARGIN;
         for (text, color) in stats.into_iter().chain(warning) {
-            pen.fitted(
-                &text,
-                area.edge + MARGIN,
-                y,
-                area.right() - area.edge - 2.0 * MARGIN,
-                CORNER_FONT_SIZE,
-                color,
-            );
+            if self.scenery == Scenery::Sky {
+                let size = pen.fitted_size(&text, room, CORNER_FONT_SIZE);
+                let width = pen.measure(&text, size);
+                backing(pen, area.edge + MARGIN, y, width, size);
+            }
+            pen.fitted(&text, area.edge + MARGIN, y, room, CORNER_FONT_SIZE, color);
             y += CORNER_LINE_HEIGHT;
         }
     }
+}
+
+/// A shade behind one line of text at `x` with its baseline at `y`, so it
+/// reads over the bright sky.
+fn backing(pen: &Pen, x: f32, y: f32, width: f32, size: f32) {
+    const PAD: f32 = 7.0;
+    pen.round_rect(
+        x - PAD,
+        y - size - PAD / 2.0,
+        width + 2.0 * PAD,
+        size * 1.35 + PAD,
+        BACKING_RADIUS,
+        BACKING,
+    );
 }
 
 #[cfg(test)]

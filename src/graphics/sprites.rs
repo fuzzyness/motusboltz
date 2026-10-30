@@ -93,8 +93,8 @@ pub const MAX_SPRITES: usize = if DRAW_CALL_VERTEX_CAPACITY / VERTICES_PER_SPRIT
     DRAW_CALL_INDEX_CAPACITY / INDICES_PER_SPRITE
 };
 
-/// The two ways sprites mix with what is already drawn. Both test depth,
-/// so the engine hides what is behind it.
+/// The ways sprites mix with what is already drawn. All test depth, so
+/// the engine hides what is behind them.
 pub struct SpriteMaterials {
     /// Adds light: flames, embers and their glow on the floor.
     pub glow: Material,
@@ -103,14 +103,14 @@ pub struct SpriteMaterials {
 }
 
 impl SpriteMaterials {
-    /// Builds both materials, or returns `None` if the shader cannot be
+    /// Builds the materials, or returns `None` if the shader cannot be
     /// built; the effects are then left out.
     pub fn load() -> Option<Self> {
-        let material = |behind: BlendFactor| {
+        let material = |behind: BlendFactor, fragment| {
             load_material(
                 ShaderSource::Glsl {
                     vertex: SPRITE_VERTEX,
-                    fragment: SPRITE_FRAGMENT,
+                    fragment,
                 },
                 MaterialParams {
                     pipeline_params: sprite_pipeline(behind),
@@ -120,8 +120,11 @@ impl SpriteMaterials {
             .ok()
         };
         Some(Self {
-            glow: material(BlendFactor::One)?,
-            haze: material(BlendFactor::OneMinusValue(BlendValue::SourceAlpha))?,
+            glow: material(BlendFactor::One, SPRITE_FRAGMENT)?,
+            haze: material(
+                BlendFactor::OneMinusValue(BlendValue::SourceAlpha),
+                SPRITE_FRAGMENT,
+            )?,
         })
     }
 }

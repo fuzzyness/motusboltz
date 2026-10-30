@@ -54,6 +54,12 @@ pub const HOT_Y: f32 = 58.0;
 const SLIDER_SPACING: f32 = 90.0;
 const COLD_Y: f32 = HOT_Y + SLIDER_SPACING;
 const CONCENTRATION_Y: f32 = COLD_Y + SLIDER_SPACING;
+/// The top of the first slider's labels and the bottom of the last one's
+/// range, in screen points.
+pub fn column_span() -> (f32, f32) {
+    (HOT_Y - AREA_ABOVE, CONCENTRATION_Y + AREA_BELOW)
+}
+
 const KELVIN_STEP: f32 = 1.0;
 const MOLARITY_STEP: f32 = 0.005;
 const TRACK_COLOR: Color = Color::new(0.27, 0.33, 0.40, 0.9);

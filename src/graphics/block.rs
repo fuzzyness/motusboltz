@@ -73,12 +73,13 @@ const INTERIOR_SHADE: u8 = 150;
 /// Triangles smaller than this (in square model units) are left out.
 const MIN_TRIANGLE_AREA: f32 = 1e-9;
 
-// Plain steel, steel warmed or cooled to tell the two sides apart, and a
-// muted green for the insulated opening (the color of its old outline).
-const STEEL: Color = Color::from_rgba(150, 157, 166, 255);
-const OPENING_STEEL: Color = Color::from_rgba(134, 168, 158, 255);
-const HOT_STEEL: Color = Color::from_rgba(178, 140, 118, 255);
-const COLD_STEEL: Color = Color::from_rgba(122, 146, 176, 255);
+// Saturated, painted-looking colors in the style of a PS2 demo: copper on
+// the hot side, cobalt on the cold side, a neutral steel where they meet,
+// and teal for the insulated opening (the color of its old outline).
+const STEEL: Color = Color::from_rgba(150, 160, 178, 255);
+const OPENING_STEEL: Color = Color::from_rgba(52, 196, 168, 255);
+const HOT_STEEL: Color = Color::from_rgba(232, 122, 58, 255);
+const COLD_STEEL: Color = Color::from_rgba(58, 128, 236, 255);
 
 const BLOCK_VERTEX: &str = r#"#version 100
 attribute vec3 position;
@@ -137,16 +138,20 @@ void main() {
     float side = smoothstep(-0.6, 0.6, world.x);
     if (dot(n, toward_eye) < 0.0) {
         // Seen from inside the metal: the face of the cut.
-        vec3 cut = mix(vec3(0.50, 0.45, 0.41), vec3(0.41, 0.46, 0.53), side);
+        vec3 cut = mix(vec3(0.62, 0.30, 0.14), vec3(0.14, 0.30, 0.62), side);
         gl_FragColor = vec4(cut, 1.0);
         return;
     }
     float diffuse = max(dot(n, Light), 0.0);
     float facing = max(dot(n, toward_eye), 0.0);
-    float shine = pow(max(dot(n, normalize(Light + toward_eye)), 0.0), 40.0);
+    float shine = pow(max(dot(n, normalize(Light + toward_eye)), 0.0), 24.0);
+    float rim = pow(1.0 - facing, 3.0);
+    // Faint turned rings around the outside, so the paint is not flat.
+    float rings = 0.94 + 0.06 * smoothstep(0.2, 0.8, abs(fract(world.y * 2.2) - 0.5) * 2.0);
     // Vertex alpha is shade: 1 outside, less on the interior surfaces.
     float shade = color.a;
-    vec3 lit = shade * (color.rgb * (0.28 + 0.52 * diffuse + 0.20 * facing) + vec3(0.30) * shine);
+    vec3 lit = shade * (color.rgb * rings * (0.32 + 0.6 * diffuse + 0.15 * facing)
+        + vec3(0.5) * shine + vec3(0.55, 0.7, 1.0) * rim * 0.22);
     gl_FragColor = vec4(lit, 1.0) * texture2D(Texture, uv);
 }"#;
 

@@ -5,7 +5,7 @@
 //! polished the metal is there: 0 is a dull, painted or rough surface, 1 a
 //! bright, polished one. The shader lights the parts from the same key
 //! light as the engine block, adds a highlight that tightens with polish,
-//! and reflects a simple room (dark floor, lighter above) in the metal.
+//! and reflects a stylized sky in the metal, as PS2 demos did with chrome.
 
 use macroquad::models::{
     Mesh,
@@ -74,16 +74,18 @@ void main() {
     }
     float polish = color.a;
     float diffuse = max(dot(n, Light), 0.0);
-    float shine = pow(max(dot(n, normalize(Light + toward_eye)), 0.0), mix(10.0, 80.0, polish))
-        * mix(0.12, 0.8, polish);
-    // The room seen in the metal: dark below, lighter above.
+    float shine = pow(max(dot(n, normalize(Light + toward_eye)), 0.0), mix(12.0, 60.0, polish))
+        * mix(0.2, 0.9, polish);
+    // A stylized sky seen in the metal, as PS2 demos mapped chrome: blue
+    // above, a bright band at the horizon, cloud white below.
     vec3 seen = reflect(-toward_eye, n);
-    vec3 room = mix(vec3(0.08, 0.10, 0.14), vec3(0.62, 0.67, 0.75), smoothstep(-0.3, 0.7, seen.y));
+    vec3 sky = mix(vec3(1.0, 0.98, 0.95), vec3(0.30, 0.55, 1.0), smoothstep(0.0, 0.7, seen.y));
+    vec3 room = mix(vec3(0.72, 0.78, 0.92), sky, smoothstep(-0.25, 0.05, seen.y));
     float edge = pow(1.0 - max(dot(n, toward_eye), 0.0), 3.0);
     vec3 base = color.rgb;
-    vec3 lit = base * (0.24 + 0.6 * diffuse)
-        + base * room * (0.45 * polish)
-        + room * edge * (0.3 * polish)
+    vec3 lit = base * (0.3 + 0.62 * diffuse)
+        + base * room * (0.4 * polish)
+        + room * edge * (0.35 * polish)
         + vec3(shine);
     gl_FragColor = vec4(lit, 1.0) * texture2D(Texture, uv);
 }"#;

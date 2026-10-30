@@ -1,5 +1,8 @@
-//! Every particle as a small shaded sphere, colored by its kinetic energy,
-//! lit from the camera and faded with depth.
+//! Every particle as a small glossy sphere, colored by its kinetic energy,
+//! lit from the camera and faded a little with depth. Where the shader can
+//! be built, each sphere is lit per pixel, with a bright highlight and a
+//! rim of light, so even these few facets look round and shiny, like the
+//! balls in a PS2 demo; otherwise each vertex is shaded on the CPU.
 
 use std::f32::consts::{
     PI,
@@ -14,9 +17,18 @@ use macroquad::models::{
 use macroquad::prelude::{
     Camera3D,
     Color,
-    ORANGE,
+    Comparison,
+    Material,
+    MaterialParams,
+    PipelineParams,
+    ShaderSource,
+    UniformDesc,
+    UniformType,
     Vec2,
     Vec3,
+    gl_use_default_material,
+    gl_use_material,
+    load_material,
     vec3, //
 };
 
@@ -46,9 +58,9 @@ const LOW_DETAIL_LONGITUDE_SEGMENTS: usize = 4;
 
 // Colors encode each particle's kinetic energy. A single particle has no
 // temperature; temperature is a property of many particles.
-const COLD_COLOR: Color = Color::from_rgba(60, 151, 255, 255);
-const NORMAL_COLOR: Color = ORANGE;
-const HOT_COLOR: Color = Color::from_rgba(255, 67, 62, 255);
+const COLD_COLOR: Color = Color::from_rgba(30, 120, 255, 255);
+const NORMAL_COLOR: Color = Color::from_rgba(255, 150, 0, 255);
+const HOT_COLOR: Color = Color::from_rgba(255, 32, 48, 255);
 
 // Mean kinetic energy per particle at 300 K: 3 kT / 2 in reduced units.
 const NORMAL_PARTICLE_ENERGY: f32 = 1.5 * INITIAL_TEMPERATURE;
@@ -58,16 +70,68 @@ const HOT_ENERGY_MULTIPLIER: f32 = 3.0;
 const LIGHT_DIRECTION: Vec3 = Vec3::new(0.4, 0.7, 0.6);
 const AMBIENT_LIGHT: f32 = 0.35;
 const DIFFUSE_LIGHT: f32 = 0.65;
-const DEPTH_FADE_STRENGTH: f32 = 0.8;
+const DEPTH_FADE_STRENGTH: f32 = 0.35;
 
 // With tracers on, the followed particles are drawn this much larger at
-// full brightness, and the rest are faded this far toward the background.
+// full brightness and shine; the rest are muted, losing most of their
+// color, much of their brightness and nearly all their shine, so the
+// followed ones and their trails stand out over any background.
 const FOLLOWED_SIZE: f32 = 1.6;
-const UNFOLLOWED_DIM: f32 = 0.55;
+const UNFOLLOWED_GRAY: f32 = 0.7;
+const UNFOLLOWED_BRIGHTNESS: f32 = 0.5;
+const UNFOLLOWED_SHINE: f32 = 0.1;
 
 // Brief collision highlight; purely visual, it changes no energy.
 const COLLISION_FLASH_COLOR: Color = Color::from_rgba(255, 252, 226, 255);
 const COLLISION_FLASH_STRENGTH: f32 = 0.3;
+
+const PARTICLE_VERTEX: &str = r#"#version 100
+attribute vec3 position;
+attribute vec2 texcoord;
+attribute vec4 color0;
+attribute vec4 normal;
+
+varying lowp vec4 color;
+varying lowp vec2 uv;
+varying vec3 world;
+varying vec3 surface_normal;
+
+uniform mat4 Model;
+uniform mat4 Projection;
+
+void main() {
+    vec4 placed = Model * vec4(position, 1.0);
+    world = placed.xyz;
+    surface_normal = normal.xyz;
+    color = color0 / 255.0;
+    uv = texcoord;
+    gl_Position = Projection * placed;
+}"#;
+
+/// Lit per pixel: the energy color in diffuse light, a white highlight and
+/// a rim of the same color toward the edges, both scaled by the shine in
+/// the vertex alpha.
+const PARTICLE_FRAGMENT: &str = r#"#version 100
+precision mediump float;
+
+varying lowp vec4 color;
+varying lowp vec2 uv;
+varying vec3 world;
+varying vec3 surface_normal;
+
+uniform sampler2D Texture;
+uniform vec3 Eye;
+uniform vec3 Light;
+
+void main() {
+    vec3 n = normalize(surface_normal);
+    vec3 toward_eye = normalize(Eye - world);
+    float diffuse = max(dot(n, Light), 0.0);
+    float shine = pow(max(dot(n, normalize(Light + toward_eye)), 0.0), 36.0);
+    float rim = pow(1.0 - max(dot(n, toward_eye), 0.0), 2.5);
+    vec3 lit = color.rgb * (0.38 + 0.72 * diffuse) + (vec3(0.75 * shine) + color.rgb * rim * 0.35) * color.a;
+    gl_FragColor = vec4(lit, 1.0) * texture2D(Texture, uv);
+}"#;
 
 /// Maps a particle's kinetic energy (reduced units) to blue, orange or red on
 /// a fixed scale: blue below the 300 K average, orange at it, red at 3x.
@@ -80,6 +144,19 @@ fn kinetic_energy_color(energy: f32) -> Color {
 
         mix_color(NORMAL_COLOR, HOT_COLOR, progress)
     }
+}
+
+/// A particle's color muted for tracer mode: mostly gray and darker.
+fn muted(color: Color) -> Color {
+    let gray = 0.3 * color.r + 0.59 * color.g + 0.11 * color.b;
+    shade(
+        mix_color(
+            color,
+            Color::new(gray, gray, gray, color.a),
+            UNFOLLOWED_GRAY,
+        ),
+        UNFOLLOWED_BRIGHTNESS,
+    )
 }
 
 /// Places the light in camera space so orbiting does not darken every sphere.
@@ -244,6 +321,11 @@ impl SphereTemplate {
 /// only when the particle count changes.
 pub struct ParticleRenderer {
     template: SphereTemplate,
+    /// The per-pixel lighting, made on the first draw (it needs a window);
+    /// `Some(None)` where it cannot be built.
+    shader: Option<Option<Material>>,
+    /// Whether the shader lights the spheres, so the CPU does not.
+    shaded: bool,
     batches: Vec<Mesh>,
     particle_count: usize,
     low_detail: bool,
@@ -271,6 +353,8 @@ impl ParticleRenderer {
 
         Self {
             template,
+            shader: None,
+            shaded: false,
             batches: Vec::new(),
             particle_count: 0,
             low_detail: false,
@@ -307,7 +391,10 @@ impl ParticleRenderer {
             for particle_index in 0..count {
                 // Colors and positions are overwritten in prepare().
                 for &position in &self.template.positions {
-                    vertices.push(Vertex::new2(position, Vec2::ZERO, NORMAL_COLOR));
+                    // A unit sphere's points are its normals.
+                    let mut vertex = Vertex::new2(position, Vec2::ZERO, NORMAL_COLOR);
+                    vertex.normal = position.extend(0.0);
+                    vertices.push(vertex);
                 }
 
                 let base = (particle_index * vertices_per_particle) as u16;
@@ -339,6 +426,8 @@ impl ParticleRenderer {
         chamber: CylinderDimensions,
         background: Color,
     ) {
+        let shader = self.shader.get_or_insert_with(load_particle_shader);
+        self.shaded = shader.is_some();
         self.prepare(
             particles,
             collision_flashes,
@@ -348,9 +437,15 @@ impl ParticleRenderer {
             chamber,
             background,
         );
+        if let Some(Some(material)) = &self.shader {
+            material.set_uniform("Eye", camera.position);
+            material.set_uniform("Light", camera_light_direction(camera));
+            gl_use_material(material);
+        }
         for batch in &self.batches {
             draw_mesh(batch);
         }
+        gl_use_default_material();
     }
 
     /// Updates reusable CPU buffers separately from GPU submission.
@@ -401,27 +496,58 @@ impl ParticleRenderer {
                 let energy = gas::particle_kinetic_energy(thermal_velocity);
                 let base_color = kinetic_energy_color(energy);
                 let color = collision_color(base_color, flash);
-                let (fade, size) = match (tracing, followed) {
-                    (true, true) => (0.0, radius * FOLLOWED_SIZE),
-                    (true, false) => {
-                        let depth = depth_fade.amount(particle.position);
-                        (1.0 - (1.0 - depth) * (1.0 - UNFOLLOWED_DIM), radius)
-                    }
-                    (false, _) => (depth_fade.amount(particle.position), radius),
+                let (color, fade, size, shine) = match (tracing, followed) {
+                    (true, true) => (color, 0.0, radius * FOLLOWED_SIZE, 1.0),
+                    (true, false) => (
+                        muted(color),
+                        depth_fade.amount(particle.position),
+                        radius,
+                        UNFOLLOWED_SHINE,
+                    ),
+                    (false, _) => (color, depth_fade.amount(particle.position), radius, 1.0),
                 };
 
+                let shaded = self.shaded;
                 for ((vertex, &offset), &brightness) in vertices
                     .iter_mut()
                     .zip(&self.template.positions)
                     .zip(&self.template.brightness)
                 {
+                    let brightness = if shaded { 1.0 } else { brightness };
                     vertex.position = particle.position + offset * size;
 
-                    vertex.color = mix_color(shade(color, brightness), background, fade).into();
+                    let mut lit = mix_color(shade(color, brightness), background, fade);
+                    // The shader reads alpha as shine; drawn plainly, alpha
+                    // would be transparency.
+                    lit.a = if shaded { shine } else { 1.0 };
+                    vertex.color = lit.into();
                 }
             }
         }
     }
+}
+
+/// The per-pixel lighting, or `None` if its shader cannot be built.
+fn load_particle_shader() -> Option<Material> {
+    load_material(
+        ShaderSource::Glsl {
+            vertex: PARTICLE_VERTEX,
+            fragment: PARTICLE_FRAGMENT,
+        },
+        MaterialParams {
+            pipeline_params: PipelineParams {
+                depth_write: true,
+                depth_test: Comparison::LessOrEqual,
+                ..Default::default()
+            },
+            uniforms: vec![
+                UniformDesc::new("Eye", UniformType::Float3),
+                UniformDesc::new("Light", UniformType::Float3),
+            ],
+            ..Default::default()
+        },
+    )
+    .ok()
 }
 
 #[cfg(test)]

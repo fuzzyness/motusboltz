@@ -80,10 +80,19 @@ fn kinetic_colors_use_an_absolute_energy_scale() {
     let middle = kinetic_energy_color(NORMAL_PARTICLE_ENERGY);
     let high = kinetic_energy_color(NORMAL_PARTICLE_ENERGY * HOT_ENERGY_MULTIPLIER);
 
-    assert_eq!(low, COLD_COLOR);
-    assert_eq!(middle, NORMAL_COLOR);
-    assert_eq!(high, HOT_COLOR);
-    assert_eq!(kinetic_energy_color(f32::MAX), HOT_COLOR);
+    // Equal to within rounding, which mixing at the ends can leave.
+    let same = |a: Color, b: Color| {
+        assert!(
+            [a.r - b.r, a.g - b.g, a.b - b.b, a.a - b.a]
+                .iter()
+                .all(|d| d.abs() < 1e-6),
+            "{a:?} is not {b:?}"
+        );
+    };
+    same(low, COLD_COLOR);
+    same(middle, NORMAL_COLOR);
+    same(high, HOT_COLOR);
+    same(kinetic_energy_color(f32::MAX), HOT_COLOR);
 
     let between = kinetic_energy_color(NORMAL_PARTICLE_ENERGY / 2.0);
     assert!(between.b > NORMAL_COLOR.b);

@@ -25,11 +25,12 @@ use crate::sim::tracers::{
 };
 
 /// Ribbon width, in model units (a particle is 0.26 across).
-const TRAIL_WIDTH: f32 = 0.07;
-/// Pale yellow stands out against both the warm and the cool particles.
-const TRAIL_COLOR: Color = Color::from_rgba(255, 238, 180, 255);
+const TRAIL_WIDTH: f32 = 0.1;
+/// Bright yellow stands out against the muted particles and against both
+/// the sky and the dark grid.
+const TRAIL_COLOR: Color = Color::from_rgba(255, 224, 40, 255);
 /// Opacity of the newest end of a trail.
-const TRAIL_OPACITY: f32 = 0.95;
+const TRAIL_OPACITY: f32 = 1.0;
 const VERTICES_PER_SEGMENT: usize = 4;
 const INDICES_PER_SEGMENT: usize = 6;
 
