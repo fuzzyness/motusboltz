@@ -47,8 +47,8 @@ const LOAD_DRAG: f32 = REFERENCE_LOAD_DRAG * DYNAMICS_TIME_SCALE * DYNAMICS_TIME
 /// Flywheel energy Start gives a shaft at rest, at the default fill or
 /// below, booked as starter work. At the default fill it carries the crank
 /// past the first compression with a wide margin and brings it close to the
-/// heated engine's running speed (21 s per turn from Start, about 19 s
-/// settled at 1200/100 K). The hidden additive kick adds a change in speed
+/// heated engine's running speed (about 7 s per turn per unit of time
+/// scale from Start, settling near 6.5 at 1200/100 K). The hidden additive kick adds a change in speed
 /// worth this much from rest.
 const STARTER_ENERGY: f64 = 1_600.0;
 

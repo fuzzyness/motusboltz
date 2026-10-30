@@ -4,6 +4,7 @@
 
 pub mod camera;
 pub mod controls;
+pub mod draw_target;
 pub mod frame_stats;
 pub mod input;
 pub mod layer;

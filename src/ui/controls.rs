@@ -1,4 +1,4 @@
-//! The right-hand column: four buttons above the hot, cold and helium
+//! The right-hand column: six buttons above the hot, cold and helium
 //! sliders.
 
 use macroquad::prelude::{
@@ -21,8 +21,8 @@ use crate::ui::pen::Pen;
 use crate::ui::slider::Slider;
 
 const CONTROL_TOP: f32 = 24.0;
-const BUTTON_HEIGHT: f32 = 40.0;
-const BUTTON_GAP: f32 = 12.0;
+const BUTTON_HEIGHT: f32 = 36.0;
+const BUTTON_GAP: f32 = 10.0;
 const BUTTON_GAP_X: f32 = 10.0;
 const BUTTON_FONT_SIZE: f32 = 18.0;
 /// Room kept between a button's label and its edges.
@@ -38,25 +38,52 @@ pub enum Action {
     TogglePause,
     Start,
     ToggleDetails,
+    ToggleSlow,
+    ToggleTracers,
 }
 
-const BUTTON_ACTIONS: [Action; 4] = [
+const BUTTON_ACTIONS: [Action; 6] = [
     Action::ResetGas,
     Action::TogglePause,
     Action::Start,
     Action::ToggleDetails,
+    Action::ToggleSlow,
+    Action::ToggleTracers,
 ];
+
+/// The on/off settings that change button labels.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ButtonStates {
+    pub paused: bool,
+    pub details: bool,
+    pub slow: bool,
+    pub tracers: bool,
+}
+
+impl ButtonStates {
+    /// Every setting on, which gives each button its other label.
+    pub const ALL_ON: Self = Self {
+        paused: true,
+        details: true,
+        slow: true,
+        tracers: true,
+    };
+}
 
 impl Action {
     /// Button label, which names the key that does the same.
-    fn label(self, paused: bool, details: bool) -> &'static str {
+    fn label(self, states: ButtonStates) -> &'static str {
         match self {
             Self::ResetGas => "Reset (T)",
-            Self::TogglePause if paused => "Resume (Space)",
+            Self::TogglePause if states.paused => "Resume (Space)",
             Self::TogglePause => "Pause (Space)",
             Self::Start => "Start (Enter)",
-            Self::ToggleDetails if details => "Less (I)",
+            Self::ToggleDetails if states.details => "Less (I)",
             Self::ToggleDetails => "Details (I)",
+            Self::ToggleSlow if states.slow => "Normal (L)",
+            Self::ToggleSlow => "Slow (L)",
+            Self::ToggleTracers if states.tracers => "No tracers (F)",
+            Self::ToggleTracers => "Tracers (F)",
         }
     }
 }
@@ -144,12 +171,12 @@ impl Controls {
             || self.concentration.blocks_camera()
     }
 
-    pub fn draw(&self, paused: bool, details: bool) {
+    pub fn draw(&self, states: ButtonStates) {
         let mut pen = Pen::screen();
         let size = button_font_size(&pen);
         for (index, action) in BUTTON_ACTIONS.into_iter().enumerate() {
             let rect = button_rect(index, screen_width());
-            let label = action.label(paused, details);
+            let label = action.label(states);
             pen.rect(rect.x, rect.y, rect.w, rect.h, BUTTON_COLOR);
             pen.text(
                 label,
@@ -171,7 +198,12 @@ fn button_font_size(pen: &Pen) -> f32 {
     let width = BUTTON_WIDTH - 2.0 * BUTTON_TEXT_PADDING;
     BUTTON_ACTIONS
         .into_iter()
-        .flat_map(|action| [action.label(false, false), action.label(true, true)])
+        .flat_map(|action| {
+            [
+                action.label(ButtonStates::default()),
+                action.label(ButtonStates::ALL_ON),
+            ]
+        })
         .map(|label| pen.fitted_size(label, width, BUTTON_FONT_SIZE))
         .fold(BUTTON_FONT_SIZE, f32::min)
 }

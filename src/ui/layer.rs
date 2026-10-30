@@ -21,9 +21,12 @@ use macroquad::prelude::{
     load_material,
     render_target,
     screen_dpi_scale,
-    set_camera,
-    set_default_camera,
     vec2, //
+};
+
+use super::draw_target::{
+    draw_to,
+    draw_to_screen, //
 };
 
 /// Copies the image as it is, opaque. Macroquad's own shader would blend
@@ -160,9 +163,9 @@ impl CachedLayer {
             // on the screen, so text is rasterized at full sharpness.
             let mut camera = Camera2D::from_display_rect(area);
             camera.render_target = Some(image.target.clone());
-            set_camera(&camera);
+            draw_to(&camera);
             paint();
-            set_default_camera();
+            draw_to_screen();
         }
 
         gl_use_material(material);

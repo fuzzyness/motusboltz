@@ -60,6 +60,11 @@ const AMBIENT_LIGHT: f32 = 0.35;
 const DIFFUSE_LIGHT: f32 = 0.65;
 const DEPTH_FADE_STRENGTH: f32 = 0.8;
 
+// With tracers on, the followed particles are drawn this much larger at
+// full brightness, and the rest are faded this far toward the background.
+const FOLLOWED_SIZE: f32 = 1.6;
+const UNFOLLOWED_DIM: f32 = 0.55;
+
 // Brief collision highlight; purely visual, it changes no energy.
 const COLLISION_FLASH_COLOR: Color = Color::from_rgba(255, 252, 226, 255);
 const COLLISION_FLASH_STRENGTH: f32 = 0.3;
@@ -242,6 +247,8 @@ pub struct ParticleRenderer {
     batches: Vec<Mesh>,
     particle_count: usize,
     low_detail: bool,
+    /// Which particles are followed this frame, by index.
+    followed: Vec<bool>,
 }
 
 impl ParticleRenderer {
@@ -267,6 +274,7 @@ impl ParticleRenderer {
             batches: Vec::new(),
             particle_count: 0,
             low_detail: false,
+            followed: Vec::new(),
         }
     }
 
@@ -319,10 +327,13 @@ impl ParticleRenderer {
     }
 
     /// Updates vertex coordinates and colors, then submits each mesh batch.
+    /// With tracers on, `followed` lists the followed particles' indices.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
         particles: &[Particle],
         collision_flashes: &[f32],
+        followed: &[usize],
         radius: f32,
         camera: &Camera3D,
         chamber: CylinderDimensions,
@@ -331,6 +342,7 @@ impl ParticleRenderer {
         self.prepare(
             particles,
             collision_flashes,
+            followed,
             radius,
             camera,
             chamber,
@@ -342,10 +354,12 @@ impl ParticleRenderer {
     }
 
     /// Updates reusable CPU buffers separately from GPU submission.
+    #[allow(clippy::too_many_arguments)]
     fn prepare(
         &mut self,
         particles: &[Particle],
         collision_flashes: &[f32],
+        followed: &[usize],
         radius: f32,
         camera: &Camera3D,
         chamber: CylinderDimensions,
@@ -353,18 +367,25 @@ impl ParticleRenderer {
     ) {
         assert_eq!(particles.len(), collision_flashes.len());
         self.resize_batches(particles.len());
+        self.followed.clear();
+        self.followed.resize(particles.len(), false);
+        for &index in followed {
+            self.followed[index] = true;
+        }
+        let tracing = !followed.is_empty();
         self.template.update_lighting(camera);
 
         let depth_fade = DepthFade::new(camera, chamber.radius, chamber.height);
         let mean_velocity = gas::mean_velocity(particles);
 
-        for ((batch, chunk), flash_chunk) in self
+        for (((batch, chunk), flash_chunk), followed_chunk) in self
             .batches
             .iter_mut()
             .zip(particles.chunks(PARTICLES_PER_BATCH))
             .zip(collision_flashes.chunks(PARTICLES_PER_BATCH))
+            .zip(self.followed.chunks(PARTICLES_PER_BATCH))
         {
-            for ((particle, vertices), &flash) in chunk
+            for (((particle, vertices), &flash), &followed) in chunk
                 .iter()
                 .zip(
                     batch
@@ -372,6 +393,7 @@ impl ParticleRenderer {
                         .chunks_exact_mut(self.template.positions.len()),
                 )
                 .zip(flash_chunk)
+                .zip(followed_chunk)
             {
                 // Ignore the gas's bulk drift: only relative kinetic energy
                 // should determine its color.
@@ -379,14 +401,21 @@ impl ParticleRenderer {
                 let energy = gas::particle_kinetic_energy(thermal_velocity);
                 let base_color = kinetic_energy_color(energy);
                 let color = collision_color(base_color, flash);
-                let fade = depth_fade.amount(particle.position);
+                let (fade, size) = match (tracing, followed) {
+                    (true, true) => (0.0, radius * FOLLOWED_SIZE),
+                    (true, false) => {
+                        let depth = depth_fade.amount(particle.position);
+                        (1.0 - (1.0 - depth) * (1.0 - UNFOLLOWED_DIM), radius)
+                    }
+                    (false, _) => (depth_fade.amount(particle.position), radius),
+                };
 
                 for ((vertex, &offset), &brightness) in vertices
                     .iter_mut()
                     .zip(&self.template.positions)
                     .zip(&self.template.brightness)
                 {
-                    vertex.position = particle.position + offset * radius;
+                    vertex.position = particle.position + offset * size;
 
                     vertex.color = mix_color(shade(color, brightness), background, fade).into();
                 }

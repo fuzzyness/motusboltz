@@ -1,5 +1,7 @@
-//! The cylinders, pistons and the opening between them: tube outlines and
-//! solid piston discs, built once and moved each frame rather than rebuilt.
+//! The cylinders, pistons and the opening between them: the solid engine
+//! block (see `block.rs`), or tube outlines where its shader cannot be
+//! built, and solid piston discs, built once and moved each frame rather
+//! than rebuilt.
 
 use std::f32::consts::TAU;
 
@@ -9,6 +11,7 @@ use macroquad::models::{
     draw_mesh, //
 };
 use macroquad::prelude::{
+    Camera3D,
     Color,
     Vec2,
     Vec3,
@@ -16,6 +19,7 @@ use macroquad::prelude::{
     vec3, //
 };
 
+use super::block::EngineBlock;
 use super::{
     CylinderDimensions,
     DRAW_CALL_INDEX_CAPACITY,
@@ -215,9 +219,20 @@ impl PistonDisc {
     }
 }
 
-/// Both cylinder frames (orange hot, blue cold), the pistons and the
-/// outline of the opening between them.
+/// Whether the solid block is ready. It is built on the first draw, since
+/// its shader needs the window; if the shader cannot be built, the outline
+/// frames are drawn instead.
+enum Block {
+    Untried,
+    Ready(EngineBlock),
+    Unavailable,
+}
+
+/// The engine block (or, failing that, both cylinder frames, orange hot and
+/// blue cold, and the outline of the opening) and the pistons.
 pub struct ConnectedChamberVisual {
+    geometry: ChamberGeometry,
+    block: Block,
     hot: CylinderFrame,
     cold: CylinderFrame,
     hot_piston: PistonDisc,
@@ -232,6 +247,8 @@ impl ConnectedChamberVisual {
             height: geometry.cylinder_height,
         };
         Self {
+            geometry,
+            block: Block::Untried,
             hot: CylinderFrame::at_x(dimensions, HOT_FRAME_COLOR, geometry.hot_center_x()),
             cold: CylinderFrame::at_x(dimensions, COLD_FRAME_COLOR, geometry.cold_center_x()),
             hot_piston: PistonDisc::new(geometry.hot_center_x(), geometry.cylinder_radius),
@@ -240,16 +257,26 @@ impl ConnectedChamberVisual {
         }
     }
 
-    /// Draws the frames and opening, with the pistons at the given heights.
-    pub fn draw(&mut self, hot_face_y: f32, cold_face_y: f32) {
-        self.hot.draw();
-        self.cold.draw();
+    /// Draws the block (or the frames and opening) with its window toward
+    /// `camera`, and the pistons at the given heights.
+    pub fn draw(&mut self, camera: &Camera3D, hot_face_y: f32, cold_face_y: f32) {
+        if let Block::Untried = self.block {
+            self.block = match EngineBlock::new(self.geometry) {
+                Some(block) => Block::Ready(block),
+                None => Block::Unavailable,
+            };
+        }
+        if let Block::Ready(block) = &self.block {
+            block.draw(camera);
+        } else {
+            self.hot.draw();
+            self.cold.draw();
+            for &(a, b) in &self.passage_lines {
+                draw_line_3d(a, b, PASSAGE_COLOR);
+            }
+        }
         self.hot_piston.draw(hot_face_y);
         self.cold_piston.draw(cold_face_y);
-
-        for &(a, b) in &self.passage_lines {
-            draw_line_3d(a, b, PASSAGE_COLOR);
-        }
     }
 }
 

@@ -783,13 +783,13 @@ const ROTATION_DURATION: f32 = 120.0 * DYNAMICS_TIME_SCALE;
 const MIN_TURNS: usize = 4;
 const BALANCE_TOLERANCE: f64 = 0.05;
 /// A heated engine powering its load keeps at least this fraction of the
-/// Start energy in the flywheel (measured: 1.14 to 1.23 at 1200/300 K).
+/// Start energy in the flywheel (measured: 1.08 to 1.25 at 1200/300 K).
 const HOT_KEEP_RATIO: f64 = 0.8;
 /// ...while its gas does net work worth at least this fraction of the Start
-/// energy (measured: 1.14 to 1.24).
+/// energy (measured: 1.06 to 1.29).
 const HOT_WORK_RATIO: f64 = 0.5;
 /// An engine with no temperature difference keeps less than this fraction
-/// (measured: 0.16 to 0.17 at its last full turn, after about 8 turns).
+/// (measured: 0.14 to 0.16 at its last full turn, after about 8 turns).
 const EQUILIBRIUM_REMAINING_RATIO: f64 = 0.4;
 /// The two P-V loop areas must add up to the measured gas work within this
 /// fraction of the gross work on both pistons. The remaining error comes
@@ -1021,8 +1021,8 @@ fn repeated_start_presses_cannot_overdrive_the_engine() {
 #[test]
 #[ignore = "long one-press start regression; run in release mode"]
 fn one_start_completes_a_turn_at_every_fill() {
-    /// Measured first turns: about 5 to 9 s per unit of time scale (15.5 to
-    /// 25.4 s at 3; before v0.6's lighter flywheel, 31 to 51 s).
+    /// Measured first turns: about 5 to 8.5 s per unit of time scale (12.9
+    /// to 21.0 s at 2.5; before v0.6's lighter flywheel, 31 to 51 s at 3).
     const MAX_FIRST_TURN: f64 = 25.0 * DYNAMICS_TIME_SCALE as f64;
     const WARM_UPS: [f32; 3] = [0.0, 2.0 * DYNAMICS_TIME_SCALE, 7.0 * DYNAMICS_TIME_SCALE];
     let mut cases = Vec::new();
@@ -1152,4 +1152,40 @@ fn uneven_thirty_fps_frames_keep_real_time() {
         assert!(!limited, "frame {frame} dropped time");
         assert!(simulation.accumulator < FIXED_DT);
     }
+}
+
+/// Tracers follow particles from both cylinders, record bounces as the gas
+/// moves, leave the physics unchanged, and are cleared by a refill.
+#[test]
+fn tracers_follow_both_sides_without_changing_the_physics() {
+    const FOLLOWED: usize = 5;
+    const STEPS: usize = 120;
+    let mut followed = ConnectedChambers::seeded(DEFAULT_CONNECTED_MARKERS);
+    let mut plain = ConnectedChambers::seeded(DEFAULT_CONNECTED_MARKERS);
+    for simulation in [&mut followed, &mut plain] {
+        simulation.set_hot_kelvin(MAX_HOT_KELVIN);
+        assert!(simulation.start_engine());
+    }
+    followed.follow_particles(FOLLOWED, TEST_SEED);
+    let tracers = followed.tracers().unwrap();
+    let indices: Vec<usize> = tracers.indices().collect();
+    assert_eq!(indices.len(), FOLLOWED);
+    let regions: Vec<Region> = indices
+        .iter()
+        .map(|&index| followed.region(followed.particles[index].position))
+        .collect();
+    assert!(regions.contains(&Region::Hot) && regions.contains(&Region::Cold));
+    for _ in 0..STEPS {
+        followed.step(FIXED_DT);
+        plain.step(FIXED_DT);
+    }
+    let tracers = followed.tracers().unwrap();
+    assert!((tracers.time() - STEPS as f64 * FIXED_DT as f64).abs() < 1e-6);
+    assert!(tracers.paths().all(|(_, points)| points.len() > 1));
+    for (a, b) in followed.particles.iter().zip(&plain.particles) {
+        assert_eq!(a.position, b.position);
+        assert_eq!(a.velocity, b.velocity);
+    }
+    followed.reset();
+    assert!(followed.tracers().is_none());
 }

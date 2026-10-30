@@ -65,6 +65,8 @@ fn command_keys_map_to_their_commands() {
     assert!(KeyCommands::from_pressed(only(&[KeyCode::G])).panel);
     assert!(KeyCommands::from_pressed(only(&[KeyCode::R])).camera_reset);
     assert!(KeyCommands::from_pressed(only(&[KeyCode::K])).kick);
+    assert!(KeyCommands::from_pressed(only(&[KeyCode::L])).slow);
+    assert!(KeyCommands::from_pressed(only(&[KeyCode::F])).tracers);
     for (index, key) in FILL_KEYS.into_iter().enumerate() {
         assert_eq!(
             KeyCommands::from_pressed(only(&[key])).fill_preset,

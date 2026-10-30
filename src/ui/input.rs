@@ -15,6 +15,8 @@ const RESET_GAS_KEY: KeyCode = KeyCode::T;
 const DETAILS_KEY: KeyCode = KeyCode::I;
 const PANEL_KEY: KeyCode = KeyCode::G;
 const CAMERA_RESET_KEY: KeyCode = KeyCode::R;
+const SLOW_KEY: KeyCode = KeyCode::L;
+const TRACERS_KEY: KeyCode = KeyCode::F;
 /// The additive kick, which can overdrive the engine. Left out of the help
 /// text on purpose; it exists for testing.
 const KICK_KEY: KeyCode = KeyCode::K;
@@ -47,8 +49,8 @@ const ZOOM_OUT_KEYS: [KeyCode; 2] = [KeyCode::Minus, KeyCode::KpSubtract];
 
 /// The key bindings, as shown at the bottom of the scene.
 pub const HELP_LINES: [&str; 2] = [
-    "Enter: Start | Space: Pause | T: Reset | 1-5: Fill | I: Details | G: Panel",
-    "WASD/arrows: Rotate | Shift+WASD/arrows: Move | -/=: Zoom | R: Reset view",
+    "Enter: Start | Space: Pause | L: Slow | F: Tracers | T: Reset | 1-5: Fill",
+    "I: Details | G: Panel | WASD: Turn | Shift+WASD: Move | -/=: Zoom | R: View",
 ];
 
 /// Scroll per wheel reading, in pixels. The browser and macOS report
@@ -72,6 +74,8 @@ pub struct KeyCommands {
     pub details: bool,
     pub panel: bool,
     pub camera_reset: bool,
+    pub slow: bool,
+    pub tracers: bool,
     pub kick: bool,
     /// Index of the fill preset chosen with keys 1 to 5.
     pub fill_preset: Option<usize>,
@@ -91,6 +95,8 @@ impl KeyCommands {
             details: pressed(DETAILS_KEY),
             panel: pressed(PANEL_KEY),
             camera_reset: pressed(CAMERA_RESET_KEY),
+            slow: pressed(SLOW_KEY),
+            tracers: pressed(TRACERS_KEY),
             kick: pressed(KICK_KEY),
             fill_preset: FILL_KEYS.into_iter().position(&pressed),
         }

@@ -17,9 +17,7 @@ use macroquad::prelude::{
     next_frame,
     screen_dpi_scale,
     screen_height,
-    screen_width,
-    set_camera,
-    set_default_camera, //
+    screen_width, //
 };
 
 use crate::graphics::Scene;
@@ -37,7 +35,12 @@ use crate::ui::camera::{
 };
 use crate::ui::controls::{
     Action,
+    ButtonStates,
     Controls, //
+};
+use crate::ui::draw_target::{
+    draw_to,
+    draw_to_screen, //
 };
 use crate::ui::frame_stats::{
     FrameStats,
@@ -105,6 +108,14 @@ const CONCENTRATION_PRESETS: [f32; 5] = [
 /// Longest frame time the camera keys act over, so a stalled frame does
 /// not swing the view.
 const MAX_CAMERA_DT: f32 = 0.1;
+/// Slow mode runs the simulation at this fraction of its normal pace, for a
+/// closer look at single particles. It changes only how much model time
+/// passes per frame, never the physics, and it also lightens the work per
+/// frame.
+const SLOW_MOTION_FACTOR: f32 = 0.25;
+/// How many particles tracers follow: enough to catch both cylinders and the
+/// opening, few enough to follow by eye.
+const FOLLOWED_PARTICLES: usize = 5;
 /// Extra zoom-out so the cylinders, crank and flywheel all fit the first view.
 const CAMERA_FRAMING_MARGIN: f32 = 1.25;
 
@@ -135,6 +146,9 @@ pub async fn run() {
 struct App {
     simulation: ConnectedChambers,
     paused: bool,
+    slow: bool,
+    /// Tracers stay on through refills, which choose new particles.
+    tracers: bool,
     panel: EnginePanel,
     /// The panel as last painted, repainted only when it changes.
     panel_layer: CachedLayer,
@@ -161,6 +175,8 @@ impl App {
                 DEFAULT_INITIAL_CONCENTRATION_MOL_PER_L,
             ),
             paused: false,
+            slow: false,
+            tracers: false,
             frame_stats: FrameStats::new(),
             simulation,
         }
@@ -186,6 +202,15 @@ impl App {
         }
         if keys.start || events.action == Some(Action::Start) {
             self.simulation.start_engine();
+        }
+        if keys.slow || events.action == Some(Action::ToggleSlow) {
+            self.slow = !self.slow;
+        }
+        if keys.tracers || events.action == Some(Action::ToggleTracers) {
+            self.tracers = !self.tracers;
+            if !self.tracers {
+                self.simulation.stop_following();
+            }
         }
         if keys.kick {
             self.simulation.kick_flywheel(KickDirection::Negative);
@@ -215,7 +240,13 @@ impl App {
         }
 
         let physics_start = macroquad::miniquad::date::now();
-        let limited = !self.paused && self.simulation.update(get_frame_time());
+        // A refill (reset, new fill) clears the followed particles.
+        if self.tracers && self.simulation.tracers().is_none() {
+            self.simulation
+                .follow_particles(FOLLOWED_PARTICLES, macroquad::rand::gen_range(0, u64::MAX));
+        }
+        let pace = if self.slow { SLOW_MOTION_FACTOR } else { 1.0 };
+        let limited = !self.paused && self.simulation.update(pace * get_frame_time());
         let physics_seconds = macroquad::miniquad::date::now() - physics_start;
         let now = macroquad::time::get_time();
         self.frame_stats.record(now, physics_seconds, limited);
@@ -248,9 +279,9 @@ impl App {
         ));
         camera.aspect = Some(scene_width / scene_height);
         clear_background(BACKGROUND_COLOR);
-        set_camera(&camera);
+        draw_to(&camera);
         self.scene.draw(&self.simulation, &camera, BACKGROUND_COLOR);
-        set_default_camera();
+        draw_to_screen();
 
         let mut pen = Pen::screen();
         if self.show_panel {
@@ -285,7 +316,12 @@ impl App {
             BUILD_LABEL_FONT_SIZE,
             BUILD_LABEL_COLOR,
         );
-        self.controls.draw(self.paused, self.panel.details_shown());
+        self.controls.draw(ButtonStates {
+            paused: self.paused,
+            details: self.panel.details_shown(),
+            slow: self.slow,
+            tracers: self.tracers,
+        });
     }
 
     /// The frame rate and physics time while Details is on, and the

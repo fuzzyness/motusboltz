@@ -206,6 +206,7 @@ fn maximum_fill_mesh_benchmark() {
         renderer.prepare(
             &simulation.particles,
             simulation.collision_flashes(),
+            &[],
             PARTICLE_RADIUS,
             &camera,
             chamber,

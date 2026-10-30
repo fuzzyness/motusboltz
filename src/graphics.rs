@@ -1,9 +1,13 @@
-//! 3D drawing of the particles, cylinders, passage, pistons, crank and
-//! flywheel. Drawing only; nothing here affects the physics.
+//! 3D drawing of the particles, tracer trails, cylinders, the opening
+//! between them, pistons, crank and flywheel. Drawing only; nothing here
+//! affects the physics.
 
+pub mod block;
 pub mod chamber;
+pub mod floor;
 pub mod particles;
 pub mod shaft;
+pub mod trails;
 
 use macroquad::prelude::{
     Camera3D,
@@ -14,9 +18,12 @@ use crate::sim::engine::{
     ConnectedChambers,
     PARTICLE_RADIUS, //
 };
+use block::BlockShape;
 use chamber::ConnectedChamberVisual;
+use floor::FloorGrid;
 use particles::ParticleRenderer;
 use shaft::ShaftVisual;
+use trails::TrailRenderer;
 
 /// Macroquad's per-draw-call buffer sizes, set in the window configuration;
 /// every mesh must fit within them.
@@ -56,8 +63,12 @@ fn shade(color: Color, brightness: f32) -> Color {
 /// Everything drawn in the 3D view, built once for the engine's geometry.
 pub struct Scene {
     chamber: ConnectedChamberVisual,
+    floor: FloorGrid,
     shaft: ShaftVisual,
     particles: ParticleRenderer,
+    trails: TrailRenderer,
+    /// The followed particles' indices this frame, reused.
+    followed: Vec<usize>,
     /// A cylinder enclosing the whole apparatus, for the particle depth fade.
     extent: CylinderDimensions,
 }
@@ -67,8 +78,11 @@ impl Scene {
         let geometry = simulation.geometry();
         Self {
             chamber: ConnectedChamberVisual::new(geometry),
+            floor: FloorGrid::new(BlockShape::new(geometry).base),
             shaft: ShaftVisual::new(geometry),
             particles: ParticleRenderer::new(),
+            trails: TrailRenderer::new(),
+            followed: Vec::new(),
             extent: CylinderDimensions {
                 radius: geometry.cylinder_offset + geometry.cylinder_radius,
                 height: geometry.grid_side(),
@@ -81,15 +95,26 @@ impl Scene {
     pub fn draw(&mut self, simulation: &ConnectedChambers, camera: &Camera3D, background: Color) {
         let pistons = simulation.power_pistons();
         self.chamber
-            .draw(pistons.hot().face_y, pistons.cold().face_y);
+            .draw(camera, pistons.hot().face_y, pistons.cold().face_y);
         self.shaft.draw(pistons);
+        self.followed.clear();
+        if let Some(tracers) = simulation.tracers() {
+            self.followed.extend(tracers.indices());
+        }
         self.particles.draw(
             &simulation.particles,
             simulation.collision_flashes(),
+            &self.followed,
             PARTICLE_RADIUS,
             camera,
             self.extent,
             background,
         );
+        // The see-through grid and trails after everything solid, so they
+        // blend over it.
+        self.floor.draw();
+        if let Some(tracers) = simulation.tracers() {
+            self.trails.draw(tracers, &simulation.particles, camera);
+        }
     }
 }

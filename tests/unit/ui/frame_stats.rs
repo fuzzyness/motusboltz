@@ -48,20 +48,50 @@ fn a_slow_window_reports_its_own_rate() {
 }
 
 #[test]
-fn the_warning_holds_after_the_last_dropped_frame() {
+fn one_dropped_frame_does_not_raise_the_warning() {
+    let mut stats = FrameStats::new();
+    stats.record(1.0, 0.0, true);
+    assert!(!stats.limited(1.0));
+    // A second hiccup much later is still a one-off.
+    stats.record(5.0, 0.0, true);
+    stats.record(5.5, 0.0, true);
+    assert!(!stats.limited(5.5));
+}
+
+#[test]
+fn repeated_drops_raise_the_warning_and_it_holds() {
     let mut stats = FrameStats::new();
     assert!(!stats.limited(0.0));
-    stats.record(1.0, 0.0, true);
-    assert!(stats.limited(1.0));
-    assert!(stats.limited(1.0 + LIMITED_HOLD_SECONDS - 0.01));
-    assert!(!stats.limited(1.0 + LIMITED_HOLD_SECONDS));
+    for frame in 0..LIMITED_MIN_FRAMES {
+        assert!(!stats.limited(1.0 + frame as f64 * FRAME));
+        stats.record(1.0 + frame as f64 * FRAME, 0.0, true);
+    }
+    let last = 1.0 + (LIMITED_MIN_FRAMES - 1) as f64 * FRAME;
+    assert!(stats.limited(last));
+    assert!(stats.limited(last + LIMITED_HOLD_SECONDS - 0.01));
+    assert!(!stats.limited(last + LIMITED_HOLD_SECONDS));
 
-    // Each dropped frame restarts the hold, so a swinging frame rate keeps
-    // the warning up steadily instead of flashing it.
-    stats.record(2.0, 0.0, true);
+    // While the warning is up, each dropped frame restarts the hold, so a
+    // swinging frame rate keeps it up steadily instead of flashing it.
+    let mut stats = FrameStats::new();
+    for frame in 0..LIMITED_MIN_FRAMES {
+        stats.record(1.0 + frame as f64 * FRAME, 0.0, true);
+    }
+    stats.record(3.0, 0.0, true);
     stats.record(3.5, 0.0, false);
-    assert!(stats.limited(2.0 + LIMITED_HOLD_SECONDS - 0.01));
-    assert!(!stats.limited(2.0 + LIMITED_HOLD_SECONDS));
+    assert!(stats.limited(3.0 + LIMITED_HOLD_SECONDS - 0.01));
+    assert!(!stats.limited(3.0 + LIMITED_HOLD_SECONDS));
+}
+
+/// Drops spread out more thinly than the window allows never add up.
+#[test]
+fn drops_must_fall_within_the_window() {
+    let mut stats = FrameStats::new();
+    let spacing = LIMITED_WINDOW_SECONDS / (LIMITED_MIN_FRAMES - 1) as f64 + 0.01;
+    for drop in 0..10 {
+        stats.record(drop as f64 * spacing, 0.0, true);
+        assert!(!stats.limited(drop as f64 * spacing));
+    }
 }
 
 #[test]

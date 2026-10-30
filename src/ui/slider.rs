@@ -47,8 +47,10 @@ const LABEL_OFFSET_Y: f32 = 21.0;
 const RANGE_SIZE: f32 = 17.0;
 /// Baseline of the minimum and maximum values below the track.
 const RANGE_OFFSET_Y: f32 = 36.0;
-/// Track centers, top to bottom.
-pub const HOT_Y: f32 = 200.0;
+/// Track centers, top to bottom. The first sits just below the three rows
+/// of buttons, so the helium slider still clears the build label in the
+/// smallest engine frame the web page gives (about 544 px tall).
+pub const HOT_Y: f32 = 214.0;
 const COLD_Y: f32 = HOT_Y + 120.0;
 const CONCENTRATION_Y: f32 = COLD_Y + 120.0;
 const KELVIN_STEP: f32 = 1.0;

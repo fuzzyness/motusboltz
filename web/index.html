@@ -74,7 +74,7 @@
               way down to 100&nbsp;K. These are the sliders on the right.</li>
             <li>Press <kbd>Enter</kbd> or the <b>Start</b> button. This gives the wheel a single push to get
               it moving. From then on, only the gas keeps it going.</li>
-            <li>Watch for a minute or two. One full turn takes about half a minute, and the readings for
+            <li>Watch for a minute or two. One full turn takes about 16 seconds, and the readings for
               each law appear on the left after the first full turn.</li>
           </ol>
         </div>
@@ -179,6 +179,10 @@
               of an average room-temperature particle, or more</li>
           </ul>
           <p>A dot flashes white for a moment when it collides with another one.</p>
+          <p>Press <kbd>F</kbd> or <b>Tracers</b> to follow five dots, some starting in each cylinder.
+            They are drawn larger, the rest dim, and a fading yellow line shows each one's path. With the
+            sliders apart, watch one leave the hot wall faster and redder, or the cold wall slower and
+            bluer.</p>
         </div>
 
         <div>
@@ -187,6 +191,8 @@
             <tbody>
               <tr><th scope="row"><kbd>Enter</kbd></th><td>Start the engine</td></tr>
               <tr><th scope="row"><kbd>Space</kbd></th><td>Pause or resume</td></tr>
+              <tr><th scope="row"><kbd>L</kbd></th><td>Slow mode: a quarter of the normal pace</td></tr>
+              <tr><th scope="row"><kbd>F</kbd></th><td>Follow five dots with tracer lines</td></tr>
               <tr><th scope="row"><kbd>T</kbd></th><td>Refill with fresh gas at 300&nbsp;K</td></tr>
               <tr><th scope="row"><kbd>1</kbd> to <kbd>5</kbd></th><td>Less or more helium</td></tr>
               <tr><th scope="row"><kbd>I</kbd></th><td>More or fewer details</td></tr>
@@ -582,8 +588,8 @@
         <li><b>Each dot stands for a crowd of atoms.</b> At the largest fill, 2,048 dots carry
           0.299&nbsp;mol of helium, so each dot stands for about 9&nbsp;×&nbsp;10<sup>19</sup> atoms. The
           dots are drawn far bigger than atoms so you can see them.</li>
-        <li><b>The engine runs slowly.</b> Motion is slowed down so you can follow single particles.
-          Times and rpm are in model units, not real seconds.</li>
+        <li><b>The engine runs slowly.</b> Motion is slowed down so you can follow single particles,
+          and Slow mode slows it four times more. Times and rpm are in model units, not real seconds.</li>
         <li><b>Pressure on the Now tab is an estimate.</b> The ~ sign marks an ideal gas estimate,
           <var>P</var> = <var>nRT</var>/<var>V</var>, from each cylinder's particles. The P-V loops use the
           real pushes of particles on the pistons.</li>

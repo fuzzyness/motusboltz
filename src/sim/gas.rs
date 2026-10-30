@@ -10,9 +10,12 @@ use macroquad::rand::RandGenerator;
 /// (`pistons.rs`), so temperatures, energies and the ratio of gas speed to
 /// shaft speed are unchanged; only the pace of the animation changes. A
 /// heated engine at the default fill takes about 6.5 to 7.5 s per turn per
-/// unit of scale (19 s at 1200/100 K and 22 s at 1200/300 K, at 3). The physics work per real second grows as the
-/// scale drops, because faster particles need more substeps.
-pub const DYNAMICS_TIME_SCALE: f32 = 3.0;
+/// unit of scale (about 16 s at 1200/100 K and 19 s at 1200/300 K, at 2.5).
+/// The physics work per real second grows as the scale drops, because
+/// faster particles need more substeps: measured at the largest fill, 2.5
+/// costs 1.23 times as much as 3, and 2 costs 1.66 times. Slow mode (in
+/// `app.rs`) slows the pace further without touching the physics.
+pub const DYNAMICS_TIME_SCALE: f32 = 2.5;
 const REFERENCE_PARTICLE_MASS: f32 = 0.001;
 pub const PARTICLE_MASS: f32 = REFERENCE_PARTICLE_MASS * DYNAMICS_TIME_SCALE * DYNAMICS_TIME_SCALE;
 /// Initial gas temperature in reduced units (1 = 300 K).

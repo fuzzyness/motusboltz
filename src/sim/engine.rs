@@ -40,6 +40,7 @@ use crate::sim::reservoir::{
     ReservoirSide,
     ThermalReservoirs, //
 };
+use crate::sim::tracers::Tracers;
 use crate::sim::units::{
     GasMeasurements,
     HeliumCalibration,
@@ -121,6 +122,8 @@ pub struct ConnectedChambers {
     gas: HeliumCalibration,
     initial_energy: f32,
     cycle: CycleMonitor,
+    /// The particles being followed, if tracers are on.
+    tracers: Option<Tracers>,
 }
 
 impl ConnectedChambers {
@@ -256,6 +259,7 @@ impl ConnectedChambers {
             ),
             initial_energy,
             cycle,
+            tracers: None,
         }
     }
 
@@ -484,6 +488,46 @@ impl ConnectedChambers {
     }
 
     /// Model time left on each particle's collision highlight.
+    /// Starts following `count` particles (fewer if the gas is smaller),
+    /// chosen with `seed`: alternately from the hot and the cold cylinder,
+    /// so both sides have one to watch. Display only; the physics is
+    /// unchanged.
+    pub fn follow_particles(&mut self, count: usize, seed: u64) {
+        let random = RandGenerator::new();
+        random.srand(seed);
+        let mut sides: [Vec<usize>; 2] = [Vec::new(), Vec::new()];
+        for (index, particle) in self.particles.iter().enumerate() {
+            match self.region(particle.position) {
+                Region::Hot => sides[0].push(index),
+                Region::Cold => sides[1].push(index),
+                Region::Passage => {}
+            }
+        }
+        let mut chosen = Vec::with_capacity(count);
+        for pick in 0..count.min(self.particles.len()) {
+            let side = if sides[pick % 2].is_empty() {
+                &mut sides[(pick + 1) % 2]
+            } else {
+                &mut sides[pick % 2]
+            };
+            if side.is_empty() {
+                break;
+            }
+            let at = random.gen_range(0, side.len() as u64) as usize;
+            chosen.push(side.swap_remove(at));
+        }
+        self.tracers = Some(Tracers::new(&chosen, &self.particles));
+    }
+
+    pub fn stop_following(&mut self) {
+        self.tracers = None;
+    }
+
+    /// The followed particles and their recent paths, if tracers are on.
+    pub fn tracers(&self) -> Option<&Tracers> {
+        self.tracers.as_ref()
+    }
+
     pub fn collision_flashes(&self) -> &[f32] {
         &self.flashes
     }
@@ -731,6 +775,10 @@ impl ConnectedChambers {
                 cold.face_y,
                 false,
             );
+        }
+
+        if let Some(tracers) = &mut self.tracers {
+            tracers.record(dt as f64, &self.particles);
         }
 
         let substep = Substep {
