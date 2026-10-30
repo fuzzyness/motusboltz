@@ -254,6 +254,21 @@ fn start_tops_up_a_slow_or_backward_shaft() {
 }
 
 #[test]
+fn start_speed_fraction_reads_one_after_start_and_zero_at_rest() {
+    let mut pistons = PowerPistons::new(ChamberGeometry::default(), PARTICLE_RADIUS);
+    assert_eq!(pistons.start_speed_fraction(), 0.0);
+    pistons.start();
+    assert!((pistons.start_speed_fraction() - 1.0).abs() < 1e-6);
+    pistons.angular_velocity = 0.5 * pistons.start_speed;
+    assert!(
+        (pistons.start_speed_fraction() + 0.5).abs() < 1e-6,
+        "backward"
+    );
+    pistons.set_running(false);
+    assert_eq!(pistons.start_speed_fraction(), 0.0, "held");
+}
+
+#[test]
 fn starting_energy_sets_the_starting_speed() {
     let mut pistons = PowerPistons::new(ChamberGeometry::default(), PARTICLE_RADIUS);
     pistons.set_starting_energy(2.0 * STARTER_ENERGY);

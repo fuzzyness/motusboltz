@@ -1,15 +1,17 @@
-//! Left-column readings panel. Tabs choose what it shows: everything, the
-//! live readings, the per-turn laws, or the pressure-volume loops. The
-//! column scrolls, by wheel or by dragging its scrollbar, whenever its
-//! content is taller than the window.
+//! Left-column readings panel, in two views. Simple shows what the project
+//! is about in plain words: where the energy goes each turn and what each
+//! law says about it. Advanced shows every reading, with the
+//! pressure-volume loops. The column scrolls, by wheel or by dragging its
+//! scrollbar, whenever its content is taller than the window.
 //!
-//! Text and the loops are rebuilt at most `REFRESH_SECONDS` apart, not
-//! every frame, and the app repaints the panel only when what it shows
-//! changes (see `needs_paint`).
+//! The readings are rebuilt at most `REFRESH_SECONDS` apart, not every
+//! frame, and the app repaints the panel only when what it shows changes
+//! (see `needs_paint`).
 
-mod laws;
+mod advanced;
 mod plot;
 mod readout;
+mod simple;
 
 use macroquad::prelude::{
     Color,
@@ -21,11 +23,6 @@ use macroquad::prelude::{
 use crate::sim::engine::ConnectedChambers;
 use crate::ui::layout::PANEL_WIDTH;
 use crate::ui::pen::Pen;
-use laws::{
-    draw_efficiency,
-    draw_entropy,
-    draw_ledger, //
-};
 use plot::{
     MAX_PLOT_SIDE,
     PLOT_BOTTOM,
@@ -35,12 +32,8 @@ use plot::{
     plot_range, //
 };
 use readout::{
-    NowReadout,
-    TurnReadout,
-    loop_text,
-    now_readout,
-    turn_readout,
-    waiting_text, //
+    Readout,
+    readout, //
 };
 
 pub const TITLE: &str = "MotusBoltz";
@@ -50,8 +43,8 @@ const CONTENT_WIDTH: f32 = PANEL_WIDTH - 2.0 * MARGIN;
 /// Seconds of wall time between text refreshes.
 const REFRESH_SECONDS: f64 = 0.1;
 
-// Header: the title, then a row of tabs. It stays put while the content
-// below it scrolls.
+// Header: the title, then the Simple and Advanced switch. It stays put
+// while the content below it scrolls.
 const TITLE_BASELINE: f32 = 36.0;
 const TAB_TOP: f32 = 50.0;
 const TAB_HEIGHT: f32 = 26.0;
@@ -64,7 +57,7 @@ const SCROLLBAR_INSET: f32 = 5.0;
 const MIN_THUMB_HEIGHT: f32 = 24.0;
 
 const TITLE_SIZE: f32 = 28.0;
-const SECTION_SIZE: f32 = 15.0;
+const SECTION_SIZE: f32 = 13.0;
 const LAW_SIZE: f32 = 15.0;
 const BODY_SIZE: f32 = 15.0;
 const SMALL_SIZE: f32 = 13.0;
@@ -73,15 +66,13 @@ const LINE: f32 = 19.0;
 const SMALL_LINE: f32 = 16.0;
 const SECTION_GAP: f32 = 14.0;
 const READOUT_GAP: f32 = 10.0;
-const BAR_HEIGHT: f32 = 12.0;
-const BAR_GAP: f32 = 4.0;
-/// Smallest P-V plot shown on its own tab, where it fills the column.
-const MIN_PLOT_SIDE: f32 = 90.0;
-/// Smallest P-V plot in the All view; on a short window the column
+/// Smallest P-V plot in the Advanced view; on a short window the column
 /// scrolls to reach it rather than shrinking it further.
 const COMFORTABLE_PLOT_SIDE: f32 = 200.0;
 
-const PANEL: Color = Color::from_rgba(19, 29, 43, 255);
+/// The panel's background, drawn behind it every frame by the app:
+/// translucent, so the scene shows through faintly.
+pub const BACKGROUND: Color = Color::new(19.0 / 255.0, 29.0 / 255.0, 43.0 / 255.0, 0.75);
 const TEXT: Color = Color::from_rgba(215, 226, 238, 255);
 const QUIET: Color = Color::from_rgba(150, 165, 180, 255);
 const SECTION: Color = Color::from_rgba(120, 140, 160, 255);
@@ -92,63 +83,48 @@ const TRACK: Color = Color::from_rgba(52, 65, 81, 255);
 const HOT_COLOR: Color = Color::from_rgba(255, 160, 90, 255);
 const COLD_COLOR: Color = Color::from_rgba(95, 190, 255, 255);
 const WORK_COLOR: Color = Color::from_rgba(255, 218, 110, 255);
-const STORED_COLOR: Color = Color::from_rgba(150, 160, 175, 255);
 const TAB_COLOR: Color = Color::from_rgba(38, 52, 68, 255);
 const TAB_SELECTED_COLOR: Color = Color::from_rgba(70, 92, 116, 255);
 const SCROLL_TRACK_COLOR: Color = Color::from_rgba(38, 52, 68, 255);
 const SCROLL_THUMB_COLOR: Color = Color::from_rgba(120, 140, 160, 255);
 
-const SECTION_NOW: &str = "ENGINE NOW";
-const SECTION_TURN: &str = "LAST FULL TURN";
-const LAW_WORK: &str = "Work: area inside each P-V loop (last turn)";
-const WAITING_NOTE: &str = "Readings use whole turns only.";
+const LOOPS_HEADING: &str = "P-V LOOPS (LAST TURN)";
+const LAW_WORK: &str = "Work: the area inside each loop";
 
 /// Everything that changes how the panel looks. The app keeps the painted
 /// panel as an image and repaints it only when this changes.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Look {
     refreshes: u64,
-    view: PanelView,
+    mode: PanelMode,
     scroll: f32,
-    details: bool,
-    paused: bool,
+    status: Option<&'static str>,
     height: f32,
 }
 
-/// What the panel shows, one tab each.
+/// The panel's two views.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PanelView {
-    /// Every section, scrolling if the window is short.
-    All,
-    /// The live readings, with the extra lines when Details is on.
-    Now,
-    /// The per-turn ledger, efficiency and entropy.
-    Laws,
-    /// The pressure-volume loops, as large as the column allows.
-    Loops,
+pub enum PanelMode {
+    /// What the project asks about, in plain words.
+    Simple,
+    /// Every reading, with the P-V loops.
+    Advanced,
 }
 
-const VIEWS: [PanelView; 4] = [
-    PanelView::All,
-    PanelView::Now,
-    PanelView::Laws,
-    PanelView::Loops,
-];
+const MODES: [PanelMode; 2] = [PanelMode::Simple, PanelMode::Advanced];
 
-impl PanelView {
+impl PanelMode {
     fn label(self) -> &'static str {
         match self {
-            Self::All => "All",
-            Self::Now => "Now",
-            Self::Laws => "Laws",
-            Self::Loops => "P-V",
+            Self::Simple => "Simple",
+            Self::Advanced => "Advanced",
         }
     }
 }
 
-/// Tab `index`, in the header row.
+/// The switch's half for `index`, in the header row.
 fn tab_rect(index: usize) -> Rect {
-    let width = (CONTENT_WIDTH - TAB_GAP * (VIEWS.len() - 1) as f32) / VIEWS.len() as f32;
+    let width = (CONTENT_WIDTH - TAB_GAP * (MODES.len() - 1) as f32) / MODES.len() as f32;
     Rect::new(
         MARGIN + index as f32 * (width + TAB_GAP),
         TAB_TOP,
@@ -170,18 +146,14 @@ pub struct PanelPointer {
 }
 
 pub struct EnginePanel {
-    now: NowReadout,
-    turn: Option<TurnReadout>,
-    waiting: &'static str,
-    loop_text: String,
+    readout: Readout,
     range: Option<PlotRange>,
     next_refresh: f64,
     /// Text rebuilds so far, so a repaint follows each one.
     refreshes: u64,
     /// How the panel looked when last painted.
     painted: Option<Look>,
-    show_details: bool,
-    view: PanelView,
+    mode: PanelMode,
     /// How far the content is scrolled up, in pixels.
     scroll: f32,
     /// Content and visible heights from the last draw, for scrolling.
@@ -197,16 +169,15 @@ pub struct EnginePanel {
 impl EnginePanel {
     pub fn new() -> Self {
         Self {
-            now: NowReadout::default(),
-            turn: None,
-            waiting: readout::WAITING_START,
-            loop_text: String::new(),
+            readout: Readout {
+                waiting: readout::WAITING_START,
+                ..Default::default()
+            },
             range: None,
             next_refresh: 0.0,
             refreshes: 0,
             painted: None,
-            show_details: false,
-            view: PanelView::All,
+            mode: PanelMode::Simple,
             scroll: 0.0,
             content_height: 0.0,
             viewport_height: 0.0,
@@ -215,19 +186,23 @@ impl EnginePanel {
         }
     }
 
-    pub fn toggle_details(&mut self) {
-        self.show_details = !self.show_details;
-        self.next_refresh = 0.0;
+    /// Switches between the Simple and Advanced views.
+    pub fn toggle_mode(&mut self) {
+        self.select(match self.mode {
+            PanelMode::Simple => PanelMode::Advanced,
+            PanelMode::Advanced => PanelMode::Simple,
+        });
     }
 
-    pub fn details_shown(&self) -> bool {
-        self.show_details
+    pub fn advanced(&self) -> bool {
+        self.mode == PanelMode::Advanced
     }
 
-    /// Shows a tab, scrolled to its top.
-    fn select(&mut self, view: PanelView) {
-        self.view = view;
+    /// Shows a view, scrolled to its top.
+    fn select(&mut self, mode: PanelMode) {
+        self.mode = mode;
         self.scroll = 0.0;
+        self.next_refresh = 0.0;
     }
 
     /// Rebuilds the text if `REFRESH_SECONDS` have passed since the last
@@ -242,17 +217,11 @@ impl EnginePanel {
 
     fn refresh(&mut self, engine: &ConnectedChambers) {
         self.refreshes += 1;
-        self.now = now_readout(engine, self.show_details);
-        self.turn = engine
-            .cycle()
-            .recent()
-            .map(|recent| turn_readout(engine, recent));
-        self.waiting = waiting_text(engine);
-        self.loop_text = loop_text(engine);
+        self.readout = readout(engine);
         self.range = plot_range(engine);
     }
 
-    /// Handles tab clicks, the wheel and the scrollbar. Returns whether the
+    /// Handles clicks on the view switch, the wheel and the scrollbar. Returns whether the
     /// camera should ignore the pointer: it is over the panel, or a press
     /// that started here is still held.
     pub fn handle_pointer(&mut self, pointer: PanelPointer) -> bool {
@@ -275,8 +244,8 @@ impl EnginePanel {
     }
 
     fn press(&mut self, position: Vec2) {
-        if let Some(index) = (0..VIEWS.len()).find(|&index| tab_rect(index).contains(position)) {
-            self.select(VIEWS[index]);
+        if let Some(index) = (0..MODES.len()).find(|&index| tab_rect(index).contains(position)) {
+            self.select(MODES[index]);
             return;
         }
         let (Some(track), Some(thumb)) = (self.scroll_track(), self.thumb_rect()) else {
@@ -336,13 +305,12 @@ impl EnginePanel {
 
     /// Whether the panel looks different from when it was last painted, at
     /// a window `height` points tall; if so, it counts as painted from now.
-    pub fn needs_paint(&mut self, paused: bool, height: f32) -> bool {
+    pub fn needs_paint(&mut self, status: Option<&'static str>, height: f32) -> bool {
         let look = Look {
             refreshes: self.refreshes,
-            view: self.view,
+            mode: self.mode,
             scroll: self.scroll,
-            details: self.show_details,
-            paused,
+            status,
             height,
         };
         let changed = self.painted != Some(look);
@@ -350,9 +318,10 @@ impl EnginePanel {
         changed
     }
 
-    /// Draws the column at the left edge, full height.
-    pub fn draw(&mut self, engine: &ConnectedChambers, paused: bool) {
-        self.draw_with_height(&mut Pen::screen(), engine, paused, screen_height());
+    /// Draws the column at the left edge, full height, with `status` (such
+    /// as "Paused") beside the title.
+    pub fn draw(&mut self, pen: &mut Pen, engine: &ConnectedChambers, status: Option<&str>) {
+        self.draw_with_height(pen, engine, status, screen_height());
     }
 
     /// Draws the column for a window `height` pixels tall, scrolled by the
@@ -362,36 +331,44 @@ impl EnginePanel {
         &mut self,
         pen: &mut Pen,
         engine: &ConnectedChambers,
-        paused: bool,
+        status: Option<&str>,
         height: f32,
     ) -> f32 {
         self.viewport_height = (height - HEADER_HEIGHT).max(0.0);
         self.scroll_to(self.scroll);
-        pen.rect(0.0, 0.0, PANEL_WIDTH, height, PANEL);
+        // Content scrolled up under the header is cut off there.
+        pen.clip(Some(Rect::new(
+            0.0,
+            HEADER_HEIGHT,
+            PANEL_WIDTH,
+            self.viewport_height,
+        )));
 
         let origin = HEADER_HEIGHT - self.scroll;
         let x = MARGIN;
-        let (bottom, plot_side) = match self.view {
-            PanelView::All => {
-                let y = self.draw_now(pen, x, origin);
-                let y = self.draw_turn(pen, x, y + SECTION_GAP);
-                self.draw_loops(
+        let (bottom, plot_side) = match self.mode {
+            PanelMode::Simple => (simple::draw(pen, &self.readout, x, origin), 0.0),
+            PanelMode::Advanced => {
+                let y = advanced::draw(pen, &self.readout, x, origin);
+                let (y, side) = self.draw_loops(
                     pen,
                     engine,
                     x,
-                    y + READOUT_GAP,
+                    y + SECTION_GAP,
                     origin,
                     COMFORTABLE_PLOT_SIDE,
+                );
+                (
+                    advanced::draw_totals(pen, &self.readout, x, y + SECTION_GAP),
+                    side,
                 )
             }
-            PanelView::Now => (self.draw_now(pen, x, origin), 0.0),
-            PanelView::Laws => (self.draw_turn(pen, x, origin), 0.0),
-            PanelView::Loops => self.draw_loops(pen, engine, x, origin, origin, MIN_PLOT_SIDE),
         };
+        pen.clip(None);
         self.content_height = bottom - origin + MARGIN;
         self.scroll_to(self.scroll);
 
-        self.draw_header(pen, paused);
+        self.draw_header(pen, status);
         if let (Some(track), Some(thumb)) = (self.scroll_track(), self.thumb_rect()) {
             pen.rect(track.x, track.y, track.w, track.h, SCROLL_TRACK_COLOR);
             pen.rect(thumb.x, thumb.y, thumb.w, thumb.h, SCROLL_THUMB_COLOR);
@@ -399,11 +376,9 @@ impl EnginePanel {
         plot_side
     }
 
-    /// Title, running state and tabs, drawn over any content scrolled up
-    /// beneath them.
-    fn draw_header(&self, pen: &mut Pen, paused: bool) {
-        pen.rect(0.0, 0.0, PANEL_WIDTH, HEADER_HEIGHT, PANEL);
-        pen.fitted(
+    /// Title, status and the view switch, above the scrolling content.
+    fn draw_header(&self, pen: &mut Pen, status: Option<&str>) {
+        pen.fitted_strong(
             TITLE,
             MARGIN,
             TITLE_BASELINE,
@@ -411,30 +386,31 @@ impl EnginePanel {
             TITLE_SIZE,
             TEXT,
         );
-        let status = if paused { "Paused" } else { "Running" };
-        let status_width = pen.measure(status, BODY_SIZE);
-        pen.text(
-            status,
-            MARGIN + CONTENT_WIDTH - status_width,
-            TITLE_BASELINE,
-            BODY_SIZE,
-            if paused { WARNING } else { QUIET },
-        );
-        for (index, view) in VIEWS.into_iter().enumerate() {
+        if let Some(status) = status {
+            pen.text_right(
+                status,
+                MARGIN + CONTENT_WIDTH,
+                TITLE_BASELINE,
+                BODY_SIZE,
+                WARNING,
+            );
+        }
+        for (index, mode) in MODES.into_iter().enumerate() {
             let tab = tab_rect(index);
-            let selected = view == self.view;
-            pen.rect(
+            let selected = mode == self.mode;
+            pen.round_rect(
                 tab.x,
                 tab.y,
                 tab.w,
                 tab.h,
+                TAB_HEIGHT / 2.0,
                 if selected {
                     TAB_SELECTED_COLOR
                 } else {
                     TAB_COLOR
                 },
             );
-            let label = view.label();
+            let label = mode.label();
             let size = pen.fitted_size(label, tab.w, TAB_SIZE);
             pen.text(
                 label,
@@ -444,39 +420,6 @@ impl EnginePanel {
                 if selected { TEXT } else { QUIET },
             );
         }
-    }
-
-    /// "Engine now" readings below `top`; returns the last baseline.
-    fn draw_now(&self, pen: &mut Pen, x: f32, top: f32) -> f32 {
-        let mut y = top + LINE;
-        pen.fitted(SECTION_NOW, x, y, CONTENT_WIDTH, SECTION_SIZE, SECTION);
-        for (text, color) in &self.now.lines {
-            y += LINE;
-            pen.fitted(text, x, y, CONTENT_WIDTH, BODY_SIZE, *color);
-        }
-        for text in &self.now.details {
-            y += SMALL_LINE;
-            pen.fitted(text, x, y, CONTENT_WIDTH, SMALL_SIZE, QUIET);
-        }
-        y
-    }
-
-    /// The per-turn readouts below `top`, or a note until the first full
-    /// turn; returns the last baseline.
-    fn draw_turn(&self, pen: &mut Pen, x: f32, top: f32) -> f32 {
-        let mut y = top + LINE;
-        let Some(turn) = &self.turn else {
-            pen.fitted(SECTION_TURN, x, y, CONTENT_WIDTH, SECTION_SIZE, SECTION);
-            for text in [self.waiting, WAITING_NOTE] {
-                y += LINE;
-                pen.fitted(text, x, y, CONTENT_WIDTH, BODY_SIZE, QUIET);
-            }
-            return y;
-        };
-        pen.fitted(&turn.heading, x, y, CONTENT_WIDTH, SECTION_SIZE, SECTION);
-        y = draw_ledger(pen, turn, x, y + LINE);
-        y = draw_efficiency(pen, turn, x, y + READOUT_GAP);
-        draw_entropy(pen, turn, x, y + READOUT_GAP)
     }
 
     /// The P-V plot below `top`: as large as fits the visible height, but
@@ -491,10 +434,18 @@ impl EnginePanel {
         origin: f32,
         min_side: f32,
     ) -> (f32, f32) {
-        let mut y = top + LINE;
+        let mut y = advanced::section(pen, LOOPS_HEADING, x, top);
+        y += LINE;
         pen.fitted(LAW_WORK, x, y, CONTENT_WIDTH, LAW_SIZE, LAW);
         y += SMALL_LINE;
-        pen.fitted(&self.loop_text, x, y, CONTENT_WIDTH, SMALL_SIZE, QUIET);
+        pen.fitted(
+            &self.readout.loop_text,
+            x,
+            y,
+            CONTENT_WIDTH,
+            SMALL_SIZE,
+            QUIET,
+        );
         let Some(range) = self.range else {
             return (y, 0.0);
         };

@@ -14,26 +14,15 @@ const WINDOWS: [(f32, f32); 5] = [
 ];
 
 #[test]
-fn scene_sits_between_the_panel_and_the_controls() {
+fn span_is_centered_and_clear_of_the_panel_and_the_sliders() {
     for (width, _) in WINDOWS {
-        let (left, scene) = scene_span(width, true);
-        assert_eq!(left, PANEL_WIDTH);
-        assert!(left + scene <= control_left(width) - CONTROL_PADDING_X + 1e-3);
-        let (hidden_left, wider) = scene_span(width, false);
-        assert_eq!(hidden_left, 0.0);
-        assert!(wider > scene);
-    }
-}
-
-#[test]
-fn scene_viewport_counts_physical_pixels() {
-    const RETINA_SCALE: f32 = 2.0;
-    for (width, height) in WINDOWS {
-        let (left, scene) = scene_span(width, true);
-        let standard = scene_viewport(width, height, true, 1.0);
-        assert_eq!(standard, (left as i32, 0, scene as i32, height as i32));
-        let (x, y, w, h) = scene_viewport(width, height, true, RETINA_SCALE);
-        assert_eq!((x, y), (2 * standard.0, 0));
-        assert!((w - 2 * standard.2).abs() <= 1 && (h - 2 * standard.3).abs() <= 1);
+        for show_panel in [true, false] {
+            let (left, span) = scene_span(width, show_panel);
+            assert!((left + span / 2.0 - width / 2.0).abs() < 1e-3, "off center");
+            assert!(left >= scene_left(show_panel));
+            assert!(left + span <= control_left(width) - CONTROL_PADDING_X + 1e-3);
+        }
+        // Hiding the panel never narrows the span.
+        assert!(scene_span(width, false).1 >= scene_span(width, true).1);
     }
 }

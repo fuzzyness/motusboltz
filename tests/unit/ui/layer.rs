@@ -37,11 +37,24 @@ fn without_the_copy_shader_or_room_it_draws_directly() {
 }
 
 #[test]
-fn copy_shaders_are_glsl_100() {
-    for source in [COPY_VERTEX, COPY_FRAGMENT] {
+fn shaders_are_glsl_100() {
+    for source in [PAINT_VERTEX, PAINT_FRAGMENT, COPY_VERTEX, COPY_FRAGMENT] {
         assert!(source.starts_with("#version 100\n"));
         assert!(source.is_ascii());
     }
-    // Blending is off and alpha is forced to one, so the copy is opaque.
-    assert!(COPY_FRAGMENT.contains("vec4(texture2D(Texture, uv).rgb, 1.0)"));
+    // Painting matches Macroquad's own shader; copying passes the image
+    // through, coverage and all.
+    assert!(PAINT_FRAGMENT.contains("gl_FragColor = color * texture2D(Texture, uv);"));
+    assert!(COPY_FRAGMENT.contains("gl_FragColor = texture2D(Texture, uv);"));
+}
+
+/// Coverage adds up as a + a_behind (1 - a), so a soft letter edge over a
+/// clear image leaves a partly covered pixel, and the copy treats the
+/// image as premultiplied.
+#[test]
+fn blends_keep_coverage_and_copy_premultiplied() {
+    let over = BlendFactor::OneMinusValue(BlendValue::SourceAlpha);
+    let coverage = BlendState::new(Equation::Add, BlendFactor::One, over);
+    assert_eq!(painting_blend().alpha_blend, Some(coverage));
+    assert_eq!(copying_blend().color_blend, Some(coverage));
 }

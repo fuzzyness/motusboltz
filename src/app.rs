@@ -1,21 +1,20 @@
 //! The main loop. Each frame reads the input, steps the simulation, updates
 //! the panel and camera, and draws the scene with the panel on the left and
-//! the controls on the right. The scene's top-left corner carries the frame
-//! rate (with Details on) and the warning when physics time is dropped.
+//! the sliders on the right, and the buttons over the scene. Under the
+//! toggles at the scene's top left go the frame rate (in the Advanced view)
+//! and the warning when physics time is dropped.
 
 use macroquad::prelude::{
     Color,
     MouseButton,
     Rect,
     Vec2,
-    WHITE,
     clear_background,
     get_frame_time,
     is_mouse_button_down,
     is_mouse_button_pressed,
     mouse_position,
     next_frame,
-    screen_dpi_scale,
     screen_height,
     screen_width, //
 };
@@ -36,19 +35,22 @@ use crate::ui::camera::{
 use crate::ui::controls::{
     Action,
     ButtonStates,
-    Controls, //
+    Controls,
+    MARGIN,
+    SceneArea,
+    TOGGLES_BOTTOM, //
 };
 use crate::ui::draw_target::{
     draw_to,
     draw_to_screen, //
 };
+use crate::ui::fonts;
 use crate::ui::frame_stats::{
     FrameStats,
     LIMITED_TEXT, //
 };
 use crate::ui::input::{
     CameraKeys,
-    HELP_LINES,
     KeyCommands,
     shift_down,
     wheel_pixels, //
@@ -57,24 +59,23 @@ use crate::ui::layer::CachedLayer;
 use crate::ui::layout::{
     CONTROL_RIGHT_MARGIN,
     PANEL_WIDTH,
-    scene_span,
-    scene_viewport, //
+    scene_left,
+    scene_span, //
 };
 use crate::ui::panel::{
+    self,
     EnginePanel,
-    PanelPointer,
-    TITLE, //
+    PanelPointer, //
 };
 use crate::ui::pen::Pen;
+use crate::ui::shortcuts;
+use crate::ui::start_prompt::StartPrompt;
 
 const BACKGROUND_COLOR: Color = Color::from_rgba(12, 18, 30, 255);
-const SCENE_TEXT_MARGIN: f32 = 20.0;
-const TITLE_Y: f32 = 36.0;
-const TITLE_FONT_SIZE: f32 = 28.0;
-const HELP_FONT_SIZE: f32 = 16.0;
-const HELP_LINE_HEIGHT: f32 = 20.0;
-/// Baseline of the last help line above the bottom of the window.
-const HELP_BOTTOM_Y: f32 = 24.0;
+/// Baseline of the build label above the bottom of the window.
+const BUILD_LABEL_BOTTOM_Y: f32 = 24.0;
+/// Room the keys list leaves above the bottom row of buttons.
+const SHORTCUTS_BOTTOM_ROOM: f32 = 140.0;
 /// Version and Git revision of this build (see build.rs), shown in the
 /// bottom-right corner so it is always clear which build is running.
 const BUILD_LABEL: &str = concat!(
@@ -86,10 +87,9 @@ const BUILD_LABEL: &str = concat!(
 );
 const BUILD_LABEL_FONT_SIZE: f32 = 14.0;
 const BUILD_LABEL_COLOR: Color = Color::from_rgba(120, 140, 160, 255);
-/// Corner readout: its first baseline, below the title when the panel is
-/// hidden, and its line spacing.
-const CORNER_TOP_Y: f32 = 30.0;
-const CORNER_BELOW_TITLE_Y: f32 = TITLE_Y + 26.0;
+/// Corner readout: its first baseline, under the toggles, and its line
+/// spacing.
+const CORNER_TOP_Y: f32 = TOGGLES_BOTTOM + 24.0;
 const CORNER_FONT_SIZE: f32 = 16.0;
 const CORNER_LINE_HEIGHT: f32 = 20.0;
 const CORNER_TEXT_COLOR: Color = Color::from_rgba(150, 165, 180, 255);
@@ -149,6 +149,8 @@ struct App {
     slow: bool,
     /// Tracers stay on through refills, which choose new particles.
     tracers: bool,
+    show_keys: bool,
+    start_prompt: StartPrompt,
     panel: EnginePanel,
     /// The panel as last painted, repainted only when it changes.
     panel_layer: CachedLayer,
@@ -161,6 +163,7 @@ struct App {
 
 impl App {
     fn new() -> Self {
+        fonts::load();
         let simulation =
             ConnectedChambers::with_initial_concentration(DEFAULT_INITIAL_CONCENTRATION_MOL_PER_L);
         Self {
@@ -177,15 +180,55 @@ impl App {
             paused: false,
             slow: false,
             tracers: false,
+            show_keys: false,
+            start_prompt: StartPrompt::new(),
             frame_stats: FrameStats::new(),
             simulation,
+        }
+    }
+
+    /// Where the buttons go this frame.
+    fn scene_area(&self) -> SceneArea {
+        let (left, width) = scene_span(screen_width(), self.show_panel);
+        SceneArea {
+            edge: scene_left(self.show_panel),
+            left,
+            width,
+            height: screen_height().max(1.0),
+        }
+    }
+
+    /// Which buttons show and how they look this frame.
+    fn button_states(&self) -> ButtonStates {
+        ButtonStates {
+            paused: self.paused,
+            slow: self.slow,
+            tracers: self.tracers,
+            panel: self.show_panel,
+            keys: self.show_keys,
+            start: self.start_prompt.shown(),
+            no_gap: self.simulation.hot_kelvin() <= self.simulation.cold_kelvin(),
+        }
+    }
+
+    /// What the panel shows beside its title: Paused, Slow motion, or
+    /// nothing while the engine runs normally.
+    fn status(&self) -> Option<&'static str> {
+        if self.paused {
+            Some("Paused")
+        } else if self.slow {
+            Some("Slow motion")
+        } else {
+            None
         }
     }
 
     fn frame(&mut self) {
         let keys = KeyCommands::read();
         let wheel = wheel_pixels();
-        let events = self.controls.update();
+        let events = self
+            .controls
+            .update(self.scene_area(), self.button_states());
         let panel_blocks = self.show_panel
             && self.panel.handle_pointer(PanelPointer {
                 position: Vec2::from(mouse_position()),
@@ -215,11 +258,14 @@ impl App {
         if keys.kick {
             self.simulation.kick_flywheel(KickDirection::Negative);
         }
-        if keys.details || events.action == Some(Action::ToggleDetails) {
-            self.panel.toggle_details();
+        if keys.details {
+            self.panel.toggle_mode();
         }
-        if keys.panel {
+        if keys.panel || events.action == Some(Action::TogglePanel) {
             self.show_panel = !self.show_panel;
+        }
+        if keys.keys || events.action == Some(Action::ToggleKeys) {
+            self.show_keys = !self.show_keys;
         }
         if keys.camera_reset {
             self.camera.reset();
@@ -250,6 +296,8 @@ impl App {
         let physics_seconds = macroquad::miniquad::date::now() - physics_start;
         let now = macroquad::time::get_time();
         self.frame_stats.record(now, physics_seconds, limited);
+        self.start_prompt
+            .update(self.simulation.power_pistons().start_speed_fraction(), now);
         if self.show_panel {
             self.panel.update(&self.simulation, now);
         }
@@ -268,68 +316,70 @@ impl App {
     }
 
     fn draw(&mut self) {
-        let (scene_left, scene_width) = scene_span(screen_width(), self.show_panel);
-        let scene_height = screen_height().max(1.0);
-        let mut camera = self.camera.camera();
-        camera.viewport = Some(scene_viewport(
-            screen_width(),
-            scene_height,
-            self.show_panel,
-            screen_dpi_scale(),
-        ));
-        camera.aspect = Some(scene_width / scene_height);
+        let area = self.scene_area();
+        // The scene fills the window, behind the panel and the sliders; the
+        // camera keeps the engine at the window's middle.
+        let camera = self.camera.camera();
         clear_background(BACKGROUND_COLOR);
         draw_to(&camera);
         self.scene.draw(&self.simulation, &camera, BACKGROUND_COLOR);
         draw_to_screen();
 
-        let mut pen = Pen::screen();
+        // Measure every string first, then draw (see `Pen` for why).
+        let panel_stale = self.show_panel && self.panel.needs_paint(self.status(), area.height);
+        self.draw_overlay(&mut Pen::warm(), area, panel_stale);
+        self.draw_overlay(&mut Pen::screen(), area, panel_stale);
+    }
+
+    /// Everything over the scene: the panel, the corner readout, the build
+    /// label, the controls and the keys list.
+    fn draw_overlay(&mut self, pen: &mut Pen, area: SceneArea, panel_stale: bool) {
+        let status = self.status();
         if self.show_panel {
-            let stale = self.panel.needs_paint(self.paused, scene_height);
-            let (panel, simulation, paused) = (&mut self.panel, &self.simulation, self.paused);
-            self.panel_layer.draw(
-                Rect::new(0.0, 0.0, PANEL_WIDTH, scene_height),
-                stale,
-                || panel.draw(simulation, paused),
-            );
-        } else {
-            pen.text(TITLE, SCENE_TEXT_MARGIN, TITLE_Y, TITLE_FONT_SIZE, WHITE);
+            let panel_area = Rect::new(0.0, 0.0, PANEL_WIDTH, area.height);
+            pen.rect(0.0, 0.0, PANEL_WIDTH, area.height, panel::BACKGROUND);
+            if pen.is_warming() {
+                if self.panel_layer.will_paint(panel_area, panel_stale) {
+                    self.panel.draw(pen, &self.simulation, status);
+                }
+            } else {
+                let (panel, simulation) = (&mut self.panel, &self.simulation);
+                self.panel_layer.draw(panel_area, panel_stale, || {
+                    panel.draw(&mut Pen::screen(), simulation, status)
+                });
+            }
         }
-        self.draw_corner(&mut pen, scene_left, scene_width);
-        let mut help_y = screen_height() - HELP_BOTTOM_Y - HELP_LINE_HEIGHT;
-        for line in HELP_LINES {
-            pen.fitted(
-                line,
-                scene_left + SCENE_TEXT_MARGIN,
-                help_y,
-                scene_width - 2.0 * SCENE_TEXT_MARGIN,
-                HELP_FONT_SIZE,
-                WHITE,
-            );
-            help_y += HELP_LINE_HEIGHT;
-        }
-        let label_width = pen.measure(BUILD_LABEL, BUILD_LABEL_FONT_SIZE);
-        pen.text(
+        pen.text_right(
             BUILD_LABEL,
-            screen_width() - CONTROL_RIGHT_MARGIN - label_width,
-            screen_height() - HELP_BOTTOM_Y,
+            screen_width() - CONTROL_RIGHT_MARGIN,
+            screen_height() - BUILD_LABEL_BOTTOM_Y,
             BUILD_LABEL_FONT_SIZE,
             BUILD_LABEL_COLOR,
         );
-        self.controls.draw(ButtonStates {
-            paused: self.paused,
-            details: self.panel.details_shown(),
-            slow: self.slow,
-            tracers: self.tracers,
-        });
+        self.controls.draw(pen, area, self.button_states());
+        // The keys list drops down under the toggles; the corner readout
+        // goes under the list while it is open.
+        let mut corner_top = CORNER_TOP_Y;
+        if self.show_keys {
+            let list_top = TOGGLES_BOTTOM + MARGIN / 2.0;
+            let (_, height) = shortcuts::draw(
+                pen,
+                area.edge + MARGIN,
+                list_top,
+                area.right() - area.edge - 2.0 * MARGIN,
+                area.height - TOGGLES_BOTTOM - SHORTCUTS_BOTTOM_ROOM,
+            );
+            corner_top = list_top + height + CORNER_LINE_HEIGHT;
+        }
+        self.draw_corner(pen, area, corner_top);
     }
 
-    /// The frame rate and physics time while Details is on, and the
-    /// warning while it is held, at the scene's top-left in every view.
-    fn draw_corner(&self, pen: &mut Pen, scene_left: f32, scene_width: f32) {
+    /// The frame rate and physics time in the Advanced view, and the
+    /// warning while it is held, at the scene's left from `top` down.
+    fn draw_corner(&self, pen: &mut Pen, area: SceneArea, top: f32) {
         let stats = self
             .panel
-            .details_shown()
+            .advanced()
             .then(|| self.frame_stats.line())
             .flatten()
             .map(|line| (line, CORNER_TEXT_COLOR));
@@ -337,17 +387,13 @@ impl App {
             .frame_stats
             .limited(macroquad::time::get_time())
             .then(|| (LIMITED_TEXT.to_owned(), WARNING_COLOR));
-        let mut y = if self.show_panel {
-            CORNER_TOP_Y
-        } else {
-            CORNER_BELOW_TITLE_Y
-        };
+        let mut y = top;
         for (text, color) in stats.into_iter().chain(warning) {
             pen.fitted(
                 &text,
-                scene_left + SCENE_TEXT_MARGIN,
+                area.edge + MARGIN,
                 y,
-                scene_width - 2.0 * SCENE_TEXT_MARGIN,
+                area.right() - area.edge - 2.0 * MARGIN,
                 CORNER_FONT_SIZE,
                 color,
             );

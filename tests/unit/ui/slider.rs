@@ -5,7 +5,8 @@ use super::*;
 fn hot_kelvin_slider_is_clamped_and_quantized() {
     const TRACK_X: f32 = 100.0;
     let slider = Slider::hot_temperature(MIN_HOT_KELVIN);
-    assert_eq!(slider.label, "Hot reservoir (K)");
+    assert_eq!((slider.label, slider.unit), ("Hot side", "K"));
+    assert_eq!(slider.value_text(1_200.0), "1200 K");
     assert_eq!(slider.value_at_x(0.0, TRACK_X), MIN_HOT_KELVIN);
     assert_eq!(
         slider.value_at_x(TRACK_X + SLIDER_WIDTH, TRACK_X),

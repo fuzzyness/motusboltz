@@ -1,20 +1,21 @@
-//! Panel layout, tab and scrolling tests for `src/ui/panel.rs`, without a
-//! graphics context.
+//! Panel layout, view-switch and scrolling tests for `src/ui/panel.rs`,
+//! without a graphics context.
 
 use super::*;
 use crate::sim::cycle::TurnSummary;
 use crate::sim::geometry::DEFAULT_GEOMETRY;
 use crate::sim::units::DEFAULT_CONNECTED_MARKERS;
-use laws::{
-    LAW_CARNOT,
-    LAW_ENTROPY,
-    LAW_FIRST,
-    THIRD_LAW_NOTE, //
-};
+use crate::ui::fonts::drawable;
 use plot::LOOP_KEY;
 use readout::{
+    WAITING_GAP,
     WAITING_START,
     WAITING_TURN, //
+};
+use simple::{
+    LAW_FIRST,
+    LAW_SECOND,
+    LAW_THIRD, //
 };
 
 const SEED: u64 = 42;
@@ -46,12 +47,13 @@ fn heated_turn() -> TurnSummary {
     }
 }
 
-/// A panel holding readings and a P-V range, as after a few turns.
-fn filled_panel(engine: &ConnectedChambers, details: bool) -> EnginePanel {
+/// A panel holding readings and a P-V range, as after a few turns, in
+/// `mode`.
+fn filled_panel(engine: &ConnectedChambers, mode: PanelMode) -> EnginePanel {
     let mut panel = EnginePanel::new();
-    panel.show_details = details;
+    panel.select(mode);
     panel.refresh(engine);
-    panel.turn = Some(turn_readout(engine, heated_turn()));
+    panel.readout.turn = Some(readout::turn(engine, heated_turn()));
     panel.range = Some(PlotRange {
         volume: engine.cylinder_volume_range_cm3(),
         pressure: (20.0, 70.0),
@@ -63,7 +65,7 @@ fn filled_panel(engine: &ConnectedChambers, details: bool) -> EnginePanel {
 /// every string it would have drawn.
 fn layout(panel: &mut EnginePanel, engine: &ConnectedChambers, height: f32) -> (f32, Vec<String>) {
     let mut pen = Pen::offline();
-    let side = panel.draw_with_height(&mut pen, engine, false, height);
+    let side = panel.draw_with_height(&mut pen, engine, None, height);
     (side, pen.texts)
 }
 
@@ -78,59 +80,77 @@ fn press(position: Vec2) -> PanelPointer {
 }
 
 #[test]
-fn tabs_fit_the_header_without_overlapping() {
-    for index in 0..VIEWS.len() {
+fn view_switch_fits_the_header_without_overlapping() {
+    for index in 0..MODES.len() {
         let tab = tab_rect(index);
         assert!(tab.x >= MARGIN && tab.right() <= PANEL_WIDTH - MARGIN + 1e-3);
         assert!(tab.bottom() <= HEADER_HEIGHT);
-        if index + 1 < VIEWS.len() {
+        if index + 1 < MODES.len() {
             assert!(tab.right() < tab_rect(index + 1).x);
         }
     }
 }
 
 #[test]
-fn clicking_a_tab_selects_it_at_the_top() {
+fn clicking_a_view_selects_it_at_the_top_and_the_key_toggles() {
     let engine = engine();
-    let mut panel = filled_panel(&engine, true);
+    let mut panel = filled_panel(&engine, PanelMode::Advanced);
     layout(&mut panel, &engine, BROWSER_HEIGHTS[0]);
     panel.scroll_to(f32::MAX);
     assert!(panel.scroll > 0.0);
-    for (index, view) in VIEWS.into_iter().enumerate() {
+    for (index, mode) in MODES.into_iter().enumerate() {
         assert!(panel.handle_pointer(press(tab_rect(index).center())));
-        assert_eq!(panel.view, view);
+        assert_eq!(panel.mode, mode);
         assert_eq!(panel.scroll, 0.0);
     }
+    assert!(panel.advanced());
+    panel.toggle_mode();
+    assert!(!panel.advanced());
 }
 
+/// The Simple view, the one students see first, fits a laptop screen
+/// without scrolling and shows every law with the engine's numbers.
 #[test]
-fn loops_tab_gives_a_large_plot_at_every_window_height() {
+fn simple_view_fits_a_laptop_and_covers_every_law() {
     let engine = engine();
-    for height in [DEFAULT_HEIGHT, LAPTOP_HEIGHT]
-        .into_iter()
-        .chain(BROWSER_HEIGHTS)
-    {
-        let mut panel = filled_panel(&engine, true);
-        panel.select(PanelView::Loops);
-        let (side, texts) = layout(&mut panel, &engine, height);
-        assert_eq!(side, MAX_PLOT_SIDE, "plot at {height}");
-        assert_eq!(panel.max_scroll(), 0.0, "scrolls at {height}");
-        for (key, _) in LOOP_KEY {
-            assert!(texts.iter().any(|text| text == key));
-        }
+    let mut panel = filled_panel(&engine, PanelMode::Simple);
+    let (side, texts) = layout(&mut panel, &engine, LAPTOP_HEIGHT);
+    assert_eq!(side, 0.0, "no P-V plot in the Simple view");
+    assert_eq!(
+        panel.max_scroll(),
+        0.0,
+        "Simple view scrolls at {LAPTOP_HEIGHT}"
+    );
+    for expected in [
+        LAW_FIRST,
+        LAW_SECOND,
+        LAW_THIRD,
+        "the system",
+        "surroundings",
+    ] {
+        assert!(
+            texts.iter().any(|text| text == expected),
+            "{expected} not drawn"
+        );
     }
+    // The ledger's numbers, in joules, appear as drawn pieces.
+    let turn = panel.readout.turn.unwrap();
+    let heat_in = readout::amount(turn.hot_heat);
+    assert!(texts.contains(&heat_in));
+    assert!(texts.iter().any(|text| text.starts_with("ΔS universe = +")));
 }
 
 #[test]
-fn all_view_fits_a_tall_window_and_scrolls_on_a_short_one() {
+fn advanced_view_keeps_a_comfortable_plot_and_scrolls_on_short_windows() {
     let engine = engine();
-    let mut panel = filled_panel(&engine, false);
-    let (side, _) = layout(&mut panel, &engine, DEFAULT_HEIGHT);
+    let mut panel = filled_panel(&engine, PanelMode::Advanced);
+    let (side, texts) = layout(&mut panel, &engine, DEFAULT_HEIGHT);
     assert!(side >= COMFORTABLE_PLOT_SIDE);
-    assert_eq!(panel.max_scroll(), 0.0);
-
+    for (key, _) in LOOP_KEY {
+        assert!(texts.iter().any(|text| text == key));
+    }
     for height in BROWSER_HEIGHTS {
-        let mut panel = filled_panel(&engine, true);
+        let mut panel = filled_panel(&engine, PanelMode::Advanced);
         let (side, _) = layout(&mut panel, &engine, height);
         assert!(side >= COMFORTABLE_PLOT_SIDE, "plot shrank at {height}");
         assert!(panel.max_scroll() > 0.0, "nothing to scroll at {height}");
@@ -144,7 +164,7 @@ fn all_view_fits_a_tall_window_and_scrolls_on_a_short_one() {
 #[test]
 fn wheel_scrolls_only_over_the_panel_and_stays_in_range() {
     let engine = engine();
-    let mut panel = filled_panel(&engine, true);
+    let mut panel = filled_panel(&engine, PanelMode::Advanced);
     layout(&mut panel, &engine, BROWSER_HEIGHTS[1]);
     let wheel = |x: f32, pixels: f32| PanelPointer {
         position: Vec2::new(x, HEADER_HEIGHT + 10.0),
@@ -166,7 +186,7 @@ fn wheel_scrolls_only_over_the_panel_and_stays_in_range() {
 #[test]
 fn scrollbar_drag_and_track_clicks_scroll_the_content() {
     let engine = engine();
-    let mut panel = filled_panel(&engine, true);
+    let mut panel = filled_panel(&engine, PanelMode::Advanced);
     layout(&mut panel, &engine, BROWSER_HEIGHTS[1]);
     let track = panel.scroll_track().expect("short window must scroll");
     let thumb = panel.thumb_rect().unwrap();
@@ -196,16 +216,21 @@ fn scrollbar_drag_and_track_clicks_scroll_the_content() {
     );
 }
 
-/// Macroquad's built-in font is only relied on for ASCII, so every string
-/// the panel draws, in every state and tab, must be ASCII.
+/// Every string the panel draws, in every state and view, uses only
+/// characters the canvas fonts have.
 #[test]
-fn every_panel_state_draws_ascii_text() {
+fn every_panel_state_draws_only_font_characters() {
     let mut engine = engine();
     let mut panel = EnginePanel::new();
     panel.refresh(&engine);
-    assert_eq!(panel.waiting, WAITING_START);
+    assert_eq!(panel.readout.waiting, WAITING_GAP);
     let mut texts = layout(&mut panel, &engine, DEFAULT_HEIGHT).1;
-    assert!(texts.iter().any(|text| text == WAITING_START));
+    assert!(texts.iter().any(|text| text == WAITING_GAP));
+
+    engine.set_hot_kelvin(1_200.0);
+    panel.refresh(&engine);
+    assert_eq!(panel.readout.waiting, WAITING_START);
+    texts.extend(layout(&mut panel, &engine, DEFAULT_HEIGHT).1);
 
     engine.start_engine();
     // Long enough for the crank to complete a few loop bins.
@@ -213,32 +238,24 @@ fn every_panel_state_draws_ascii_text() {
     for _ in 0..FRAMES {
         engine.update(1.0 / 60.0);
     }
-    panel.show_details = true;
-    panel.refresh(&engine);
-    assert_eq!(panel.waiting, WAITING_TURN);
-    assert!(panel.range.is_some(), "the turn in progress sets the range");
-    texts.extend(layout(&mut panel, &engine, DEFAULT_HEIGHT).1);
-
-    let mut filled = filled_panel(&engine, true);
-    for view in VIEWS {
-        filled.select(view);
-        let drawn = layout(&mut filled, &engine, BROWSER_HEIGHTS[0]).1;
-        assert!(drawn.iter().any(|text| text == view.label()));
+    for mode in MODES {
+        panel.select(mode);
+        panel.refresh(&engine);
+        if panel.readout.turn.is_none() {
+            assert_eq!(panel.readout.waiting, WAITING_TURN);
+        }
+        let drawn = layout(&mut panel, &engine, DEFAULT_HEIGHT).1;
+        assert!(drawn.iter().any(|text| text == mode.label()));
         texts.extend(drawn);
     }
-    filled.select(PanelView::Laws);
-    let laws = layout(&mut filled, &engine, DEFAULT_HEIGHT).1;
-    for expected in [LAW_FIRST, LAW_CARNOT, LAW_ENTROPY, THIRD_LAW_NOTE] {
-        assert!(
-            laws.iter().any(|text| text == expected),
-            "{expected} not drawn"
-        );
+    assert!(panel.range.is_some(), "the turn in progress sets the range");
+
+    for mode in MODES {
+        let mut filled = filled_panel(&engine, mode);
+        texts.extend(layout(&mut filled, &engine, BROWSER_HEIGHTS[0]).1);
     }
-    filled.select(PanelView::Loops);
-    let loops = layout(&mut filled, &engine, DEFAULT_HEIGHT).1;
-    assert!(loops.iter().any(|text| text == LAW_WORK));
-    for text in texts.iter().chain(&laws).chain(&loops) {
-        assert!(text.is_ascii(), "non-ASCII panel text: {text:?}");
+    for text in &texts {
+        assert!(drawable(text), "panel text the fonts lack: {text:?}");
     }
 }
 
@@ -246,26 +263,30 @@ fn every_panel_state_draws_ascii_text() {
 fn repaints_only_when_the_panel_changes() {
     let engine = engine();
     let mut panel = EnginePanel::new();
-    assert!(panel.needs_paint(false, DEFAULT_HEIGHT), "never painted");
-    assert!(!panel.needs_paint(false, DEFAULT_HEIGHT), "nothing changed");
+    assert!(panel.needs_paint(None, DEFAULT_HEIGHT), "never painted");
+    assert!(!panel.needs_paint(None, DEFAULT_HEIGHT), "nothing changed");
 
     panel.update(&engine, 1.0);
-    assert!(panel.needs_paint(false, DEFAULT_HEIGHT), "text rebuilt");
+    assert!(panel.needs_paint(None, DEFAULT_HEIGHT), "text rebuilt");
     panel.update(&engine, 1.0 + REFRESH_SECONDS / 2.0);
     assert!(
-        !panel.needs_paint(false, DEFAULT_HEIGHT),
+        !panel.needs_paint(None, DEFAULT_HEIGHT),
         "too soon to rebuild"
     );
 
-    assert!(panel.needs_paint(true, DEFAULT_HEIGHT), "paused");
-    assert!(panel.needs_paint(true, LAPTOP_HEIGHT), "window resized");
-    panel.select(PanelView::Loops);
-    assert!(panel.needs_paint(true, LAPTOP_HEIGHT), "other tab");
-    panel.toggle_details();
-    assert!(panel.needs_paint(true, LAPTOP_HEIGHT), "details shown");
+    assert!(panel.needs_paint(Some("Paused"), DEFAULT_HEIGHT), "paused");
+    assert!(
+        panel.needs_paint(Some("Paused"), LAPTOP_HEIGHT),
+        "window resized"
+    );
+    panel.toggle_mode();
+    assert!(
+        panel.needs_paint(Some("Paused"), LAPTOP_HEIGHT),
+        "other view"
+    );
     panel.content_height = 2.0 * LAPTOP_HEIGHT;
     panel.viewport_height = LAPTOP_HEIGHT - HEADER_HEIGHT;
     panel.scroll_to(40.0);
-    assert!(panel.needs_paint(true, LAPTOP_HEIGHT), "scrolled");
-    assert!(!panel.needs_paint(true, LAPTOP_HEIGHT));
+    assert!(panel.needs_paint(Some("Paused"), LAPTOP_HEIGHT), "scrolled");
+    assert!(!panel.needs_paint(Some("Paused"), LAPTOP_HEIGHT));
 }

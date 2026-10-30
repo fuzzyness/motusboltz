@@ -28,85 +28,58 @@ fn heated_turn() -> TurnSummary {
 }
 
 #[test]
-fn signed_sums_show_every_sign() {
-    assert_eq!(signed_sum(&[2347.12, -2284.81]), "2347.1 - 2284.8");
-    assert_eq!(signed_sum(&[-3.0, 4.0]), "-3.0 + 4.0");
+fn numbers_use_true_minus_signs_and_thousands_separators() {
+    assert_eq!(signed_sum(&[2347.12, -2284.81]), "2347.1 − 2284.8");
+    assert_eq!(signed_sum(&[-3.0, 4.0]), "−3.0 + 4.0");
+    assert_eq!(amount(5_247.4), "5,247");
+    assert_eq!(amount(-12_345.0), "−12,345");
+    assert_eq!(amount(3.24), "3.2");
+    assert_eq!(amount(-0.01), "0.0", "no minus on a rounded zero");
+    assert_eq!(signed_number(43.45, 1), "+43.5");
+    assert_eq!(signed_number(-0.0001, 2), "+0.00");
+    assert_eq!(signed_number(-2.5, 1), "−2.5");
+    assert_eq!(kelvin_text(Some(1057.4)), "1057 K");
+    assert_eq!(kelvin_text(None), "—");
 }
 
 #[test]
-fn ledger_puts_each_term_on_the_side_it_flows() {
-    let engine = engine();
-    let readout = turn_readout(&engine, heated_turn());
-    assert_eq!(
-        readout.inflow.iter().map(|&(_, c)| c).collect::<Vec<_>>(),
-        [HOT_COLOR]
-    );
-    assert_eq!(
-        readout.outflow.iter().map(|&(_, c)| c).collect::<Vec<_>>(),
-        [COLD_COLOR, WORK_COLOR, STORED_COLOR]
-    );
-    assert!((sum(&readout.inflow) - sum(&readout.outflow)).abs() < 1e-9);
-    assert!(readout.ledger_warning.is_none());
-    assert!(readout.heading.contains("3 TURNS"));
-
-    // Work done on the gas and energy released by it are inflows.
-    let reversed = TurnSummary {
-        gas_work: -300.0,
-        gas_energy_change: -100.0,
-        hot_heat: 9_000.0,
-        cold_heat: -9_400.0,
-        ..heated_turn()
-    };
-    let readout = turn_readout(&engine, reversed);
-    assert_eq!(readout.inflow.len(), 3);
-    assert_eq!(
-        readout.outflow.iter().map(|&(_, c)| c).collect::<Vec<_>>(),
-        [COLD_COLOR]
-    );
+fn speed_reads_at_rest_forward_or_backward() {
+    assert_eq!(speed_text(0.0), "at rest");
+    assert_eq!(speed_text(0.1), "at rest", "gas pushes alone");
+    assert_eq!(speed_text(3.44), "3.4 rpm");
+    assert_eq!(speed_text(-0.8), "−0.8 rpm");
 }
 
 #[test]
-fn efficiency_and_entropy_readouts_cover_each_case() {
+fn a_heated_turn_balances_and_counts_as_settled() {
     let engine = engine();
-    let heated = turn_readout(&engine, heated_turn());
-    assert!(
-        heated.efficiency_text.0.contains("3.3%"),
-        "{:?}",
-        heated.efficiency_text
-    );
-    assert!(heated.carnot_text.ends_with("75.0%"));
-    assert!((heated.carnot - 0.75).abs() < 1e-9);
-    assert_eq!(heated.entropy_value.1, GOOD);
-    assert!(heated.entropy_note.0.contains("dS universe"));
+    let turn = turn(&engine, heated_turn());
+    assert_eq!(turn.turns, 3);
+    assert!((turn.seconds - 80.0).abs() < 1e-9);
+    let efficiency = turn.efficiency.expect("net work out");
+    assert!((efficiency - 300.0 / 9_000.0).abs() < 1e-9);
+    assert!((turn.carnot - 0.75).abs() < 1e-9);
+    assert!(turn.entropy > 0.0);
+    assert!(turn.settled);
+    assert!(turn.residual.abs() < LEDGER_TOLERANCE_JOULES);
+    let ledger = turn.hot_heat + turn.cold_heat - turn.work - turn.stored;
+    assert!(ledger.abs() < 1e-9);
+}
 
-    let equilibrium = turn_readout(
+#[test]
+fn turns_without_net_work_or_still_warming_say_so() {
+    let engine = engine();
+    let no_work = turn(
         &engine,
         TurnSummary {
-            hot_kelvin: 300.0,
             gas_work: -30.0,
+            cold_heat: 3.0 * -8_900.0 + 30.0,
             ..heated_turn()
         },
     );
-    assert_eq!(equilibrium.carnot, 0.0);
-    assert_eq!(equilibrium.efficiency, 0.0);
-    assert!(
-        equilibrium
-            .efficiency_text
-            .0
-            .contains("without a temperature difference")
-    );
+    assert!(no_work.efficiency.is_none());
 
-    let no_work = turn_readout(
-        &engine,
-        TurnSummary {
-            gas_work: 0.0,
-            cold_heat: 3.0 * -8_900.0,
-            ..heated_turn()
-        },
-    );
-    assert!(no_work.efficiency_text.0.ends_with("per turn"));
-
-    let warming = turn_readout(
+    let warming = turn(
         &engine,
         TurnSummary {
             gas_energy_change: 3.0 * 2_000.0,
@@ -114,36 +87,16 @@ fn efficiency_and_entropy_readouts_cover_each_case() {
             ..heated_turn()
         },
     );
-    assert!(warming.entropy_note.0.starts_with("Not settled"));
-
-    let unbalanced = turn_readout(
-        &engine,
-        TurnSummary {
-            gas_work: 3.0 * 400.0,
-            ..heated_turn()
-        },
-    );
-    assert!(unbalanced.ledger_warning.is_some());
+    assert!(!warming.settled);
 }
 
 #[test]
-fn details_add_lines() {
-    let engine = engine();
-    let plain = now_readout(&engine, false);
-    assert!(plain.details.is_empty());
-    let detailed = now_readout(&engine, true);
-    assert_eq!(detailed.lines, plain.lines);
-    assert!(
-        detailed
-            .details
-            .iter()
-            .any(|text| text.starts_with("Balance error"))
-    );
-    assert!(
-        detailed
-            .details
-            .iter()
-            .any(|text| text.starts_with("Shaft: to load"))
-    );
+fn waiting_text_asks_for_a_temperature_difference_then_for_start() {
+    let mut engine = engine();
+    assert_eq!(waiting_text(&engine), WAITING_GAP, "both sides at 300 K");
+    engine.set_hot_kelvin(1_200.0);
     assert_eq!(waiting_text(&engine), WAITING_START);
+    engine.start_engine();
+    engine.update(1.0 / 60.0);
+    assert_eq!(waiting_text(&engine), WAITING_TURN);
 }

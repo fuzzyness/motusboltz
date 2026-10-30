@@ -67,6 +67,7 @@ fn command_keys_map_to_their_commands() {
     assert!(KeyCommands::from_pressed(only(&[KeyCode::K])).kick);
     assert!(KeyCommands::from_pressed(only(&[KeyCode::L])).slow);
     assert!(KeyCommands::from_pressed(only(&[KeyCode::F])).tracers);
+    assert!(KeyCommands::from_pressed(only(&[KeyCode::H])).keys);
     for (index, key) in FILL_KEYS.into_iter().enumerate() {
         assert_eq!(
             KeyCommands::from_pressed(only(&[key])).fill_preset,
@@ -83,15 +84,18 @@ fn command_keys_map_to_their_commands() {
     }
 }
 
+/// The Keys list names every binding, in ASCII, without the hidden kick.
 #[test]
-fn help_lists_the_bindings_in_ascii_without_the_hidden_kick() {
-    for line in HELP_LINES {
-        assert!(line.is_ascii(), "{line}");
-        assert!(!line.contains("K:"));
+fn shortcuts_list_the_bindings_in_ascii_without_the_hidden_kick() {
+    for (keys, action) in SHORTCUTS {
+        assert!(keys.is_ascii() && action.is_ascii(), "{keys}: {action}");
+        assert_ne!(keys, "K");
     }
-    let help = HELP_LINES.join(" ");
-    for name in ["Enter", "Space", "I:", "WASD", "Shift", "-/=", "R:"] {
-        assert!(help.contains(name), "{name} missing from help");
+    let listed: Vec<&str> = SHORTCUTS.iter().map(|&(keys, _)| keys).collect();
+    for keys in [
+        "Enter", "Space", "L", "F", "T", "1 to 5", "I", "G", "H", "R",
+    ] {
+        assert!(listed.contains(&keys), "{keys} missing from the list");
     }
 }
 

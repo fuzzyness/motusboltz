@@ -4,14 +4,9 @@
 use macroquad::prelude::{
     Color,
     MouseButton,
-    ORANGE,
     WHITE,
-    draw_circle,
-    draw_rectangle,
-    draw_text,
     is_mouse_button_down,
     is_mouse_button_pressed,
-    measure_text,
     mouse_position,
     screen_width, //
 };
@@ -31,33 +26,43 @@ use crate::ui::layout::{
     CONTROL_WIDTH,
     control_left, //
 };
+use crate::ui::pen::{
+    Pen,
+    Weight, //
+};
 
 const SLIDER_WIDTH: f32 = CONTROL_WIDTH;
-const SLIDER_TRACK_HEIGHT: f32 = 8.0;
-const SLIDER_HANDLE_RADIUS: f32 = 11.0;
-const SLIDER_HIT_HALF_HEIGHT: f32 = 24.0;
+const SLIDER_TRACK_HEIGHT: f32 = 6.0;
+const SLIDER_HANDLE_RADIUS: f32 = 10.0;
+/// The colored ring around the white handle.
+const HANDLE_RING: f32 = 3.0;
+const SLIDER_HIT_HALF_HEIGHT: f32 = 22.0;
 const SLIDER_HIT_MARGIN_X: f32 = 14.0;
-/// Background above and below the track, which holds the label and the
-/// range values.
-pub const PANEL_PADDING_TOP: f32 = 52.0;
-const PANEL_PADDING_BOTTOM: f32 = 43.0;
-const LABEL_SIZE: f32 = 21.0;
-/// Baseline of the label above the track.
-const LABEL_OFFSET_Y: f32 = 21.0;
-const RANGE_SIZE: f32 = 17.0;
+/// Area above and below the track that holds the label and the range
+/// values; the camera ignores the mouse over it.
+pub const AREA_ABOVE: f32 = 40.0;
+const AREA_BELOW: f32 = 32.0;
+const LABEL_SIZE: f32 = 20.0;
+/// Baseline of the label and value above the track.
+const LABEL_OFFSET_Y: f32 = 16.0;
+const RANGE_SIZE: f32 = 15.0;
 /// Baseline of the minimum and maximum values below the track.
-const RANGE_OFFSET_Y: f32 = 36.0;
-/// Track centers, top to bottom. The first sits just below the three rows
-/// of buttons, so the helium slider still clears the build label in the
-/// smallest engine frame the web page gives (about 544 px tall).
-pub const HOT_Y: f32 = 214.0;
-const COLD_Y: f32 = HOT_Y + 120.0;
-const CONCENTRATION_Y: f32 = COLD_Y + 120.0;
+const RANGE_OFFSET_Y: f32 = 26.0;
+/// Track centers, top to bottom, starting near the top of the column now
+/// that the buttons sit in the scene.
+pub const HOT_Y: f32 = 58.0;
+const SLIDER_SPACING: f32 = 90.0;
+const COLD_Y: f32 = HOT_Y + SLIDER_SPACING;
+const CONCENTRATION_Y: f32 = COLD_Y + SLIDER_SPACING;
 const KELVIN_STEP: f32 = 1.0;
 const MOLARITY_STEP: f32 = 0.005;
-const PANEL_COLOR: Color = Color::new(0.035, 0.060, 0.105, 0.88);
-const TRACK_COLOR: Color = Color::new(0.27, 0.33, 0.40, 1.0);
-const RANGE_TEXT_COLOR: Color = Color::new(0.72, 0.78, 0.85, 1.0);
+const TRACK_COLOR: Color = Color::new(0.27, 0.33, 0.40, 0.9);
+const VALUE_COLOR: Color = WHITE;
+const LABEL_COLOR: Color = Color::from_rgba(185, 198, 212, 255);
+const RANGE_TEXT_COLOR: Color = Color::from_rgba(120, 138, 158, 255);
+const HOT_COLOR: Color = Color::from_rgba(255, 160, 90, 255);
+const COLD_COLOR: Color = Color::from_rgba(95, 190, 255, 255);
+const HELIUM_COLOR: Color = Color::from_rgba(180, 224, 209, 255);
 
 /// What happened to a slider this frame.
 #[derive(Default)]
@@ -70,6 +75,8 @@ pub struct SliderUpdate {
 /// multiples of `step` above `min`.
 pub struct Slider {
     label: &'static str,
+    unit: &'static str,
+    color: Color,
     min: f32,
     max: f32,
     step: f32,
@@ -82,7 +89,7 @@ pub struct Slider {
 impl Slider {
     pub fn hot_temperature(value: f32) -> Self {
         Self::new(
-            "Hot reservoir (K)",
+            ("Hot side", "K", HOT_COLOR),
             MIN_HOT_KELVIN,
             MAX_HOT_KELVIN,
             KELVIN_STEP,
@@ -94,7 +101,7 @@ impl Slider {
 
     pub fn cold_temperature(value: f32) -> Self {
         Self::new(
-            "Cold reservoir (K)",
+            ("Cold side", "K", COLD_COLOR),
             MIN_COLD_KELVIN,
             MAX_COLD_KELVIN,
             KELVIN_STEP,
@@ -106,7 +113,7 @@ impl Slider {
 
     pub fn concentration(value: f32) -> Self {
         Self::new(
-            "Helium (mol/L)",
+            ("Helium", "mol/L", HELIUM_COLOR),
             MIN_INITIAL_CONCENTRATION_MOL_PER_L,
             MAX_INITIAL_CONCENTRATION_MOL_PER_L,
             MOLARITY_STEP,
@@ -116,8 +123,9 @@ impl Slider {
         )
     }
 
+    /// A slider named `label`, its values in `unit`, filled with `color`.
     fn new(
-        label: &'static str,
+        (label, unit, color): (&'static str, &'static str, Color),
         min: f32,
         max: f32,
         step: f32,
@@ -128,6 +136,8 @@ impl Slider {
         assert!(min < max && step > 0.0);
         let mut slider = Self {
             label,
+            unit,
+            color,
             min,
             max,
             step,
@@ -169,7 +179,7 @@ impl Slider {
         let (x, y) = mouse_position();
         let origin = self.origin_x();
         (origin - CONTROL_PADDING_X..=origin + SLIDER_WIDTH + CONTROL_PADDING_X).contains(&x)
-            && (self.y - PANEL_PADDING_TOP..=self.y + PANEL_PADDING_BOTTOM).contains(&y)
+            && (self.y - AREA_ABOVE..=self.y + AREA_BELOW).contains(&y)
     }
 
     fn value_at_x(&self, x: f32, origin: f32) -> f32 {
@@ -211,53 +221,60 @@ impl Slider {
         self.dragging || self.pointer_over_panel()
     }
 
-    pub fn draw(&self) {
+    /// The value with its unit, as shown beside the label.
+    fn value_text(&self, value: f32) -> String {
+        format!("{:.*} {}", self.precision, value, self.unit)
+    }
+
+    /// Label and value above the track, the range below it, and no
+    /// background, so the scene shows around it.
+    pub fn draw(&self, pen: &mut Pen) {
         let x = self.origin_x();
         let progress = (self.value - self.min) / (self.max - self.min);
         let handle_x = x + progress * SLIDER_WIDTH;
-        draw_rectangle(
-            x - CONTROL_PADDING_X,
-            self.y - PANEL_PADDING_TOP,
-            SLIDER_WIDTH + 2.0 * CONTROL_PADDING_X,
-            PANEL_PADDING_TOP + PANEL_PADDING_BOTTOM,
-            PANEL_COLOR,
-        );
-        draw_text(
-            format!("{}: {:.*}", self.label, self.precision, self.value),
-            x,
-            self.y - LABEL_OFFSET_Y,
+        let label_y = self.y - LABEL_OFFSET_Y;
+        pen.text(self.label, x, label_y, LABEL_SIZE, LABEL_COLOR);
+        let value = self.value_text(self.value);
+        let value_width = pen.measure_weight(&value, LABEL_SIZE, Weight::Semibold);
+        pen.strong(
+            &value,
+            x + SLIDER_WIDTH - value_width,
+            label_y,
             LABEL_SIZE,
-            WHITE,
+            VALUE_COLOR,
         );
-        draw_rectangle(
+        let track_top = self.y - SLIDER_TRACK_HEIGHT / 2.0;
+        let radius = SLIDER_TRACK_HEIGHT / 2.0;
+        pen.round_rect(
             x,
-            self.y - SLIDER_TRACK_HEIGHT / 2.0,
+            track_top,
             SLIDER_WIDTH,
             SLIDER_TRACK_HEIGHT,
+            radius,
             TRACK_COLOR,
         );
-        draw_rectangle(
+        pen.round_rect(
             x,
-            self.y - SLIDER_TRACK_HEIGHT / 2.0,
+            track_top,
             handle_x - x,
             SLIDER_TRACK_HEIGHT,
-            ORANGE,
+            radius,
+            self.color,
         );
-        draw_circle(handle_x, self.y, SLIDER_HANDLE_RADIUS, WHITE);
-        let min = format!("{:.*}", self.precision, self.min);
-        let max = format!("{:.*}", self.precision, self.max);
-        draw_text(
-            &min,
+        pen.circle(handle_x, self.y, SLIDER_HANDLE_RADIUS, self.color);
+        pen.circle(handle_x, self.y, SLIDER_HANDLE_RADIUS - HANDLE_RING, WHITE);
+        let range_y = self.y + RANGE_OFFSET_Y;
+        pen.text(
+            &self.value_text(self.min),
             x,
-            self.y + RANGE_OFFSET_Y,
+            range_y,
             RANGE_SIZE,
             RANGE_TEXT_COLOR,
         );
-        let max_width = measure_text(&max, None, RANGE_SIZE as u16, 1.0).width;
-        draw_text(
-            &max,
-            x + SLIDER_WIDTH - max_width,
-            self.y + RANGE_OFFSET_Y,
+        pen.text_right(
+            &self.value_text(self.max),
+            x + SLIDER_WIDTH,
+            range_y,
             RANGE_SIZE,
             RANGE_TEXT_COLOR,
         );

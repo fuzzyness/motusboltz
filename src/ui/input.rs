@@ -16,6 +16,7 @@ const DETAILS_KEY: KeyCode = KeyCode::I;
 const PANEL_KEY: KeyCode = KeyCode::G;
 const CAMERA_RESET_KEY: KeyCode = KeyCode::R;
 const SLOW_KEY: KeyCode = KeyCode::L;
+const KEYS_KEY: KeyCode = KeyCode::H;
 const TRACERS_KEY: KeyCode = KeyCode::F;
 /// The additive kick, which can overdrive the engine. Left out of the help
 /// text on purpose; it exists for testing.
@@ -47,10 +48,22 @@ const CAMERA_DIRECTION_KEYS: [(KeyCode, Vec2); 8] = [
 const ZOOM_IN_KEYS: [KeyCode; 2] = [KeyCode::Equal, KeyCode::KpAdd];
 const ZOOM_OUT_KEYS: [KeyCode; 2] = [KeyCode::Minus, KeyCode::KpSubtract];
 
-/// The key bindings, as shown at the bottom of the scene.
-pub const HELP_LINES: [&str; 2] = [
-    "Enter: Start | Space: Pause | L: Slow | F: Tracers | T: Reset | 1-5: Fill",
-    "I: Details | G: Panel | WASD: Turn | Shift+WASD: Move | -/=: Zoom | R: View",
+/// Every key binding the Keys list shows, as (keys, what they do). The
+/// hidden kick is left out.
+pub const SHORTCUTS: [(&str, &str); 13] = [
+    ("Enter", "Start the engine"),
+    ("Space", "Pause or resume"),
+    ("L", "Slow motion"),
+    ("F", "Follow particles (tracers)"),
+    ("T", "Reset with fresh gas"),
+    ("1 to 5", "Less or more helium"),
+    ("I", "Simple or advanced readings"),
+    ("G", "Show or hide the panel"),
+    ("H", "Show or hide these keys"),
+    ("Drag, WASD", "Turn the view"),
+    ("Shift + either", "Move the view"),
+    ("Wheel, - =", "Zoom"),
+    ("R", "Reset the view"),
 ];
 
 /// Scroll per wheel reading, in pixels. The browser and macOS report
@@ -73,6 +86,7 @@ pub struct KeyCommands {
     pub reset_gas: bool,
     pub details: bool,
     pub panel: bool,
+    pub keys: bool,
     pub camera_reset: bool,
     pub slow: bool,
     pub tracers: bool,
@@ -94,6 +108,7 @@ impl KeyCommands {
             reset_gas: pressed(RESET_GAS_KEY),
             details: pressed(DETAILS_KEY),
             panel: pressed(PANEL_KEY),
+            keys: pressed(KEYS_KEY),
             camera_reset: pressed(CAMERA_RESET_KEY),
             slow: pressed(SLOW_KEY),
             tracers: pressed(TRACERS_KEY),

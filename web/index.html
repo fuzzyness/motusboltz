@@ -70,12 +70,14 @@
           <h3>Start it in four steps</h3>
           <ol class="steps">
             <li>Click the engine, so your keys go to it.</li>
-            <li>Drag <b>Hot reservoir</b> all the way up to 1200&nbsp;K and <b>Cold reservoir</b> all the
-              way down to 100&nbsp;K. These are the sliders on the right.</li>
-            <li>Press <kbd>Enter</kbd> or the <b>Start</b> button. This gives the wheel a single push to get
-              it moving. From then on, only the gas keeps it going.</li>
+            <li>Drag <b>Hot side</b> up and <b>Cold side</b> down, with the sliders on the right. Any big
+              difference works, and the bigger it is, the faster the engine runs: 1200&nbsp;K and
+              100&nbsp;K is the fastest.</li>
+            <li>Press <kbd>Enter</kbd> or the <b>Start the engine</b> button under the engine. This gives
+              the wheel a single push to get it moving. From then on, only the gas keeps it going, and the
+              button goes away until the wheel stops again.</li>
             <li>Watch for a minute or two. One full turn takes about 16 seconds, and the readings for
-              each law appear on the left after the first full turn.</li>
+              each law appear in the panel on the left after the first full turn.</li>
           </ol>
         </div>
 
@@ -195,8 +197,9 @@
               <tr><th scope="row"><kbd>F</kbd></th><td>Follow five dots with tracer lines</td></tr>
               <tr><th scope="row"><kbd>T</kbd></th><td>Refill with fresh gas at 300&nbsp;K</td></tr>
               <tr><th scope="row"><kbd>1</kbd> to <kbd>5</kbd></th><td>Less or more helium</td></tr>
-              <tr><th scope="row"><kbd>I</kbd></th><td>More or fewer details</td></tr>
-              <tr><th scope="row"><kbd>G</kbd></th><td>Hide or show the left panel</td></tr>
+              <tr><th scope="row"><kbd>I</kbd></th><td>Simple or Advanced readings</td></tr>
+              <tr><th scope="row"><kbd>G</kbd></th><td>Hide or show the panel</td></tr>
+              <tr><th scope="row"><kbd>H</kbd></th><td>Show or hide the list of keys</td></tr>
               <tr><th scope="row">Drag, or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></th><td>Turn the
                   view</td></tr>
               <tr><th scope="row">Shift with either</th><td>Slide the view</td></tr>
@@ -209,17 +212,19 @@
         <div>
           <h3>Reading the panel</h3>
           <dl class="tabs-guide">
-            <dt>Now</dt>
-            <dd>The temperature and pressure of the gas in each cylinder right now, how fast the wheel
-              turns, and how much energy it carries.</dd>
-            <dt>Laws</dt>
-            <dd>One readout per law, averaged over the last full turns (up to three). Changing a
-              temperature starts the average over.</dd>
-            <dt>P-V</dt>
-            <dd>A pressure against volume graph for each cylinder over the last turn. The area inside each
-              loop is the work done in that turn.</dd>
-            <dt>All</dt>
-            <dd>Everything at once. Scroll the panel if it does not fit.</dd>
+            <dt>Simple</dt>
+            <dd>The gas temperatures and the wheel's speed right now, a diagram of where the energy goes
+              each turn (the helium is the system, everything it trades energy with is its
+              surroundings), and one card per law with the engine's own numbers. Orange is heat in,
+              yellow is work and blue is heat out.</dd>
+            <dt>Advanced</dt>
+            <dd>Every reading: the gas in each cylinder, the flywheel and its load, the exact equation
+              behind each law, a pressure against volume graph for each cylinder (the area inside each
+              loop is the work done in that turn), and energy checks.</dd>
+            <dt>Both</dt>
+            <dd>Per-turn numbers average the last full turns, up to three. Changing a temperature starts
+              the average over. Use the buttons above the engine to show or hide the panel and the list
+              of keys.</dd>
           </dl>
         </div>
       </div>
@@ -357,8 +362,8 @@
             <p>A heat engine turns part of a flow of heat into work. Its efficiency, <var>η</var> (the Greek
               letter eta), is the work out divided by the heat in: <var>η</var> = <var>W</var> /
               <var>Q</var><sub>hot</sub>.</p>
-            <p class="in-engine">The Laws tab shows the efficiency each turn, next to the Carnot limit: the
-              highest efficiency any engine could reach between the same two temperatures.</p>
+            <p class="in-engine">The panel shows the efficiency each turn on a bar marked with the Carnot
+              limit: the highest efficiency any engine could reach between the same two temperatures.</p>
           </dd>
         </div>
       </dl>
@@ -391,10 +396,10 @@
           <div class="pair">
             <div class="in-engine">
               <h4>In the engine</h4>
-              <p>In one run with 2,048 particles at 1200&nbsp;K and 100&nbsp;K, the Laws tab showed, per
-                turn:</p>
+              <p>In one run with 2,048 particles at 1200&nbsp;K and 100&nbsp;K, the Advanced view showed,
+                per turn:</p>
               <p class="readout">4996.3 − 4879.9 = 107.6 + 8.8 J</p>
-              <p>Both sides come to 116.4&nbsp;J. Open the Laws tab and watch the two sides match, turn
+              <p>Both sides come to 116.4&nbsp;J. Open the panel and watch the two sides match, turn
                 after turn.</p>
             </div>
             <div class="everyday">
@@ -590,10 +595,10 @@
           dots are drawn far bigger than atoms so you can see them.</li>
         <li><b>The engine runs slowly.</b> Motion is slowed down so you can follow single particles,
           and Slow mode slows it four times more. Times and rpm are in model units, not real seconds.</li>
-        <li><b>Pressure on the Now tab is an estimate.</b> The ~ sign marks an ideal gas estimate,
-          <var>P</var> = <var>nRT</var>/<var>V</var>, from each cylinder's particles. The P-V loops use the
-          real pushes of particles on the pistons.</li>
-        <li><b>The two sides can show different pressures.</b> At the largest fill the Now tab's
+        <li><b>The pressure readings are estimates.</b> The Advanced view's pressures are ideal gas
+          estimates, <var>P</var> = <var>nRT</var>/<var>V</var>, from each cylinder's particles. The P-V
+          loops use the real pushes of particles on the pistons.</li>
+        <li><b>The two sides can show different pressures.</b> At the largest fill the Advanced view's
           estimates for the hot and cold sides differ about two to one. The estimate treats the dots as
           points, so it reads low where they crowd closest, on the cold side. Measuring the real push of
           the gas on the walls, a planned improvement, will show how much of the difference is real.</li>

@@ -363,6 +363,13 @@ impl PowerPistons {
             self.angular_velocity as f32
         }
     }
+    /// Speed in the heat-engine direction as a fraction of the speed Start
+    /// gives: 1 just after Start, 0 at rest or while held, negative when
+    /// turning backward. Display only.
+    pub fn start_speed_fraction(&self) -> f64 {
+        KickDirection::Negative.sign() as f64 * self.angular_velocity() as f64 / self.start_speed
+    }
+
     /// Signed crank rotation since the fill, in turns.
     pub fn revolutions(&self) -> f64 {
         self.total_angle / std::f64::consts::TAU

@@ -40,14 +40,14 @@ const TRACE_ALPHA: f32 = 0.45;
 /// Pressure axis limits are rounded out to multiples of this many bar.
 const PRESSURE_STEP_BAR: f64 = 10.0;
 const PASCALS_PER_BAR: f64 = 100_000.0;
-const VOLUME_UNIT: &str = "V (cm3)";
+const VOLUME_UNIT: &str = "V (cm³)";
 const PRESSURE_UNIT: &str = "bar";
 pub const LOOP_KEY: [(&str, Color); 2] = [
     ("Hot loop: gas does work on the piston (+)", HOT_COLOR),
-    ("Cold loop: piston does work on the gas (-)", COLD_COLOR),
+    ("Cold loop: piston does work on the gas (−)", COLD_COLOR),
 ];
 
-/// Axis limits for the P-V plot: volume in cm3 and pressure in bar.
+/// Axis limits for the P-V plot: volume in cm³ and pressure in bar.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlotRange {
     pub volume: (f64, f64),
