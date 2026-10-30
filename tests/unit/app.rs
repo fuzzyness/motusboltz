@@ -49,7 +49,7 @@ fn initial_camera_frames_the_engine_in_the_clear_span() {
             Mat4::perspective_rh_gl(camera.fovy, width / height, camera.z_near, camera.z_far)
                 * Mat4::look_at_rh(camera.position, camera.target, camera.up);
         for show_panel in [true, false] {
-            let (left, span) = scene_span(width, show_panel);
+            let (left, span) = scene_span(width, show_panel, true);
             // The span's edges in clip space.
             let clip_x = |x: f32| 2.0 * x / width - 1.0;
             let (low, high) = (clip_x(left), clip_x(left + span));

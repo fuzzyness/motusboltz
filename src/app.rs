@@ -37,6 +37,7 @@ use crate::ui::camera::{
     Pointer, //
 };
 use crate::ui::controls::{
+    self,
     Action,
     BACKING,
     BACKING_RADIUS,
@@ -45,6 +46,10 @@ use crate::ui::controls::{
     MARGIN,
     SceneArea,
     TOGGLES_BOTTOM, //
+};
+use crate::ui::drawer::{
+    self,
+    Edge, //
 };
 use crate::ui::fonts;
 use crate::ui::frame_stats::{
@@ -59,13 +64,11 @@ use crate::ui::input::{
 };
 use crate::ui::layer::CachedLayer;
 use crate::ui::layout::{
-    CONTROL_RIGHT_MARGIN,
     PANEL_WIDTH,
     scene_left,
     scene_span, //
 };
 use crate::ui::panel::{
-    self,
     EnginePanel,
     PanelPointer, //
 };
@@ -76,8 +79,8 @@ use crate::ui::start_prompt::StartPrompt;
 /// The background's middle tone: the plain background where its shader
 /// cannot be built, and the color distant particles fade toward.
 const BACKGROUND_COLOR: Color = Color::from_rgba(12, 18, 30, 255);
-/// Baseline of the build label above the bottom of the window.
-const BUILD_LABEL_BOTTOM_Y: f32 = 24.0;
+/// Gap between the build label and Hide all, at its left.
+const BUILD_LABEL_GAP: f32 = 14.0;
 /// Room the keys list leaves above the bottom row of buttons.
 const SHORTCUTS_BOTTOM_ROOM: f32 = 140.0;
 /// Version and Git revision of this build (see build.rs), shown in the
@@ -161,6 +164,9 @@ struct App {
     /// The panel as last painted, repainted only when it changes.
     panel_layer: CachedLayer,
     show_panel: bool,
+    show_sliders: bool,
+    /// Everything over the scene is hidden but Hide all itself.
+    hide_all: bool,
     camera: OrbitCamera,
     scene: Scene,
     controls: Controls,
@@ -176,6 +182,8 @@ impl App {
             panel: EnginePanel::new(),
             panel_layer: CachedLayer::new(),
             show_panel: true,
+            show_sliders: true,
+            hide_all: false,
             camera: initial_camera(simulation.geometry()),
             scene: Scene::new(&simulation),
             controls: Controls::new(
@@ -194,13 +202,19 @@ impl App {
         }
     }
 
+    /// Whether the panel is on screen this frame.
+    fn panel_shown(&self) -> bool {
+        self.show_panel && !self.hide_all
+    }
+
     /// Where the buttons go this frame.
     fn scene_area(&self) -> SceneArea {
-        let (left, width) = scene_span(screen_width(), self.show_panel);
+        let (left, width) = scene_span(screen_width(), self.show_panel, self.show_sliders);
         SceneArea {
-            edge: scene_left(self.show_panel),
+            edge: scene_left(self.panel_shown()),
             left,
             width,
+            window_width: screen_width(),
             height: screen_height().max(1.0),
         }
     }
@@ -216,6 +230,8 @@ impl App {
             start: self.start_prompt.shown(),
             no_gap: self.simulation.hot_kelvin() <= self.simulation.cold_kelvin(),
             sky: self.scenery == Scenery::Sky,
+            sliders: self.show_sliders,
+            hidden: self.hide_all,
         }
     }
 
@@ -237,7 +253,7 @@ impl App {
         let events = self
             .controls
             .update(self.scene_area(), self.button_states());
-        let panel_blocks = self.show_panel
+        let panel_blocks = self.panel_shown()
             && self.panel.handle_pointer(PanelPointer {
                 position: Vec2::from(mouse_position()),
                 wheel_pixels: wheel,
@@ -274,6 +290,12 @@ impl App {
         }
         if keys.panel || events.action == Some(Action::TogglePanel) {
             self.show_panel = !self.show_panel;
+        }
+        if keys.sliders || events.action == Some(Action::ToggleSliders) {
+            self.show_sliders = !self.show_sliders;
+        }
+        if keys.hide_all || events.action == Some(Action::ToggleAll) {
+            self.hide_all = !self.hide_all;
         }
         if keys.keys || events.action == Some(Action::ToggleKeys) {
             self.show_keys = !self.show_keys;
@@ -312,7 +334,7 @@ impl App {
         self.frame_stats.record(now, physics_seconds, limited);
         self.start_prompt
             .update(self.simulation.power_pistons().start_speed_fraction(), now);
-        if self.show_panel {
+        if self.panel_shown() {
             self.panel.update(&self.simulation, now);
         }
 
@@ -347,7 +369,7 @@ impl App {
         );
 
         // Measure every string first, then draw (see `Pen` for why).
-        let panel_stale = self.show_panel && self.panel.needs_paint(self.status(), area.height);
+        let panel_stale = self.panel_shown() && self.panel.needs_paint(self.status(), area.height);
         self.draw_overlay(&mut Pen::warm(), area, panel_stale);
         self.draw_overlay(&mut Pen::screen(), area, panel_stale);
     }
@@ -356,9 +378,9 @@ impl App {
     /// label, the controls and the keys list.
     fn draw_overlay(&mut self, pen: &mut Pen, area: SceneArea, panel_stale: bool) {
         let status = self.status();
-        if self.show_panel {
+        if self.panel_shown() {
             let panel_area = Rect::new(0.0, 0.0, PANEL_WIDTH, area.height);
-            pen.rect(0.0, 0.0, PANEL_WIDTH, area.height, panel::BACKGROUND);
+            drawer::draw_card(pen, controls::panel_card(area.height), Edge::Left, true);
             if pen.is_warming() {
                 if self.panel_layer.will_paint(panel_area, panel_stale) {
                     self.panel.draw(pen, &self.simulation, status);
@@ -370,8 +392,14 @@ impl App {
                 });
             }
         }
-        let label_right = screen_width() - CONTROL_RIGHT_MARGIN;
-        let label_y = screen_height() - BUILD_LABEL_BOTTOM_Y;
+        self.controls.draw(pen, area, self.button_states());
+        if self.hide_all {
+            return;
+        }
+        // The build label sits left of Hide all, level with its text.
+        let corner = controls::corner_button(pen, area);
+        let label_right = corner.x - BUILD_LABEL_GAP;
+        let label_y = corner.y + (corner.h + pen.text_height("H", BUILD_LABEL_FONT_SIZE)) / 2.0;
         if self.scenery == Scenery::Sky {
             let width = pen.measure(BUILD_LABEL, BUILD_LABEL_FONT_SIZE);
             backing(
@@ -389,7 +417,6 @@ impl App {
             BUILD_LABEL_FONT_SIZE,
             BUILD_LABEL_COLOR,
         );
-        self.controls.draw(pen, area, self.button_states());
         // The keys list drops down under the toggles; the corner readout
         // goes under the list while it is open.
         let mut corner_top = CORNER_TOP_Y;
@@ -397,9 +424,9 @@ impl App {
             let list_top = TOGGLES_BOTTOM + MARGIN / 2.0;
             let (_, height) = shortcuts::draw(
                 pen,
-                area.edge + MARGIN,
+                controls::toggles_middle(area),
                 list_top,
-                area.right() - area.edge - 2.0 * MARGIN,
+                area.width - 2.0 * MARGIN,
                 area.height - TOGGLES_BOTTOM - SHORTCUTS_BOTTOM_ROOM,
             );
             corner_top = list_top + height + CORNER_LINE_HEIGHT;

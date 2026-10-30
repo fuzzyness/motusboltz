@@ -9,7 +9,8 @@ use macroquad::prelude::{
 
 use crate::ui::pen::{
     Pen,
-    Weight, //
+    Weight,
+    rounded_outline, //
 };
 
 /// Label size, and the gap between a label and its key.
@@ -33,7 +34,7 @@ const SHEEN: Color = Color::new(1.0, 1.0, 1.0, 0.1);
 /// How far the face turns toward white while on and while hovered.
 const ON_LIFT: f32 = 0.08;
 const HOVER_LIFT: f32 = 0.12;
-const LABEL_COLOR: Color = Color::from_rgba(252, 253, 255, 255);
+pub const LABEL_COLOR: Color = Color::from_rgba(252, 253, 255, 255);
 /// The key is drawn in a deep shade of the face, quieter than the label.
 const KEY_SHADE: f32 = 0.42;
 
@@ -80,30 +81,36 @@ fn whiten(color: Color, share: f32) -> Color {
     Color::new(toward(color.r), toward(color.g), toward(color.b), color.a)
 }
 
-/// Draws the pill of a button filling `rect`: a glow if it is on, the
-/// rim, the face, and the sheen across the top of the face.
+/// Draws the pill of a button filling `rect` (see `glossy`).
 pub fn pill(pen: &Pen, rect: Rect, look: Look, hovered: bool) {
+    glossy(pen, rect, [rect.h / 2.0; 4], look, hovered);
+}
+
+/// Draws a button's shape filling `rect`, with corners of `radii` (top
+/// left, top right, bottom right, bottom left): a glow if it is on, the
+/// rim, the face, and the sheen, across the top of a wide shape or down
+/// the left of a tall one.
+pub fn glossy(pen: &Pen, rect: Rect, radii: [f32; 4], look: Look, hovered: bool) {
     let (face, rim) = look.hue.colors();
-    let radius = rect.h / 2.0;
     if look.on {
-        pen.round_rect(
+        let glow = Rect::new(
             rect.x - GLOW,
             rect.y - GLOW,
             rect.w + 2.0 * GLOW,
             rect.h + 2.0 * GLOW,
-            radius + GLOW,
-            Color {
-                a: GLOW_OPACITY,
-                ..rim
-            },
         );
+        let glow_color = Color {
+            a: GLOW_OPACITY,
+            ..rim
+        };
+        shape(pen, glow, radii.map(|radius| radius + GLOW), glow_color);
     }
     let rim = if look.on {
         whiten(rim, ON_RIM_WHITENING)
     } else {
         rim
     };
-    pen.round_rect(rect.x, rect.y, rect.w, rect.h, radius, rim);
+    shape(pen, rect, radii, rim);
     let lift = if look.on { ON_LIFT } else { 0.0 } + if hovered { HOVER_LIFT } else { 0.0 };
     let inner = Rect::new(
         rect.x + RIM,
@@ -111,29 +118,38 @@ pub fn pill(pen: &Pen, rect: Rect, look: Look, hovered: bool) {
         rect.w - 2.0 * RIM,
         rect.h - 2.0 * RIM,
     );
-    pen.round_rect(
-        inner.x,
-        inner.y,
-        inner.w,
-        inner.h,
-        inner.h / 2.0,
-        whiten(face, lift),
-    );
+    let inner_radii = radii.map(|radius| (radius - RIM).max(0.0));
+    shape(pen, inner, inner_radii, whiten(face, lift));
+    let wide = inner.w >= inner.h;
+    let across = if wide { inner.h } else { inner.w };
     for (share, inset) in SHEEN_LAYERS {
-        let (height, inset) = (inner.h * share, inner.h * inset);
-        pen.round_rect(
-            inner.x + inset,
-            inner.y + 1.0,
-            inner.w - 2.0 * inset,
-            height,
-            height / 2.0,
-            SHEEN,
-        );
+        let (thickness, inset) = (across * share, across * inset);
+        let sheen = if wide {
+            Rect::new(
+                inner.x + inset,
+                inner.y + 1.0,
+                inner.w - 2.0 * inset,
+                thickness,
+            )
+        } else {
+            Rect::new(
+                inner.x + 1.0,
+                inner.y + inset,
+                thickness,
+                inner.h - 2.0 * inset,
+            )
+        };
+        shape(pen, sheen, [thickness / 2.0; 4], SHEEN);
     }
 }
 
+/// Fills `rect` with corners of `radii` in `color`.
+fn shape(pen: &Pen, rect: Rect, radii: [f32; 4], color: Color) {
+    pen.fan(rect.center(), &rounded_outline(rect, radii), color);
+}
+
 /// The color of a button's key: a deep shade of its face.
-fn key_color(look: Look) -> Color {
+pub fn key_color(look: Look) -> Color {
     let (face, _) = look.hue.colors();
     Color::new(
         face.r * KEY_SHADE,

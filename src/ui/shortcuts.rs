@@ -1,9 +1,17 @@
-//! The keyboard shortcuts list, which drops down under the Keys button.
+//! The keyboard shortcuts list, which drops down centered under the Keys
+//! button.
 
-use macroquad::prelude::Color;
+use macroquad::prelude::{
+    Color,
+    Rect,
+    vec2, //
+};
 
 use crate::ui::input::SHORTCUTS;
-use crate::ui::pen::Pen;
+use crate::ui::pen::{
+    Pen,
+    rounded_outline, //
+};
 
 const PADDING: f32 = 14.0;
 const TITLE: &str = "KEYBOARD SHORTCUTS";
@@ -11,8 +19,10 @@ const TITLE_SIZE: f32 = 13.0;
 const TEXT_SIZE: f32 = 15.0;
 const LINE: f32 = 21.0;
 const COLUMN_GAP: f32 = 16.0;
-const RADIUS: f32 = 10.0;
-const BACKGROUND: Color = Color::new(0.06, 0.09, 0.14, 0.92);
+const RADIUS: f32 = 16.0;
+const BACKGROUND: Color = Color::new(0.06, 0.1, 0.18, 0.85);
+const RIM: Color = Color::new(0.85, 0.92, 1.0, 0.2);
+const RIM_WIDTH: f32 = 1.5;
 const TITLE_COLOR: Color = Color::from_rgba(120, 140, 160, 255);
 const KEY_COLOR: Color = Color::from_rgba(255, 200, 140, 255);
 const TEXT_COLOR: Color = Color::from_rgba(215, 226, 238, 255);
@@ -32,13 +42,16 @@ fn extent(pen: &Pen, scale: f32) -> (f32, f32, f32) {
     (width, height, key_width)
 }
 
-/// Draws the list with its top-left corner at (`x`, `y`), shrunk if needed
-/// to fit `max_width` and `max_height`. Returns its size.
-pub fn draw(pen: &mut Pen, x: f32, y: f32, max_width: f32, max_height: f32) -> (f32, f32) {
+/// Draws the list centered on `middle` with its top at `y`, shrunk if
+/// needed to fit `max_width` and `max_height`. Returns its size.
+pub fn draw(pen: &mut Pen, middle: f32, y: f32, max_width: f32, max_height: f32) -> (f32, f32) {
     let (width, height, _) = extent(pen, 1.0);
     let scale = (max_width / width).min(max_height / height).min(1.0);
     let (width, height, key_width) = extent(pen, scale);
-    pen.round_rect(x, y, width, height, RADIUS, BACKGROUND);
+    let x = middle - width / 2.0;
+    let outline = rounded_outline(Rect::new(x, y, width, height), [RADIUS; 4]);
+    pen.fan(vec2(middle, y + height / 2.0), &outline, BACKGROUND);
+    pen.ring(&outline, RIM_WIDTH, RIM);
     let left = x + PADDING;
     let mut baseline = y + PADDING + LINE * scale * 0.75;
     pen.text(TITLE, left, baseline, TITLE_SIZE * scale, TITLE_COLOR);

@@ -50,7 +50,7 @@ const RANGE_SIZE: f32 = 15.0;
 const RANGE_OFFSET_Y: f32 = 26.0;
 /// Track centers, top to bottom, starting near the top of the column now
 /// that the buttons sit in the scene.
-pub const HOT_Y: f32 = 58.0;
+pub const HOT_Y: f32 = 68.0;
 const SLIDER_SPACING: f32 = 90.0;
 const COLD_Y: f32 = HOT_Y + SLIDER_SPACING;
 const CONCENTRATION_Y: f32 = COLD_Y + SLIDER_SPACING;

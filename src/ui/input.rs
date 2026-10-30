@@ -20,6 +20,8 @@ const SLOW_KEY: KeyCode = KeyCode::L;
 const KEYS_KEY: KeyCode = KeyCode::H;
 const TRACERS_KEY: KeyCode = KeyCode::F;
 const SCENERY_KEY: KeyCode = KeyCode::V;
+const SLIDERS_KEY: KeyCode = KeyCode::C;
+const HIDE_ALL_KEY: KeyCode = KeyCode::U;
 /// The additive kick, which can overdrive the engine. Left out of the help
 /// text on purpose; it exists for testing.
 const KICK_KEY: KeyCode = KeyCode::K;
@@ -52,7 +54,7 @@ const ZOOM_OUT_KEYS: [KeyCode; 2] = [KeyCode::Minus, KeyCode::KpSubtract];
 
 /// Every key binding the Keys list shows, as (keys, what they do). The
 /// hidden kick is left out.
-pub const SHORTCUTS: [(&str, &str); 13] = [
+pub const SHORTCUTS: [(&str, &str); 15] = [
     ("Space", "Start, pause or resume"),
     ("L", "Slow motion"),
     ("F", "Follow particles (tracers)"),
@@ -60,6 +62,8 @@ pub const SHORTCUTS: [(&str, &str); 13] = [
     ("1 to 5", "Less or more helium"),
     ("I", "Simple or advanced readings"),
     ("G", "Show or hide the panel"),
+    ("C", "Show or hide the sliders"),
+    ("U", "Hide or show everything"),
     ("H", "Show or hide these keys"),
     ("V", "Sky or grid scenery"),
     ("Drag, WASD", "Turn the view"),
@@ -93,6 +97,8 @@ pub struct KeyCommands {
     pub slow: bool,
     pub tracers: bool,
     pub scenery: bool,
+    pub sliders: bool,
+    pub hide_all: bool,
     pub kick: bool,
     /// Index of the fill preset chosen with keys 1 to 5.
     pub fill_preset: Option<usize>,
@@ -115,6 +121,8 @@ impl KeyCommands {
             slow: pressed(SLOW_KEY),
             tracers: pressed(TRACERS_KEY),
             scenery: pressed(SCENERY_KEY),
+            sliders: pressed(SLIDERS_KEY),
+            hide_all: pressed(HIDE_ALL_KEY),
             kick: pressed(KICK_KEY),
             fill_preset: FILL_KEYS.into_iter().position(&pressed),
         }

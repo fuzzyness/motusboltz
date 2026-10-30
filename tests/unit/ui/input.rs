@@ -71,6 +71,8 @@ fn command_keys_map_to_their_commands() {
     assert!(KeyCommands::from_pressed(only(&[KeyCode::L])).slow);
     assert!(KeyCommands::from_pressed(only(&[KeyCode::F])).tracers);
     assert!(KeyCommands::from_pressed(only(&[KeyCode::H])).keys);
+    assert!(KeyCommands::from_pressed(only(&[KeyCode::C])).sliders);
+    assert!(KeyCommands::from_pressed(only(&[KeyCode::U])).hide_all);
     for (index, key) in FILL_KEYS.into_iter().enumerate() {
         assert_eq!(
             KeyCommands::from_pressed(only(&[key])).fill_preset,
@@ -95,7 +97,9 @@ fn shortcuts_list_the_bindings_in_ascii_without_the_hidden_kick() {
         assert_ne!(keys, "K");
     }
     let listed: Vec<&str> = SHORTCUTS.iter().map(|&(keys, _)| keys).collect();
-    for keys in ["Space", "L", "F", "T", "1 to 5", "I", "G", "H", "R"] {
+    for keys in [
+        "Space", "L", "F", "T", "1 to 5", "I", "G", "C", "U", "H", "R",
+    ] {
         assert!(listed.contains(&keys), "{keys} missing from the list");
     }
 }

@@ -83,7 +83,7 @@ fn press(position: Vec2) -> PanelPointer {
 fn view_switch_fits_the_header_without_overlapping() {
     for index in 0..MODES.len() {
         let tab = tab_rect(index);
-        assert!(tab.x >= MARGIN && tab.right() <= PANEL_WIDTH - MARGIN + 1e-3);
+        assert!(tab.x >= LEFT && tab.right() <= PANEL_WIDTH - MARGIN + 1e-3);
         assert!(tab.bottom() <= HEADER_HEIGHT);
         if index + 1 < MODES.len() {
             assert!(tab.right() < tab_rect(index + 1).x);

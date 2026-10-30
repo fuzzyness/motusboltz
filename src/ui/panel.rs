@@ -1,8 +1,10 @@
-//! Left-column readings panel, in two views. Simple shows what the project
-//! is about in plain words: where the energy goes each turn and what each
-//! law says about it. Advanced shows every reading, with the
-//! pressure-volume loops. The column scrolls, by wheel or by dragging its
-//! scrollbar, whenever its content is taller than the window.
+//! The readings panel, in two views, on a rounded, see-through card at the
+//! window's left (see `drawer`). Simple shows what the project is about in
+//! plain words: where the energy goes each turn and what each law says
+//! about it. Advanced shows every reading, with the pressure-volume loops.
+//! The card scrolls, by wheel or by dragging its scrollbar, whenever its
+//! content is taller than the window. Its text has a soft shadow, so it
+//! reads over whatever shows through the card.
 //!
 //! The readings are rebuilt at most `REFRESH_SECONDS` apart, not every
 //! frame, and the app repaints the panel only when what it shows changes
@@ -25,7 +27,10 @@ use crate::ui::button::{
     self,
     Hue, //
 };
-use crate::ui::layout::PANEL_WIDTH;
+use crate::ui::layout::{
+    PANEL_INSET,
+    PANEL_WIDTH, //
+};
 use crate::ui::pen::{
     Pen,
     Weight, //
@@ -45,22 +50,29 @@ use readout::{
 
 pub const TITLE: &str = "MotusBoltz";
 
+/// Room inside the card around its content, and the content's left edge.
 const MARGIN: f32 = 16.0;
-const CONTENT_WIDTH: f32 = PANEL_WIDTH - 2.0 * MARGIN;
+const LEFT: f32 = PANEL_INSET + MARGIN;
+const CONTENT_WIDTH: f32 = PANEL_WIDTH - PANEL_INSET - 2.0 * MARGIN;
+/// Room kept under the content at the card's bottom, clear of its rounded
+/// corners.
+const BOTTOM_ROOM: f32 = 6.0;
+/// Room under the content's last line when scrolled to the end.
+const END_ROOM: f32 = 10.0;
 /// Seconds of wall time between text refreshes.
 const REFRESH_SECONDS: f64 = 0.1;
 
 // Header: the title, then the Simple and Advanced switch. It stays put
 // while the content below it scrolls.
-const TITLE_BASELINE: f32 = 36.0;
-const TAB_TOP: f32 = 50.0;
+const TITLE_BASELINE: f32 = PANEL_INSET + 32.0;
+const TAB_TOP: f32 = PANEL_INSET + 44.0;
 const TAB_HEIGHT: f32 = 26.0;
 const TAB_GAP: f32 = 6.0;
 const HEADER_HEIGHT: f32 = TAB_TOP + TAB_HEIGHT + 4.0;
 
-// Scrollbar, in the right margin.
+// Scrollbar, in the card's right margin.
 const SCROLLBAR_WIDTH: f32 = 5.0;
-const SCROLLBAR_INSET: f32 = 5.0;
+const SCROLLBAR_INSET: f32 = 6.0;
 const MIN_THUMB_HEIGHT: f32 = 24.0;
 
 const TITLE_SIZE: f32 = 28.0;
@@ -77,22 +89,30 @@ const READOUT_GAP: f32 = 10.0;
 /// scrolls to reach it rather than shrinking it further.
 const COMFORTABLE_PLOT_SIDE: f32 = 200.0;
 
-/// The panel's background, drawn behind it every frame by the app:
-/// translucent, so the scene shows through faintly.
-pub const BACKGROUND: Color = Color::new(19.0 / 255.0, 29.0 / 255.0, 43.0 / 255.0, 0.62);
+/// The soft shadow under the panel's light text.
+const TEXT_SHADOW: Color = Color::new(0.02, 0.04, 0.1, 0.85);
 const TEXT: Color = Color::from_rgba(215, 226, 238, 255);
-const QUIET: Color = Color::from_rgba(150, 165, 180, 255);
-const SECTION: Color = Color::from_rgba(120, 140, 160, 255);
+const QUIET: Color = Color::from_rgba(176, 190, 208, 255);
+const SECTION: Color = Color::from_rgba(150, 172, 198, 255);
 const LAW: Color = Color::from_rgba(180, 224, 209, 255);
 const WARNING: Color = Color::from_rgba(255, 130, 110, 255);
 const GOOD: Color = Color::from_rgba(140, 220, 150, 255);
-const TRACK: Color = Color::from_rgba(52, 65, 81, 255);
+const TRACK: Color = Color::new(0.7, 0.8, 0.95, 0.14);
 const HOT_COLOR: Color = Color::from_rgba(255, 160, 90, 255);
 const COLD_COLOR: Color = Color::from_rgba(95, 190, 255, 255);
 const WORK_COLOR: Color = Color::from_rgba(255, 218, 110, 255);
-const TAB_COLOR: Color = Color::from_rgba(38, 52, 68, 255);
-const SCROLL_TRACK_COLOR: Color = Color::from_rgba(38, 52, 68, 255);
-const SCROLL_THUMB_COLOR: Color = Color::from_rgba(120, 140, 160, 255);
+const PEARL: Color = Color::from_rgba(186, 200, 222, 255);
+const SCROLL_TRACK_COLOR: Color = Color::new(0.75, 0.85, 1.0, 0.12);
+const SCROLL_THUMB_COLOR: Color = Color::new(0.75, 0.85, 1.0, 0.55);
+/// Glass tiles inside the card (see `tile`): how much of the tint goes
+/// into the fill, the fill's and the rim's opacity, the rim's width, and
+/// the sheen across the top half.
+const TILE_TINT: f32 = 0.24;
+const TILE_OPACITY: f32 = 0.55;
+const TILE_RIM_OPACITY: f32 = 0.45;
+const TILE_RIM_WIDTH: f32 = 1.2;
+const TILE_SHEEN: Color = Color::new(1.0, 1.0, 1.0, 0.05);
+const TILE_BASE: Color = Color::new(0.05, 0.08, 0.14, 1.0);
 
 const LOOPS_HEADING: &str = "P-V LOOPS (LAST TURN)";
 const LAW_WORK: &str = "Work: the area inside each loop";
@@ -132,11 +152,41 @@ impl PanelMode {
 fn tab_rect(index: usize) -> Rect {
     let width = (CONTENT_WIDTH - TAB_GAP * (MODES.len() - 1) as f32) / MODES.len() as f32;
     Rect::new(
-        MARGIN + index as f32 * (width + TAB_GAP),
+        LEFT + index as f32 * (width + TAB_GAP),
         TAB_TOP,
         width,
         TAB_HEIGHT,
     )
+}
+
+/// A glass tile inside the card: a dark fill tinted toward `tint`, a thin
+/// rim in `tint`, and a faint sheen across its top half, with corners of
+/// `radius`.
+fn tile(pen: &Pen, rect: Rect, radius: f32, tint: Color) {
+    let mix = |base: f32, tint: f32| base + (tint - base) * TILE_TINT;
+    let fill = Color::new(
+        mix(TILE_BASE.r, tint.r),
+        mix(TILE_BASE.g, tint.g),
+        mix(TILE_BASE.b, tint.b),
+        TILE_OPACITY,
+    );
+    let outline = crate::ui::pen::rounded_outline(rect, [radius; 4]);
+    pen.fan(rect.center(), &outline, fill);
+    pen.ring(
+        &outline,
+        TILE_RIM_WIDTH,
+        Color {
+            a: TILE_RIM_OPACITY,
+            ..tint
+        },
+    );
+    let sheen = Rect::new(rect.x, rect.y, rect.w, rect.h / 2.0);
+    let top = radius.min(sheen.h);
+    pen.fan(
+        sheen.center(),
+        &crate::ui::pen::rounded_outline(sheen, [top, top, 0.0, 0.0]),
+        TILE_SHEEN,
+    );
 }
 
 /// Pointer state for one frame.
@@ -231,7 +281,8 @@ impl EnginePanel {
     /// camera should ignore the pointer: it is over the panel, or a press
     /// that started here is still held.
     pub fn handle_pointer(&mut self, pointer: PanelPointer) -> bool {
-        let over = (0.0..=PANEL_WIDTH).contains(&pointer.position.x);
+        let over = (0.0..=PANEL_WIDTH).contains(&pointer.position.x)
+            && pointer.position.y <= HEADER_HEIGHT + self.viewport_height + BOTTOM_ROOM;
         if !pointer.down {
             self.thumb_grab = None;
             self.gesture = false;
@@ -340,18 +391,19 @@ impl EnginePanel {
         status: Option<&str>,
         height: f32,
     ) -> f32 {
-        self.viewport_height = (height - HEADER_HEIGHT).max(0.0);
+        self.viewport_height = (height - HEADER_HEIGHT - PANEL_INSET - BOTTOM_ROOM).max(0.0);
         self.scroll_to(self.scroll);
+        pen.set_shadow(Some(TEXT_SHADOW));
         // Content scrolled up under the header is cut off there.
         pen.clip(Some(Rect::new(
-            0.0,
+            PANEL_INSET,
             HEADER_HEIGHT,
-            PANEL_WIDTH,
+            PANEL_WIDTH - PANEL_INSET,
             self.viewport_height,
         )));
 
         let origin = HEADER_HEIGHT - self.scroll;
-        let x = MARGIN;
+        let x = LEFT;
         let (bottom, plot_side) = match self.mode {
             PanelMode::Simple => (simple::draw(pen, &self.readout, x, origin), 0.0),
             PanelMode::Advanced => {
@@ -371,31 +423,40 @@ impl EnginePanel {
             }
         };
         pen.clip(None);
-        self.content_height = bottom - origin + MARGIN;
+        self.content_height = bottom - origin + END_ROOM;
         self.scroll_to(self.scroll);
 
         self.draw_header(pen, status);
         if let (Some(track), Some(thumb)) = (self.scroll_track(), self.thumb_rect()) {
-            pen.rect(track.x, track.y, track.w, track.h, SCROLL_TRACK_COLOR);
-            pen.rect(thumb.x, thumb.y, thumb.w, thumb.h, SCROLL_THUMB_COLOR);
+            let radius = SCROLLBAR_WIDTH / 2.0;
+            pen.round_rect(
+                track.x,
+                track.y,
+                track.w,
+                track.h,
+                radius,
+                SCROLL_TRACK_COLOR,
+            );
+            pen.round_rect(
+                thumb.x,
+                thumb.y,
+                thumb.w,
+                thumb.h,
+                radius,
+                SCROLL_THUMB_COLOR,
+            );
         }
+        pen.set_shadow(None);
         plot_side
     }
 
     /// Title, status and the view switch, above the scrolling content.
     fn draw_header(&self, pen: &mut Pen, status: Option<&str>) {
-        pen.fitted_heading(
-            TITLE,
-            MARGIN,
-            TITLE_BASELINE,
-            CONTENT_WIDTH,
-            TITLE_SIZE,
-            TEXT,
-        );
+        pen.fitted_heading(TITLE, LEFT, TITLE_BASELINE, CONTENT_WIDTH, TITLE_SIZE, TEXT);
         if let Some(status) = status {
             pen.text_right(
                 status,
-                MARGIN + CONTENT_WIDTH,
+                LEFT + CONTENT_WIDTH,
                 TITLE_BASELINE,
                 BODY_SIZE,
                 WARNING,
@@ -405,7 +466,7 @@ impl EnginePanel {
             let tab = tab_rect(index);
             let selected = mode == self.mode;
             // The chosen view is a glossy pill like the buttons; the other
-            // stays a flat, dark one.
+            // is a quiet glass tile.
             if selected {
                 let look = button::Look {
                     hue: Hue::Cyan,
@@ -413,7 +474,7 @@ impl EnginePanel {
                 };
                 button::pill(pen, tab, look, false);
             } else {
-                pen.round_rect(tab.x, tab.y, tab.w, tab.h, TAB_HEIGHT / 2.0, TAB_COLOR);
+                tile(pen, tab, TAB_HEIGHT / 2.0, PEARL);
             }
             let label = mode.label();
             let size = pen.fitted_size_weight(label, tab.w, TAB_SIZE, Weight::Semibold);

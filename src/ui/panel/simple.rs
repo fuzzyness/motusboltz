@@ -7,6 +7,7 @@
 
 use macroquad::prelude::{
     Color,
+    Rect,
     vec2, //
 };
 
@@ -26,6 +27,7 @@ use super::{
     GOOD,
     HOT_COLOR,
     LAW,
+    PEARL,
     QUIET,
     SECTION,
     SECTION_SIZE,
@@ -33,7 +35,8 @@ use super::{
     TEXT,
     TRACK,
     WARNING,
-    WORK_COLOR, //
+    WORK_COLOR,
+    tile, //
 };
 use crate::ui::pen::{
     Pen,
@@ -42,35 +45,30 @@ use crate::ui::pen::{
 
 const LINE: f32 = 20.0;
 const SMALL_LINE: f32 = 17.0;
-const SECTION_GAP: f32 = 13.0;
+const SECTION_GAP: f32 = 10.0;
 
 // "Right now": three cards side by side.
 const CARD_GAP: f32 = 8.0;
 const CARD_HEIGHT: f32 = 52.0;
-const CARD_RADIUS: f32 = 8.0;
+const CARD_RADIUS: f32 = 12.0;
 const CARD_PADDING: f32 = 10.0;
 const CARD_VALUE_SIZE: f32 = 20.0;
-const CARD: Color = Color::from_rgba(28, 41, 58, 255);
 
 // The diagram: hot side, helium and cold side in a column joined by heat
 // arrows, and a work arrow from the helium to the flywheel at the right.
 // Arrow widths follow the energy each carries.
 const BOX_WIDTH: f32 = 150.0;
 const BOX_HEIGHT: f32 = 40.0;
-const BOX_RADIUS: f32 = 7.0;
+const BOX_RADIUS: f32 = 12.0;
 const BOX_NAME_SIZE: f32 = 15.0;
 const BOX_TAG_SIZE: f32 = 12.0;
 const FLYWHEEL_WIDTH: f32 = 94.0;
-const ARROW_LENGTH: f32 = 40.0;
+const ARROW_LENGTH: f32 = 36.0;
 const MAX_ARROW_WIDTH: f32 = 22.0;
 const MIN_ARROW_WIDTH: f32 = 3.0;
 const HEAD_LENGTH: f32 = 9.0;
 const HEAD_OVERHANG: f32 = 5.0;
 const ARROW_LABEL_GAP: f32 = 14.0;
-const HOT_BOX: Color = Color::from_rgba(92, 50, 30, 255);
-const GAS_BOX: Color = Color::from_rgba(48, 64, 84, 255);
-const COLD_BOX: Color = Color::from_rgba(24, 52, 84, 255);
-const FLYWHEEL_BOX: Color = Color::from_rgba(78, 66, 28, 255);
 
 // Law cards: a numbered badge, a heading, then the evidence.
 const BADGE_RADIUS: f32 = 11.0;
@@ -126,13 +124,19 @@ fn draw_now(pen: &mut Pen, readout: &Readout, x: f32, top: f32) -> f32 {
     let card_top = y + 8.0;
     let speed = speed_text(now.turns_per_minute);
     let cards = [
-        ("Hot gas", kelvin_text(now.hot.kelvin), HOT_COLOR),
-        ("Cold gas", kelvin_text(now.cold.kelvin), COLD_COLOR),
-        ("Flywheel", speed, TEXT),
+        ("Hot gas", kelvin_text(now.hot.kelvin), HOT_COLOR, HOT_COLOR),
+        (
+            "Cold gas",
+            kelvin_text(now.cold.kelvin),
+            COLD_COLOR,
+            COLD_COLOR,
+        ),
+        ("Flywheel", speed, TEXT, WORK_COLOR),
     ];
-    for (index, (label, value, color)) in cards.into_iter().enumerate() {
+    for (index, (label, value, color, tint)) in cards.into_iter().enumerate() {
         let left = x + index as f32 * (width + CARD_GAP);
-        pen.round_rect(left, card_top, width, CARD_HEIGHT, CARD_RADIUS, CARD);
+        let card = Rect::new(left, card_top, width, CARD_HEIGHT);
+        tile(pen, card, CARD_RADIUS, tint);
         let inner = width - 2.0 * CARD_PADDING;
         pen.fitted(
             label,
@@ -178,16 +182,21 @@ fn joules(energy: Option<f64>) -> String {
     )
 }
 
-/// A box with a name and, under it, a quieter tag.
+/// A glass box tinted `tint`, with a name and, under it, a quieter tag.
 fn labeled_box(
     pen: &mut Pen,
     (left, top, width): (f32, f32, f32),
-    fill: Color,
+    tint: Color,
     name: &str,
     name_color: Color,
     tag: &str,
 ) {
-    pen.round_rect(left, top, width, BOX_HEIGHT, BOX_RADIUS, fill);
+    tile(
+        pen,
+        Rect::new(left, top, width, BOX_HEIGHT),
+        BOX_RADIUS,
+        tint,
+    );
     let name_width = pen.measure_weight(name, BOX_NAME_SIZE, Weight::Semibold);
     pen.strong(
         name,
@@ -230,7 +239,7 @@ fn draw_diagram(pen: &mut Pen, readout: &Readout, x: f32, top: f32) -> f32 {
     labeled_box(
         pen,
         (x, top, BOX_WIDTH),
-        HOT_BOX,
+        HOT_COLOR,
         &hot_name,
         HOT_COLOR,
         "surroundings",
@@ -238,7 +247,7 @@ fn draw_diagram(pen: &mut Pen, readout: &Readout, x: f32, top: f32) -> f32 {
     labeled_box(
         pen,
         (x, gas_top, BOX_WIDTH),
-        GAS_BOX,
+        PEARL,
         "Helium gas",
         TEXT,
         "the system",
@@ -246,7 +255,7 @@ fn draw_diagram(pen: &mut Pen, readout: &Readout, x: f32, top: f32) -> f32 {
     labeled_box(
         pen,
         (x, cold_top, BOX_WIDTH),
-        COLD_BOX,
+        COLD_COLOR,
         &cold_name,
         COLD_COLOR,
         "surroundings",
@@ -255,7 +264,7 @@ fn draw_diagram(pen: &mut Pen, readout: &Readout, x: f32, top: f32) -> f32 {
     labeled_box(
         pen,
         (flywheel_left, gas_top, FLYWHEEL_WIDTH),
-        FLYWHEEL_BOX,
+        WORK_COLOR,
         "Flywheel",
         WORK_COLOR,
         "surroundings",
