@@ -26,6 +26,7 @@ use super::outline::{
 };
 use super::sprites::{
     Facing,
+    SpriteMaterials,
     Sprites,
     age,
     smoothstep,
@@ -62,45 +63,50 @@ const BURNER_END_SHADE: f32 = 0.6;
 
 /// Flame tongues: how many, how often each one rises (per second), its
 /// tallest reach at 1200 K, the share of that it keeps at the lowest
-/// setting above 300 K, its half-width at the base, how much taller than
+/// setting above 300 K, its half-width at the root, how much taller than
 /// wide it is, and how far it leans in toward the wall as it rises.
-const FLAMES: u32 = 260;
-const FLAME_RATE: f32 = 1.4;
-const FLAME_HEIGHT: f32 = 0.95;
+const FLAMES: u32 = 150;
+const FLAME_RATE: f32 = 1.3;
+const FLAME_HEIGHT: f32 = 0.9;
 const FLAME_LOWEST_SHARE: f32 = 0.25;
-const FLAME_HALF_WIDTH: f32 = 0.13;
-const FLAME_STRETCH: f32 = 1.9;
-const FLAME_LEAN: f32 = 0.06;
+const FLAME_HALF_WIDTH: f32 = 0.15;
+const FLAME_STRETCH: f32 = 2.4;
+const FLAME_LEAN: f32 = 0.05;
+/// Fewer, bigger, slower tongues behind them, so the fire reads as one
+/// wall of flame: how many, and their size and pace against the others.
+const BIG_FLAMES: u32 = 26;
+const BIG_SCALE: f32 = 1.7;
+const BIG_PACE: f32 = 0.6;
+const BIG_OPACITY: f32 = 0.45;
 /// Sideways flicker along the burner, and its rate.
 const FLICKER: f32 = 0.08;
 const FLICKER_RATE: f32 = 5.3;
-/// Opacity of a flame's base: at the lowest setting and at 1200 K.
-const FLAME_OPACITY_LOW: f32 = 0.3;
-const FLAME_OPACITY_HIGH: f32 = 0.55;
-/// A tongue is hottest at its root and coolest at its tip: its middle
-/// color is reached this far up.
-const FLAME_BODY_AGE: f32 = 0.35;
-/// The root's color at the lowest setting and at 1200 K, then the body's
-/// and the tip's.
-const ROOT_LOW: Color = Color::from_rgba(255, 140, 40, 255);
-const ROOT_HIGH: Color = Color::from_rgba(255, 238, 186, 255);
-const BODY: Color = Color::from_rgba(255, 108, 24, 255);
-const TIP: Color = Color::from_rgba(190, 40, 10, 255);
+/// Opacity of a tongue: at the lowest setting and at 1200 K.
+const FLAME_OPACITY_LOW: f32 = 0.45;
+const FLAME_OPACITY_HIGH: f32 = 0.8;
+/// A tongue is yellow when it leaves the burner, orange halfway and red as
+/// it dies; hotter settings start it whiter.
+const FLAME_BODY_AGE: f32 = 0.4;
+const ROOT_LOW: Color = Color::from_rgba(255, 170, 40, 255);
+const ROOT_HIGH: Color = Color::from_rgba(255, 228, 120, 255);
+const BODY: Color = Color::from_rgba(255, 110, 16, 255);
+const TIP: Color = Color::from_rgba(225, 36, 10, 255);
 
 /// Small blue flames at the burner's ports, as on a gas burner.
 const PORTS: u32 = 48;
-const PORT_HALF_WIDTH: f32 = 0.03;
-const PORT_COLOR: Color = Color::from_rgba(70, 120, 255, 255);
-const PORT_OPACITY: f32 = 0.55;
+const PORT_HALF_WIDTH: f32 = 0.035;
+const PORT_COLOR: Color = Color::from_rgba(60, 130, 255, 255);
+const PORT_OPACITY: f32 = 0.7;
 const PORT_FLICKER_RATE: f32 = 9.0;
 
-/// Sparks rising above the flames, shown more as the heat goes up.
-const EMBERS: u32 = 32;
+/// Sparks rising above the flames as twinkles, shown more as the heat
+/// goes up.
+const EMBERS: u32 = 36;
 const EMBER_RATE: f32 = 0.45;
-const EMBER_RISE: f32 = 1.6;
-const EMBER_HALF_SIZE: f32 = 0.014;
-const EMBER_COLOR: Color = Color::from_rgba(255, 210, 120, 255);
-const EMBER_OPACITY: f32 = 0.9;
+const EMBER_RISE: f32 = 1.7;
+const EMBER_HALF_SIZE: f32 = 0.04;
+const EMBER_COLOR: Color = Color::from_rgba(255, 200, 80, 255);
+const EMBER_OPACITY: f32 = 0.95;
 /// How much hotter it gets while each new spark fades in, and while the
 /// flames first fade in as the burner lights.
 const REVEAL_SPAN: f32 = 0.08;
@@ -132,7 +138,10 @@ pub struct Fire {
     floor: f32,
     path: HalfOutline,
     burner: Mesh,
-    sprites: Sprites,
+    /// The glow on the floor and the port flames, round.
+    glows: Sprites,
+    flames: Sprites,
+    sparks: Sprites,
 }
 
 impl Fire {
@@ -149,7 +158,9 @@ impl Fire {
             floor: shape.base,
             path,
             burner: burner_mesh(path, unit, shape.base),
-            sprites: Sprites::new(),
+            glows: Sprites::new(),
+            flames: Sprites::new(),
+            sparks: Sprites::new(),
         }
     }
 
@@ -161,7 +172,9 @@ impl Fire {
     /// Lays out the flames for `heat` (see `heat_level`) at `seconds` on
     /// the clock, facing the camera.
     pub fn build(&mut self, heat: f32, seconds: f64, facing: Facing) {
-        self.sprites.clear();
+        for sprites in [&mut self.glows, &mut self.flames, &mut self.sparks] {
+            sprites.clear();
+        }
         if heat <= 0.0 {
             return;
         }
@@ -171,7 +184,7 @@ impl Fire {
         // The flames fade in from nothing as the burner lights.
         let kindle = smoothstep(0.0, FIRST_SHARE, heat);
         let place = |point: Vec2, y: f32| Vec3::new(point.x, y, point.y);
-        self.sprites.flat(
+        self.glows.flat(
             place(self.path.axis(), self.floor + ABOVE_FLOOR),
             GLOW_REACH * self.path.radius(),
             with_alpha(GLOW_COLOR, GLOW_OPACITY * heat),
@@ -181,7 +194,7 @@ impl Fire {
             let (point, _) = self.path.at((port as f32 + 0.5) / PORTS as f32);
             let flicker = 0.85 + 0.15 * (clock * PORT_FLICKER_RATE + port as f32 * 2.1).sin();
             let half = PORT_HALF_WIDTH * unit * flicker;
-            self.sprites.facing(
+            self.glows.facing(
                 facing,
                 place(point, top + half),
                 half,
@@ -196,35 +209,52 @@ impl Fire {
             kindle * (FLAME_OPACITY_LOW + (FLAME_OPACITY_HIGH - FLAME_OPACITY_LOW) * heat);
         let width = FLAME_HALF_WIDTH * unit * (0.6 + 0.4 * heat);
         let length = self.path.length();
-        for flame in 0..FLAMES {
+        // The big tongues first, then the small ones; each list gets its
+        // own random numbers.
+        let tongues = (0..BIG_FLAMES)
+            .map(|index| (index, true))
+            .chain((0..FLAMES).map(|index| (index + BIG_FLAMES, false)));
+        for (flame, big) in tongues {
+            let (count, first) = if big {
+                (BIG_FLAMES, 0)
+            } else {
+                (FLAMES, BIG_FLAMES)
+            };
+            let (scale, pace, strength) = if big {
+                (BIG_SCALE, BIG_PACE, BIG_OPACITY)
+            } else {
+                (1.0, 1.0, 1.0)
+            };
             let phase = unit_hash(flame, SALT_PHASE);
             let speed = 0.8 + 0.45 * unit_hash(flame, SALT_REACH);
-            let life = age(seconds, FLAME_RATE * speed, phase);
+            let life = age(seconds, FLAME_RATE * pace * speed, phase);
             let flicker = FLICKER
                 * unit
                 * life
                 * (clock * FLICKER_RATE + TAU * unit_hash(flame, SALT_FLICKER)).sin();
-            let fraction = (flame as f32 + 0.5 + 0.8 * (unit_hash(flame, SALT_PLACE) - 0.5))
-                / FLAMES as f32
+            let slot = (flame - first) as f32;
+            let fraction = (slot + 0.5 + 0.8 * (unit_hash(flame, SALT_PLACE) - 0.5)) / count as f32
                 + flicker / length;
             let (point, out) = self.path.at(fraction);
-            let tall = reach * (0.7 + 0.6 * unit_hash(flame, SALT_REACH));
-            let half_width = width * (1.0 - 0.55 * life);
+            let tall = scale * reach * (0.7 + 0.6 * unit_hash(flame, SALT_REACH));
+            let half_width = scale * width * (1.0 - 0.45 * life);
+            let half_height = half_width * FLAME_STRETCH;
+            // The tongue's root rises from the burner as it lives.
             let center = place(
                 point - out * (FLAME_LEAN * unit * life),
-                top + tall * life + half_width,
+                top + 0.5 * tall * life + half_height * 0.8,
             );
             let color = if life < FLAME_BODY_AGE {
                 mix_color(root, BODY, life / FLAME_BODY_AGE)
             } else {
                 mix_color(BODY, TIP, (life - FLAME_BODY_AGE) / (1.0 - FLAME_BODY_AGE))
             };
-            let alpha = opacity * smoothstep(0.0, 0.08, life) * (1.0 - life).powf(1.3);
-            self.sprites.facing(
+            let alpha = strength * opacity * smoothstep(0.0, 0.1, life) * (1.0 - life).powf(1.2);
+            self.flames.facing(
                 facing,
                 center,
                 half_width,
-                half_width * FLAME_STRETCH,
+                half_height,
                 with_alpha(color, alpha),
             );
         }
@@ -243,16 +273,33 @@ impl Fire {
                 point + out * (0.1 * unit * life),
                 top + EMBER_RISE * reach * life,
             );
-            let half = EMBER_HALF_SIZE * unit;
+            // Each spark twinkles as it rises.
+            let twinkle = 0.75 + 0.25 * (clock * 11.0 + ember as f32 * 1.7).sin();
+            let half = EMBER_HALF_SIZE * unit * twinkle;
             let alpha = EMBER_OPACITY * presence * smoothstep(0.0, 0.1, life) * (1.0 - life);
-            self.sprites
+            self.sparks
                 .facing(facing, center, half, half, with_alpha(EMBER_COLOR, alpha));
         }
-        self.sprites.finish(facing.forward);
+        for sprites in [&mut self.glows, &mut self.flames, &mut self.sparks] {
+            sprites.finish(facing.forward);
+        }
     }
 
-    pub fn sprites(&self) -> &Sprites {
-        &self.sprites
+    /// Draws the glow, flames and sparks, which add their light to the
+    /// scene.
+    pub fn draw(&self, materials: &SpriteMaterials) {
+        self.glows.draw(&materials.glow);
+        self.flames.draw(&materials.flame);
+        self.sparks.draw(&materials.sparkle);
+    }
+
+    /// Every sprite's middle and color, for the tests.
+    #[cfg(test)]
+    pub fn centers(&self) -> Vec<(Vec3, Color)> {
+        [&self.glows, &self.flames, &self.sparks]
+            .into_iter()
+            .flat_map(Sprites::centers)
+            .collect()
     }
 }
 

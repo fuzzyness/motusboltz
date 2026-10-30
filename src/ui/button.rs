@@ -6,7 +6,10 @@ use macroquad::prelude::{
     Rect, //
 };
 
-use crate::ui::pen::Pen;
+use crate::ui::pen::{
+    Pen,
+    Weight, //
+};
 
 /// Label size, and the gap between a label and its key.
 pub const LABEL_SIZE: f32 = 16.0;
@@ -63,7 +66,10 @@ pub struct Label {
 
 /// Width a button needs for `label` at `size`.
 pub fn width(pen: &Pen, label: Label, size: f32) -> f32 {
-    pen.measure(label.text, size) + KEY_GAP + pen.measure(label.key, size) + 2.0 * PADDING_X
+    pen.measure_weight(label.text, size, Weight::Semibold)
+        + KEY_GAP
+        + pen.measure(label.key, size)
+        + 2.0 * PADDING_X
 }
 
 /// Draws a button filling `rect`, with its text centered.
@@ -77,11 +83,11 @@ pub fn draw(pen: &mut Pen, rect: Rect, label: Label, look: Look, hovered: bool, 
         rect.h / 2.0,
         if hovered { colors.hover } else { colors.fill },
     );
-    let text_width = pen.measure(label.text, size);
+    let text_width = pen.measure_weight(label.text, size, Weight::Semibold);
     let total = text_width + KEY_GAP + pen.measure(label.key, size);
     let left = rect.x + (rect.w - total) / 2.0;
     let baseline = rect.y + (rect.h + pen.text_height("H", size)) / 2.0;
-    pen.text(label.text, left, baseline, size, colors.label);
+    pen.heading(label.text, left, baseline, size, colors.label);
     pen.text(
         label.key,
         left + text_width + KEY_GAP,

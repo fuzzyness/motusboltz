@@ -1,6 +1,8 @@
-//! The canvas fonts: Fira Sans, the web page's own typeface, so the engine
-//! and the page read as one piece. It also has the symbols the readings use
-//! (Δ, →, −, ≈), which Macroquad's built-in font lacks.
+//! The canvas fonts: Chakra Petch, a squared-off sans like the menus of
+//! late-1990s Dreamcast and PC sports games, to match the scene. It also
+//! has the symbols the readings use (Δ, →, −, ≈), which Macroquad's
+//! built-in font lacks. The files are cut down to the characters drawn
+//! (see `assets/fonts/OFL-ChakraPetch.txt`), to under 20 KB each.
 
 use std::sync::OnceLock;
 
@@ -9,8 +11,10 @@ use macroquad::prelude::{
     load_ttf_font_from_bytes, //
 };
 
-const REGULAR_TTF: &[u8] = include_bytes!("../../assets/fonts/FiraSans-Regular.ttf");
-const SEMIBOLD_TTF: &[u8] = include_bytes!("../../assets/fonts/FiraSans-SemiBold.ttf");
+/// Medium for running text and Bold for headings, buttons and key values:
+/// the font's Regular is a little thin for small text on a projector.
+const REGULAR_TTF: &[u8] = include_bytes!("../../assets/fonts/ChakraPetch-Medium.ttf");
+const SEMIBOLD_TTF: &[u8] = include_bytes!("../../assets/fonts/ChakraPetch-Bold.ttf");
 
 /// Every character the canvas may draw: printable ASCII and these symbols,
 /// all present in both font files. A test holds the UI text to this set.

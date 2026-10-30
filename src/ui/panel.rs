@@ -22,7 +22,10 @@ use macroquad::prelude::{
 
 use crate::sim::engine::ConnectedChambers;
 use crate::ui::layout::PANEL_WIDTH;
-use crate::ui::pen::Pen;
+use crate::ui::pen::{
+    Pen,
+    Weight, //
+};
 use plot::{
     MAX_PLOT_SIDE,
     PLOT_BOTTOM,
@@ -378,7 +381,7 @@ impl EnginePanel {
 
     /// Title, status and the view switch, above the scrolling content.
     fn draw_header(&self, pen: &mut Pen, status: Option<&str>) {
-        pen.fitted_strong(
+        pen.fitted_heading(
             TITLE,
             MARGIN,
             TITLE_BASELINE,
@@ -411,10 +414,10 @@ impl EnginePanel {
                 },
             );
             let label = mode.label();
-            let size = pen.fitted_size(label, tab.w, TAB_SIZE);
-            pen.text(
+            let size = pen.fitted_size_weight(label, tab.w, TAB_SIZE, Weight::Semibold);
+            pen.heading(
                 label,
-                tab.x + (tab.w - pen.measure(label, size)) / 2.0,
+                tab.x + (tab.w - pen.measure_weight(label, size, Weight::Semibold)) / 2.0,
                 tab.y + (tab.h + pen.text_height(label, size)) / 2.0,
                 size,
                 if selected { TEXT } else { QUIET },

@@ -111,7 +111,7 @@ const FOOT_Z: f32 = 0.9;
 const LEG_HALF_WIDTH: f32 = 0.05;
 /// The pad each leg stands on: its height, half its length (front to
 /// back) and half its width (along the shaft).
-const FOOT_HEIGHT: f32 = 0.04;
+const FOOT_HEIGHT: f32 = 0.06;
 const FOOT_HALF_LENGTH: f32 = 0.1;
 const FOOT_HALF_WIDTH: f32 = 0.07;
 const LEG_HALF_THICK: f32 = 0.04;
@@ -497,10 +497,10 @@ fn stands(solid: &mut Solid, layout: Layout) {
                 PAINT,
             );
         }
-        // The legs rise from the pads, whose tops their corners stay above.
-        let feet = feet.map(|foot| foot + Vec3::Y * (pad + LEG_HALF_WIDTH * unit));
         let tops =
             [-1.0, 1.0].map(|front| vec3(x, bearing_low, front * 0.5 * BEARING_RADIUS * unit));
+        let feet =
+            [0, 1].map(|index| leg_start(feet[index], tops[index], pad, LEG_HALF_WIDTH * unit));
         for (foot, top) in feet.into_iter().zip(tops) {
             solid.bar(
                 foot,
@@ -521,6 +521,17 @@ fn stands(solid: &mut Solid, layout: Layout) {
             PAINT,
         );
     }
+}
+
+/// Where a leg leaning from a pad at `foot` (on the block) up to `top`
+/// starts, for a pad `pad` tall and a leg `half_width` across in the lean:
+/// sunk into the pad so that its square-cut end's higher edge meets the
+/// pad's top, leaving no gap under it, while the lower edge stays inside
+/// the pad.
+pub(super) fn leg_start(foot: Vec3, top: Vec3, pad: f32, half_width: f32) -> Vec3 {
+    let lean = (top - foot).normalize();
+    let rise = half_width * (1.0 - lean.y * lean.y).max(0.0).sqrt();
+    foot + Vec3::Y * (pad - rise)
 }
 
 /// A piston for the hot bore, with its crown (the face) at the block's

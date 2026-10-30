@@ -10,7 +10,10 @@
 //! texture without queuing anything, so the app measures each frame's text
 //! first and draws it second.
 
-use std::f32::consts::FRAC_PI_2;
+use std::f32::consts::{
+    FRAC_PI_2,
+    TAU, //
+};
 
 use macroquad::prelude::{
     Color,
@@ -41,6 +44,19 @@ const OFFLINE_CHAR_HEIGHT_EM: f32 = 0.7;
 const CORNER_SEGMENTS: usize = 6;
 /// Smallest font size text is shrunk to when fitting a width.
 const MIN_FITTED_SIZE: f32 = 9.0;
+/// Headings and button labels get a dark outline and a drop shadow, as the
+/// menus of Dreamcast games had: the outline's width as a share of the font
+/// size (but at least `MIN_OUTLINE` points), the shadow's offset down and to
+/// the right as a share of the size, and the dark navy both are drawn in.
+const OUTLINE_SHARE: f32 = 0.08;
+const MIN_OUTLINE: f32 = 1.2;
+const SHADOW_SHARE: f32 = 0.12;
+const OUTLINE_COLOR: Color = Color::new(0.04, 0.07, 0.2, 0.9);
+/// Directions the outline is stamped in around each letter.
+const OUTLINE_STEPS: usize = 8;
+/// Text darker than this (by its average channel) gets no outline: a dark
+/// outline would only blur it.
+const OUTLINE_LIGHTNESS: f32 = 0.5;
 
 /// The two weights of the canvas font.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -178,6 +194,41 @@ impl Pen {
         }
     }
 
+    /// A heading or button label: the heavy weight, with a dark outline and
+    /// a drop shadow when its color is light.
+    pub fn heading(&mut self, text: &str, x: f32, y: f32, size: f32, color: Color) {
+        if self.live() && (color.r + color.g + color.b) / 3.0 > OUTLINE_LIGHTNESS {
+            let size = whole(size) as f32;
+            let width = (size * OUTLINE_SHARE).max(MIN_OUTLINE);
+            let dark = Color {
+                a: OUTLINE_COLOR.a * color.a,
+                ..OUTLINE_COLOR
+            };
+            let shadow = size * SHADOW_SHARE;
+            self.text_weight(text, x + shadow, y + shadow, size, dark, Weight::Semibold);
+            for step in 0..OUTLINE_STEPS {
+                let angle = TAU * step as f32 / OUTLINE_STEPS as f32;
+                let (dx, dy) = (width * angle.cos(), width * angle.sin());
+                self.text_weight(text, x + dx, y + dy, size, dark, Weight::Semibold);
+            }
+        }
+        self.strong(text, x, y, size, color);
+    }
+
+    /// Like `fitted`, as a heading.
+    pub fn fitted_heading(
+        &mut self,
+        text: &str,
+        x: f32,
+        y: f32,
+        width: f32,
+        size: f32,
+        color: Color,
+    ) {
+        let size = self.fitted_size_weight(text, width, size, Weight::Semibold);
+        self.heading(text, x, y, size, color);
+    }
+
     /// The whole font size, at most `size`, at which `text` fits in
     /// `width`.
     pub fn fitted_size(&self, text: &str, width: f32, size: f32) -> f32 {
@@ -199,20 +250,6 @@ impl Pen {
     pub fn fitted(&mut self, text: &str, x: f32, y: f32, width: f32, size: f32, color: Color) {
         let size = self.fitted_size(text, width, size);
         self.text(text, x, y, size, color);
-    }
-
-    /// Like `fitted`, in the semibold weight.
-    pub fn fitted_strong(
-        &mut self,
-        text: &str,
-        x: f32,
-        y: f32,
-        width: f32,
-        size: f32,
-        color: Color,
-    ) {
-        let size = self.fitted_size_weight(text, width, size, Weight::Semibold);
-        self.strong(text, x, y, size, color);
     }
 
     /// Draws pieces of text one after another from `x`, each in its own

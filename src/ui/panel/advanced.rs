@@ -48,7 +48,7 @@ pub const ENTROPY_EQUATION: &str = "ΔS surr = −Q hot / T hot − Q cold / T c
 /// A section heading below `top`; returns its baseline.
 pub fn section(pen: &mut Pen, text: &str, x: f32, top: f32) -> f32 {
     let y = top + LINE;
-    pen.fitted_strong(text, x, y, CONTENT_WIDTH, SECTION_SIZE, SECTION);
+    pen.fitted_heading(text, x, y, CONTENT_WIDTH, SECTION_SIZE, SECTION);
     y
 }
 
@@ -79,7 +79,7 @@ fn draw_gas(pen: &mut Pen, readout: &Readout, x: f32, top: f32) -> f32 {
     let mut y = section(pen, GAS_HEADING, x, top);
     let header = |pen: &mut Pen, text: &str, right: f32, color| {
         let width = pen.measure_weight(text, SECTION_SIZE, Weight::Semibold);
-        pen.strong(text, x + right - width, y, SECTION_SIZE, color);
+        pen.heading(text, x + right - width, y, SECTION_SIZE, color);
     };
     header(pen, "Hot", HOT_RIGHT, HOT_COLOR);
     header(pen, "Cold", COLD_RIGHT, COLD_COLOR);

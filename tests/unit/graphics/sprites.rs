@@ -92,11 +92,12 @@ fn a_full_batch_stays_within_one_draw_call() {
 
 #[test]
 fn shaders_are_glsl_100() {
-    for shader in [SPRITE_VERTEX, SPRITE_FRAGMENT] {
+    assert!(SPRITE_VERTEX.starts_with("#version 100\n"));
+    for shader in [SPRITE_FRAGMENT, FLAME_FRAGMENT, SPARKLE_FRAGMENT] {
         assert!(shader.starts_with("#version 100\n"));
+        assert!(
+            shader.contains("discard"),
+            "clear corners must not hide what is behind"
+        );
     }
-    assert!(
-        SPRITE_FRAGMENT.contains("discard"),
-        "clear corners must not hide what is behind"
-    );
 }

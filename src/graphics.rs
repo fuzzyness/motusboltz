@@ -216,6 +216,7 @@ impl Scene {
         let pistons = simulation.power_pistons();
         let facing = Facing::toward(camera);
         self.fire.build(self.levels.heat, seconds, facing);
+        self.ice.prepare_shader();
         self.ice.build(
             self.levels.cold,
             seconds,
@@ -225,7 +226,7 @@ impl Scene {
         self.chamber.draw(camera);
         self.assembly.draw(pistons, camera);
         self.fire.draw_burner();
-        self.ice.draw_solid();
+        self.ice.draw_solid(camera, camera_light_direction(camera));
         if scenery == Scenery::Sky {
             self.cloud.draw(camera, camera_light_direction(camera));
         }
@@ -253,8 +254,8 @@ impl Scene {
         // Light and haze last: they are tested against everything solid
         // but hide nothing.
         if let Some(materials) = &self.sprite_materials {
-            self.fire.sprites().draw(&materials.glow);
-            self.ice.sprites().draw(&materials.haze);
+            self.fire.draw(materials);
+            self.ice.draw(materials);
         }
     }
 }

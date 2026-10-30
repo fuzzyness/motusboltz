@@ -175,3 +175,28 @@ fn stands_rest_on_the_block_between_the_bores() {
         }
     }
 }
+
+#[test]
+fn legs_meet_their_pads_without_a_gap() {
+    let (shape, assembly) = assembly();
+    let unit = assembly.layout.unit;
+    let (pad, half_width) = (FOOT_HEIGHT * unit, LEG_HALF_WIDTH * unit);
+    let foot = vec3(STAND_X * unit, shape.top, FOOT_Z * unit);
+    let top = vec3(
+        STAND_X * unit,
+        assembly.layout.shaft_y,
+        0.5 * BEARING_RADIUS * unit,
+    );
+    let start = leg_start(foot, top, pad, half_width);
+    let lean = (top - start).normalize();
+    // The end's edges, across the lean: one meets the pad's top, the other
+    // stays inside the pad.
+    let across = Vec3::X.cross(lean).normalize();
+    let heights = [start + across * half_width, start - across * half_width].map(|edge| edge.y);
+    let (low, high) = (heights[0].min(heights[1]), heights[0].max(heights[1]));
+    assert!(
+        (high - (shape.top + pad)).abs() < 0.05 * pad,
+        "gap under the leg"
+    );
+    assert!(low > shape.top, "the leg pokes through the pad");
+}

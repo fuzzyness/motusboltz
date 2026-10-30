@@ -23,7 +23,7 @@ fn sprites_at(fire: &mut Fire, heat: f32) -> Vec<(Vec3, Color)> {
         .iter()
         .flat_map(|&seconds| {
             fire.build(heat, seconds, facing());
-            fire.sprites().centers()
+            fire.centers()
         })
         .collect()
 }

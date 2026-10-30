@@ -34,7 +34,7 @@ fn no_ice_or_mist_at_300_k() {
     let (_, mut ice) = ice();
     build(&mut ice, cold_level(MAX_COLD_KELVIN), 3.0);
     assert!(ice.solid().indices.is_empty());
-    assert_eq!(ice.sprites().len(), 0);
+    assert_eq!(ice.mist().len(), 0);
 }
 
 #[test]
@@ -93,7 +93,7 @@ fn mist_thickens_with_cold_and_never_sinks_through_the_floor() {
         let mut cover = 0.0;
         for seconds in TIMES {
             build(ice, cold, seconds);
-            for (center, color) in ice.sprites().centers() {
+            for (center, color) in ice.mist().centers() {
                 assert!(center.y > shape.base, "{center} is under the floor");
                 count += 1;
                 cover += color.a;

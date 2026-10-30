@@ -82,6 +82,57 @@ void main() {
     gl_FragColor = vec4(color.rgb, alpha) * texture2D(Texture, uv);
 }"#;
 
+/// A flame tongue in the style of a Dreamcast game: round at its root,
+/// drawn out to a point at its tip (`uv.y` runs from root to tip), with a
+/// white-hot core low down and a soft edge.
+const FLAME_FRAGMENT: &str = r#"#version 100
+precision mediump float;
+
+varying lowp vec4 color;
+varying lowp vec2 uv;
+
+uniform sampler2D Texture;
+
+void main() {
+    float across = abs(uv.x * 2.0 - 1.0);
+    float up = uv.y;
+    float width = pow(max(1.0 - up, 0.0), 0.75) * smoothstep(0.0, 0.3, up + 0.1);
+    float edge = across / max(width, 0.001);
+    float body = 1.0 - smoothstep(0.55, 1.0, edge);
+    float core = (1.0 - smoothstep(0.0, 0.6, edge)) * (1.0 - smoothstep(0.15, 0.7, up));
+    float alpha = color.a * body;
+    if (alpha < 0.004) {
+        discard;
+    }
+    vec3 rgb = mix(color.rgb, vec3(1.0, 0.97, 0.82), core * 0.85);
+    // Weighted by alpha here, and covering only part of what is behind:
+    // flames over flames build toward their own color, not white.
+    gl_FragColor = vec4(rgb * alpha, alpha * 0.7) * texture2D(Texture, uv);
+}"#;
+
+/// A four-pointed twinkle with a round glow at its middle, as Dreamcast
+/// games drew sparkles on ice and sparks off a fire.
+const SPARKLE_FRAGMENT: &str = r#"#version 100
+precision mediump float;
+
+varying lowp vec4 color;
+varying lowp vec2 uv;
+
+uniform sampler2D Texture;
+
+void main() {
+    vec2 p = uv * 2.0 - 1.0;
+    vec2 a = abs(p);
+    float rays = max(1.0 - a.x * 9.0, 0.0) * (1.0 - a.y) + max(1.0 - a.y * 9.0, 0.0) * (1.0 - a.x);
+    float glow = exp(-dot(p, p) * 14.0);
+    float alpha = color.a * clamp(rays + glow, 0.0, 1.0);
+    if (alpha < 0.004) {
+        discard;
+    }
+    vec3 rgb = mix(color.rgb, vec3(1.0), glow * 0.7);
+    gl_FragColor = vec4(rgb, alpha) * texture2D(Texture, uv);
+}"#;
+
 const VERTICES_PER_SPRITE: usize = 4;
 const INDICES_PER_SPRITE: usize = 6;
 /// The most sprites one mesh holds, within Macroquad's draw-call limits.
@@ -96,51 +147,62 @@ pub const MAX_SPRITES: usize = if DRAW_CALL_VERTEX_CAPACITY / VERTICES_PER_SPRIT
 /// The ways sprites mix with what is already drawn. All test depth, so
 /// the engine hides what is behind them.
 pub struct SpriteMaterials {
-    /// Adds light: flames, embers and their glow on the floor.
+    /// Adds light, round: the flames' glow on the floor and the burner's
+    /// blue port flames.
     pub glow: Material,
-    /// Covers partly: frost and mist.
+    /// Covers partly, round: frost and mist.
     pub haze: Material,
+    /// Adds light, shaped as a flame tongue, while partly covering what is
+    /// behind, so many flames overlapping stay orange and yellow instead
+    /// of burning out to white.
+    pub flame: Material,
+    /// Adds light, shaped as a twinkle: sparks and sparkles.
+    pub sparkle: Material,
 }
 
 impl SpriteMaterials {
     /// Builds the materials, or returns `None` if the shader cannot be
     /// built; the effects are then left out.
     pub fn load() -> Option<Self> {
-        let material = |behind: BlendFactor, fragment| {
+        let alpha = BlendFactor::Value(BlendValue::SourceAlpha);
+        let material = |source: BlendFactor, behind: BlendFactor, fragment| {
             load_material(
                 ShaderSource::Glsl {
                     vertex: SPRITE_VERTEX,
                     fragment,
                 },
                 MaterialParams {
-                    pipeline_params: sprite_pipeline(behind),
+                    pipeline_params: sprite_pipeline(source, behind),
                     ..Default::default()
                 },
             )
             .ok()
         };
         Some(Self {
-            glow: material(BlendFactor::One, SPRITE_FRAGMENT)?,
+            glow: material(alpha, BlendFactor::One, SPRITE_FRAGMENT)?,
             haze: material(
+                alpha,
                 BlendFactor::OneMinusValue(BlendValue::SourceAlpha),
                 SPRITE_FRAGMENT,
             )?,
+            flame: material(
+                BlendFactor::One,
+                BlendFactor::OneMinusValue(BlendValue::SourceAlpha),
+                FLAME_FRAGMENT,
+            )?,
+            sparkle: material(alpha, BlendFactor::One, SPARKLE_FRAGMENT)?,
         })
     }
 }
 
 /// Depth tested (and so written; see the top of this file); color blended
-/// as `source alpha` times the sprite plus `behind` times what is there.
-/// The window's alpha is kept as it is.
-fn sprite_pipeline(behind: BlendFactor) -> PipelineParams {
+/// as `source` times the sprite plus `behind` times what is there. The
+/// window's alpha is kept as it is.
+fn sprite_pipeline(source: BlendFactor, behind: BlendFactor) -> PipelineParams {
     PipelineParams {
         depth_test: Comparison::LessOrEqual,
         depth_write: true,
-        color_blend: Some(BlendState::new(
-            Equation::Add,
-            BlendFactor::Value(BlendValue::SourceAlpha),
-            behind,
-        )),
+        color_blend: Some(BlendState::new(Equation::Add, source, behind)),
         alpha_blend: Some(BlendState::new(
             Equation::Add,
             BlendFactor::Zero,

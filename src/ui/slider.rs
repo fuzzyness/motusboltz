@@ -239,10 +239,10 @@ impl Slider {
         let progress = (self.value - self.min) / (self.max - self.min);
         let handle_x = x + progress * SLIDER_WIDTH;
         let label_y = self.y - LABEL_OFFSET_Y;
-        pen.text(self.label, x, label_y, LABEL_SIZE, LABEL_COLOR);
+        pen.heading(self.label, x, label_y, LABEL_SIZE, LABEL_COLOR);
         let value = self.value_text(self.value);
         let value_width = pen.measure_weight(&value, LABEL_SIZE, Weight::Semibold);
-        pen.strong(
+        pen.heading(
             &value,
             x + SLIDER_WIDTH - value_width,
             label_y,

@@ -343,7 +343,7 @@ fn law_heading(pen: &mut Pen, number: &str, text: &str, x: f32, top: f32) -> f32
         BADGE_SIZE,
         BADGE_TEXT,
     );
-    pen.fitted_strong(
+    pen.fitted_heading(
         text,
         x + INDENT,
         y,
