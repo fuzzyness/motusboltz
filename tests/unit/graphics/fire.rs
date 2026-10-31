@@ -1,12 +1,23 @@
 //! Tests for the burner and its flames, `src/graphics/fire.rs`.
 
 use super::*;
-use crate::graphics::outline::outside_block;
+use crate::graphics::outline::tests::outside_block;
 use crate::sim::geometry::DEFAULT_GEOMETRY;
+
+impl Fire {
+    /// Every sprite's middle and color.
+    fn centers(&self) -> Vec<(Vec3, Color)> {
+        [&self.glows, &self.flames, &self.sparks]
+            .into_iter()
+            .flat_map(Sprites::centers)
+            .collect()
+    }
+}
 
 /// Moments to sample the animation at, including a long-running clock.
 const TIMES: [f64; 6] = [0.0, 0.17, 0.5, 1.3, 7.9, 86_400.25];
 
+/// The default block and its burner.
 fn fire() -> (BlockShape, Fire) {
     let shape = BlockShape::new(DEFAULT_GEOMETRY);
     (shape, Fire::new(shape))

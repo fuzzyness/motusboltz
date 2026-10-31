@@ -3,6 +3,7 @@
 use super::*;
 
 impl ThermalReservoirs {
+    /// Sets how fully a wall impact takes on the wall temperature.
     pub(crate) fn set_accommodation(&mut self, value: f32) {
         assert!((0.0..=1.0).contains(&value));
         self.accommodation = value;
@@ -14,11 +15,17 @@ use crate::sim::gas::PARTICLE_MASS;
 
 /// Seed for the wall-impact draws, so a failing test can be rerun exactly.
 const TEST_SEED: u64 = 42;
+/// Largest difference treated as equal.
 const TOLERANCE: f32 = 1e-5;
+/// Normal speed of a particle striking a wall.
 const INCIDENT_SPEED: f32 = 1.0;
+/// Normal speed of a fast particle striking a wall.
 const FAST_INCIDENT_SPEED: f32 = 3.0;
+/// Wall impacts sampled.
 const SAMPLES: usize = 128;
 
+/// A particle at the origin moving at `normal_speed` along the normal,
+/// and a little along the wall.
 fn particle(normal_speed: f32) -> Particle {
     Particle {
         position: Vec3::ZERO,

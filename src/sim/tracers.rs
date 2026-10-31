@@ -1,5 +1,6 @@
-//! The recent paths of a few chosen particles, for drawing tracers. A
-//! particle moves in a straight line between bounces, so the points where
+//! The recent paths of a few chosen particles, for drawing tracers.
+//!
+//! A particle moves in a straight line between bounces, so the points where
 //! its velocity changed, followed by where it is now, trace its path
 //! exactly. Recording changes nothing in the physics.
 
@@ -20,18 +21,25 @@ const MAX_PATH_POINTS: usize = 256;
 pub struct PathPoint {
     /// Model time, in seconds since the tracers were chosen.
     pub time: f64,
+    /// The particle's center.
     pub position: Vec3,
 }
 
-/// One followed particle: its index and its recent bounce points.
+/// One followed particle and its recent bounce points.
 struct Path {
+    /// The particle's index.
     index: usize,
+    /// Its velocity when last seen, to notice the next bounce.
     velocity: Vec3,
+    /// Its bounce points, oldest first.
     points: VecDeque<PathPoint>,
 }
 
+/// The followed particles and their recent paths.
 pub struct Tracers {
+    /// One path per followed particle.
     paths: Vec<Path>,
+    /// Model time since the tracers were chosen.
     time: f64,
 }
 
@@ -56,8 +64,10 @@ impl Tracers {
     }
 
     /// Advances the clock by `dt` and notes every followed particle whose
-    /// velocity changed since the last call, dropping points older than
-    /// `TRAIL_SECONDS`. Call once per substep, after all bounces.
+    /// velocity changed since the last call.
+    ///
+    /// Points older than `TRAIL_SECONDS` are dropped. Call once per substep,
+    /// after all bounces.
     pub fn record(&mut self, dt: f64, particles: &[Particle]) {
         self.time += dt;
         let oldest = self.time - TRAIL_SECONDS;
@@ -92,7 +102,9 @@ impl Tracers {
     }
 
     /// Each followed particle's index and recent bounce points, oldest
-    /// first. The path ends at the particle's current position.
+    /// first.
+    ///
+    /// The path continues to the particle's current position.
     pub fn paths(&self) -> impl Iterator<Item = (usize, &VecDeque<PathPoint>)> + '_ {
         self.paths.iter().map(|path| (path.index, &path.points))
     }

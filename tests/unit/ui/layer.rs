@@ -3,6 +3,7 @@
 
 use super::*;
 
+/// The panel's image size, in pixels.
 const PANEL: (u32, u32) = (340, 620);
 
 #[test]

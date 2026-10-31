@@ -1,36 +1,28 @@
 //! The cold reservoir as a heap of ice packed around the cold half of the
-//! engine block, with cold mist rolling off it, in the style of a
-//! Dreamcast game: glossy blue blocks and crystal shards that catch the
-//! light, frosted and edged in white, with sparkles twinkling on them.
-//! All follow the Cold side setting: at 300 K there is none; down to
-//! 100 K the heap grows block by block and the mist thickens. Like the mist off dry ice, most of it is heavier
-//! than the air around it, so it sinks and spreads over the floor; a few
-//! wisps rise. Drawing only: the physics knows nothing of it, and the ice
-//! stands for the surroundings, not the gas.
+//! engine block, with cold mist rolling off it.
+//!
+//! In the style of a Dreamcast game, the heap is glossy blue blocks and
+//! crystal shards that catch the light, frosted and edged in white, with
+//! sparkles twinkling on them. All follow the Cold side setting: at 300 K
+//! there is none; down to 100 K the heap grows block by block and the mist
+//! thickens. Like the mist off dry ice, most of it is heavier than the air
+//! around it, so it sinks and spreads over the floor; a few wisps rise.
+//! Drawing only: the physics knows nothing of it, and the ice stands for
+//! the surroundings, not the gas.
 
 use std::f32::consts::PI;
 
 use macroquad::models::{
     Mesh,
-    Vertex,
-    draw_mesh, //
+    Vertex, //
 };
 use macroquad::prelude::{
     Camera3D,
     Color,
-    Comparison,
     Material,
-    MaterialParams,
-    PipelineParams,
-    ShaderSource,
-    UniformDesc,
-    UniformType,
     Vec2,
     Vec3,
-    Vec4,
-    gl_use_default_material,
-    gl_use_material,
-    load_material, //
+    Vec4, //
 };
 
 use super::block::BlockShape;
@@ -48,6 +40,8 @@ use super::sprites::{
     with_alpha, //
 };
 use super::{
+    draw_lit,
+    load_lit,
     mix_color,
     shade, //
 };
@@ -56,28 +50,35 @@ use crate::sim::reservoir::{
     MIN_COLD_KELVIN, //
 };
 
-// Sizes are fractions of the bore's radius, so the heap keeps its
-// proportions at any engine size.
-
 /// How far the heap's straight runs along the block's front and back
 /// reach from the cold cylinder's axis toward the middle, as a share of
 /// the distance between them.
 const HEAP_REACH: f32 = 0.85;
-/// Rows of blocks: how many, their distance out from the block's side,
-/// the smallest and largest width and height, how much they narrow toward
-/// the top (a little for blocks, most of the way for shards), and the
-/// coldness (see `cold_level`) at which they start to appear, plus a
-/// random share on top so they come one by one.
+
+/// One row of blocks.
+///
+/// Sizes are fractions of the bore's radius, so the heap keeps its
+/// proportions at any engine size.
 struct Row {
+    /// How many blocks.
     blocks: u32,
+    /// Distance out from the block's side.
     out: f32,
+    /// Smallest and largest width.
     width: (f32, f32),
+    /// Smallest and largest height.
     height: (f32, f32),
+    /// How much the blocks narrow toward the top: a little for blocks, most
+    /// of the way for shards.
     narrowing: f32,
+    /// Coldness (see `cold_level`) at which the blocks start to appear,
+    /// before a random share on top so they come one by one.
     appears: f32,
+    /// Whether the blocks stand on the first row's.
     stacked: bool,
 }
 
+/// The rows, from the wall out.
 const ROWS: [Row; 3] = [
     // Against the wall: the first to form, and the largest.
     Row {
@@ -110,60 +111,44 @@ const ROWS: [Row; 3] = [
         stacked: true,
     },
 ];
-/// Spread of each row's start (as a share of the coldness range) and how
-/// much colder it gets while a block grows from nothing to full size.
+/// Spread of each row's start, as a share of the coldness range.
 const APPEAR_SPREAD: f32 = 0.3;
+/// How much colder it gets while a block grows from nothing to full size.
 const GROW_SPAN: f32 = 0.25;
-/// Each top corner moves by up to this share of the block's size, and
-/// blocks lean up to this angle, so the heap looks broken rather than
+/// Most each top corner moves, as a share of the block's size.
+///
+/// Moved corners and leaning blocks make the heap look broken rather than
 /// stacked like bricks.
 const CORNER_JITTER: f32 = 0.14;
+/// Steepest lean of a block, in radians.
 const MAX_TILT: f32 = 0.18;
 /// Smallest block worth drawing, as a share of its full size.
 const MIN_GROWTH: f32 = 0.02;
-const FACES_PER_BLOCK: usize = 5;
 
-/// Near white on top, bright blue on the sides, deep blue low down.
+/// Color of the ice on top, near white.
 const ICE_TOP: Color = Color::from_rgba(226, 246, 255, 255);
+/// Color of the ice on the sides, bright blue.
 const ICE_SIDE: Color = Color::from_rgba(118, 188, 255, 255);
+/// Color of the ice low down, deep blue.
 const ICE_DEEP: Color = Color::from_rgba(38, 104, 226, 255);
-/// Without the ice shader: the share of light every face gets, and how
-/// much more the faces turned toward the light get, and the opacity.
+/// Share of light every face gets without the ice shader.
 const ICE_AMBIENT: f32 = 0.6;
+/// How much more light the faces turned toward the light get without the
+/// ice shader.
 const ICE_DIFFUSE: f32 = 0.45;
+/// Opacity of the ice without the ice shader.
 const ICE_OPACITY: f32 = 0.86;
 
-/// Sparkles on the ice: at most how many, how often each twinkles (per
-/// second), half their size, and their color.
+/// Most sparkles on the ice.
 const SPARKLES: u32 = 30;
+/// How often each sparkle twinkles, per second.
 const SPARKLE_RATE: f32 = 0.55;
+/// Half the size of a sparkle.
 const SPARKLE_HALF_SIZE: f32 = 0.075;
+/// Color of a sparkle.
 const SPARKLE_COLOR: Color = Color::from_rgba(214, 242, 255, 255);
 
-const ICE_VERTEX: &str = r#"#version 100
-attribute vec3 position;
-attribute vec2 texcoord;
-attribute vec4 color0;
-attribute vec4 normal;
-
-varying lowp vec4 color;
-varying lowp vec2 uv;
-varying vec3 world;
-varying vec3 surface_normal;
-
-uniform mat4 Model;
-uniform mat4 Projection;
-
-void main() {
-    vec4 placed = Model * vec4(position, 1.0);
-    world = placed.xyz;
-    surface_normal = normal.xyz;
-    color = color0 / 255.0;
-    uv = texcoord;
-    gl_Position = Projection * placed;
-}"#;
-
-/// Glossy ice: the face's blue in soft light, a white edge where it turns
+/// Fragment shader for glossy ice: the face's blue in soft light, a white edge where it turns
 /// away from the eye (as light skims the surface of ice), a tight
 /// highlight, and a speckle of frost.
 const ICE_FRAGMENT: &str = r#"#version 100
@@ -201,44 +186,65 @@ void main() {
     gl_FragColor = vec4(lit, 1.0) * texture2D(Texture, uv);
 }"#;
 
-/// Frost on the floor around the cold half, centered on its axis and
-/// reaching this many times the heap's radius out at 100 K.
+/// Reach of the frost on the floor around the cold half at 100 K, in
+/// heap radii from its axis.
 const FROST_REACH: f32 = 1.7;
+/// Color of the frost.
 const FROST_COLOR: Color = Color::from_rgba(205, 230, 255, 255);
+/// Opacity of the frost at 100 K.
 const FROST_OPACITY: f32 = 0.3;
+/// Height of the frost above the floor, clear of the floor grid.
 const ABOVE_FLOOR: f32 = 0.012;
 
-/// Mist puffs: at most how many, the share of them shown at the first
-/// sign of cold, how often each one is renewed (per second), how far it
-/// spreads, its half-size when new and when old, its opacity at most at
-/// the first sign of cold and at 100 K, and the share of puffs that rise.
+/// Most mist puffs.
 const PUFFS: u32 = 150;
+/// Share of the puffs shown at the first sign of cold.
 const FEWEST_PUFFS: f32 = 0.25;
+/// How often each puff is renewed, per second.
 const PUFF_RATE: f32 = 0.11;
+/// How far a sinking puff spreads over the floor.
 const PUFF_SPREAD: f32 = 1.0;
+/// Half the size of a new puff.
 const PUFF_SIZE_NEW: f32 = 0.14;
+/// Half the size of an old puff.
 const PUFF_SIZE_OLD: f32 = 0.55;
+/// Most opacity of a puff at the first sign of cold.
 const PUFF_OPACITY_LOW: f32 = 0.08;
+/// Most opacity of a puff at 100 K.
 const PUFF_OPACITY_HIGH: f32 = 0.2;
+/// Share of the puffs that rise.
 const RISING_SHARE: f32 = 0.25;
-/// How much colder it gets while each new puff fades in, and while the
-/// mist first fades in.
+/// How much colder it gets while each new puff fades in.
 const REVEAL_SPAN: f32 = 0.08;
+/// How much colder it gets while the mist first fades in.
 const FIRST_SHARE: f32 = 0.08;
+/// How far a rising puff rises.
 const RISE: f32 = 0.45;
-/// A sinking puff settles with this share of its size above the floor, so
-/// it never sinks through.
+/// Share of its size a sinking puff settles above the floor, so it never
+/// sinks through.
 const SETTLE: f32 = 0.55;
+/// Color of the mist.
 const MIST_COLOR: Color = Color::from_rgba(205, 228, 255, 255);
 
+/// Salt for each block's and puff's place.
 const SALT_PLACE: u32 = 11;
+/// Salt for each block's width.
 const SALT_WIDTH: u32 = 12;
+/// Salt for each block's height.
 const SALT_HEIGHT: u32 = 13;
+/// Salt for each block's turn.
 const SALT_TURN: u32 = 14;
+/// Salt for each block's lean.
+const SALT_TILT: u32 = SALT_TURN + 100;
+/// Salt for when each block appears.
 const SALT_APPEAR: u32 = 15;
+/// Salt for each puff's and sparkle's phase.
 const SALT_PUFF: u32 = 16;
+/// Salt for whether a puff rises, and each sparkle's rate.
 const SALT_KIND: u32 = 17;
+/// Salt for each block's depth.
 const SALT_DEPTH: u32 = 18;
+/// Salt for which block a sparkle sits on.
 const SALT_SPARKLE: u32 = 19;
 
 /// How cold the ice is, from 0 (none, at 300 K) to 1 (at 100 K).
@@ -253,10 +259,15 @@ struct Block {
     place: Vec2,
     /// The block it rests on, if piled; it rests on the floor otherwise.
     on: Option<usize>,
+    /// Width, across the wall.
     width: f32,
+    /// Depth, out from the wall.
     depth: f32,
+    /// Height.
     height: f32,
+    /// Turn about the vertical, in radians.
     turn: f32,
+    /// Lean about its own width, in radians.
     tilt: f32,
     /// Coldness at which it starts to grow.
     appears: f32,
@@ -266,14 +277,18 @@ struct Block {
     seed: u32,
 }
 
+/// The heap, its mist and its sparkles.
 pub struct Ice {
+    /// The bore radius every size is a fraction of.
     unit: f32,
+    /// Height of the floor.
     floor: f32,
     /// The block's side, which the heap rests against.
     wall: HalfOutline,
     blocks: Vec<Block>,
     /// Each block's current height, rebuilt with the mesh.
     heights: Vec<f32>,
+    /// The heap, as it is now.
     solid: Mesh,
     /// The ice shader, made on the first draw (it needs a window);
     /// `Some(None)` where it cannot be built, and the faces are shaded on
@@ -281,10 +296,12 @@ pub struct Ice {
     material: Option<Option<Material>>,
     /// Frost and mist.
     mist: Sprites,
+    /// Sparkles on the blocks.
     sparkles: Sprites,
 }
 
 impl Ice {
+    /// The heap around the cold half of a block of `shape`.
     pub fn new(shape: BlockShape) -> Self {
         let unit = shape.bore;
         let wall = HalfOutline::new(Half::Cold, shape.offset, shape.outer, HEAP_REACH);
@@ -306,36 +323,28 @@ impl Ice {
         }
     }
 
-    /// Whether the ice shader is ready, loading it the first time. Call
-    /// before `build`, which shades the faces itself without it.
-    pub fn prepare_shader(&mut self) -> bool {
-        self.material.get_or_insert_with(load_ice).is_some()
+    /// Loads the ice shader the first time.
+    ///
+    /// Call it before `build`, which shades the faces itself without it.
+    pub fn load_shader(&mut self) {
+        self.material
+            .get_or_insert_with(|| load_lit(ICE_FRAGMENT, &[]));
     }
 
-    /// The heap, solid, seen from `camera` and lit from `light`; drawn
-    /// with the engine.
+    /// Draws the heap, solid, seen from `camera` and lit from `light`.
+    ///
+    /// It is drawn with the engine.
     pub fn draw_solid(&self, camera: &Camera3D, light: Vec3) {
-        if self.solid.indices.is_empty() {
-            return;
+        if !self.solid.indices.is_empty() {
+            let material = self.material.as_ref().and_then(Option::as_ref);
+            draw_lit([&self.solid], material, camera, light);
         }
-        if let Some(Some(material)) = &self.material {
-            material.set_uniform("Eye", camera.position);
-            material.set_uniform("Light", light);
-            gl_use_material(material);
-        }
-        draw_mesh(&self.solid);
-        gl_use_default_material();
     }
 
     /// Draws the frost, mist and sparkles.
     pub fn draw(&self, materials: &SpriteMaterials) {
         self.mist.draw(&materials.haze);
         self.sparkles.draw(&materials.sparkle);
-    }
-
-    #[cfg(test)]
-    fn mist(&self) -> &Sprites {
-        &self.mist
     }
 
     /// Builds the heap and the mist for `cold` (see `cold_level`) at
@@ -407,52 +416,36 @@ impl Ice {
             };
             let alpha = peak * presence * (PI * life).sin();
             let spot = point + outward * out;
-            self.mist.facing(
-                facing,
-                Vec3::new(spot.x, y.max(self.floor + SETTLE * half), spot.y),
-                half,
-                half,
-                with_alpha(MIST_COLOR, alpha),
-            );
+            let center = Vec3::new(spot.x, y.max(self.floor + SETTLE * half), spot.y);
+            let color = with_alpha(MIST_COLOR, alpha);
+            self.mist.facing(facing, center, half, half, color);
         }
         self.mist.finish(facing.forward);
 
         // Sparkles twinkle on the tops of the blocks that show.
         let clock = seconds as f32;
+        let last = self.blocks.len() - 1;
         for sparkle in 0..SPARKLES {
             let which = (unit_hash(sparkle, SALT_SPARKLE) * self.blocks.len() as f32) as usize;
-            let height = self.heights[which.min(self.blocks.len() - 1)];
+            let (block, height) = (self.blocks[which.min(last)], self.heights[which.min(last)]);
             if height <= 0.0 {
                 continue;
             }
-            let block = self.blocks[which.min(self.blocks.len() - 1)];
-            let life = age(
-                seconds,
-                SPARKLE_RATE * (0.7 + 0.6 * unit_hash(sparkle, SALT_KIND)),
-                unit_hash(sparkle, SALT_PUFF),
-            );
+            let rate = SPARKLE_RATE * (0.7 + 0.6 * unit_hash(sparkle, SALT_KIND));
+            let life = age(seconds, rate, unit_hash(sparkle, SALT_PUFF));
             let flash = (PI * life).sin().powi(4);
             let shift = 0.3 * block.width * (unit_hash(sparkle, SALT_DEPTH) - 0.5);
             let half = SPARKLE_HALF_SIZE * unit * (0.6 + 0.4 * flash);
             let spin = 0.05 * unit * (clock + sparkle as f32).sin();
-            self.sparkles.facing(
-                facing,
-                Vec3::new(
-                    block.place.x + shift + spin,
-                    self.floor + height + 0.02 * unit,
-                    block.place.y - shift,
-                ),
-                half,
-                half,
-                with_alpha(SPARKLE_COLOR, flash * smoothstep(0.0, FIRST_SHARE, cold)),
+            let center = Vec3::new(
+                block.place.x + shift + spin,
+                self.floor + height + 0.02 * unit,
+                block.place.y - shift,
             );
+            let color = with_alpha(SPARKLE_COLOR, flash * smoothstep(0.0, FIRST_SHARE, cold));
+            self.sparkles.facing(facing, center, half, half, color);
         }
         self.sparkles.finish(facing.forward);
-    }
-
-    #[cfg(test)]
-    fn solid(&self) -> &Mesh {
-        &self.solid
     }
 }
 
@@ -491,7 +484,7 @@ fn layout(wall: HalfOutline, unit: f32) -> Vec<Block> {
                 depth,
                 height,
                 turn: angle + 0.5 * (random(SALT_TURN) - 0.5),
-                tilt: MAX_TILT * (2.0 * random(SALT_TURN + 100) - 1.0),
+                tilt: MAX_TILT * (2.0 * random(SALT_TILT) - 1.0),
                 appears: row.appears + APPEAR_SPREAD * random(SALT_APPEAR),
                 narrowing: row.narrowing,
                 seed: index,
@@ -502,8 +495,10 @@ fn layout(wall: HalfOutline, unit: f32) -> Vec<Block> {
 }
 
 /// Adds one block, grown to `growth` of its full size, with its base at
-/// height `base`. `shaded` faces carry their normals for the ice shader;
-/// otherwise they are shaded here from `light`.
+/// height `base`.
+///
+/// `shaded` faces carry their normals for the ice shader; otherwise they
+/// are shaded here from `light`.
 fn add_block(mesh: &mut Mesh, block: Block, base: f32, growth: f32, light: Vec3, shaded: bool) {
     let half_width = block.width * growth / 2.0;
     let half_depth = block.depth * growth / 2.0;
@@ -533,24 +528,15 @@ fn add_block(mesh: &mut Mesh, block: Block, base: f32, growth: f32, light: Vec3,
             sign_z * half_depth * (narrow + jitter(SALT_DEPTH)),
         )
     };
-    let low = [
-        corner(-1.0, false, -1.0),
-        corner(1.0, false, -1.0),
-        corner(1.0, false, 1.0),
-        corner(-1.0, false, 1.0),
-    ];
-    let high = [
-        corner(-1.0, true, -1.0),
-        corner(1.0, true, -1.0),
-        corner(1.0, true, 1.0),
-        corner(-1.0, true, 1.0),
-    ];
+    // The corners in order around the block, seen from above.
+    let around = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
+    let low = around.map(|(x, z)| corner(x, false, z));
+    let high = around.map(|(x, z)| corner(x, true, z));
     let middle = (low.iter().chain(&high).fold(Vec3::ZERO, |sum, &p| sum + p)) / 8.0;
     let mut face = |corners: [Vec3; 4], colors: [Color; 4]| {
         let center = corners.iter().fold(Vec3::ZERO, |sum, &p| sum + p) / 4.0;
-        let mut normal = (corners[1] - corners[0])
-            .cross(corners[3] - corners[0])
-            .normalize_or_zero();
+        let (side, other) = (corners[1] - corners[0], corners[3] - corners[0]);
+        let mut normal = side.cross(other).normalize_or_zero();
         if normal.dot(center - middle) < 0.0 {
             normal = -normal;
         }
@@ -566,41 +552,16 @@ fn add_block(mesh: &mut Mesh, block: Block, base: f32, growth: f32, light: Vec3,
             vertex.normal = Vec4::new(normal.x, normal.y, normal.z, 0.0);
             mesh.vertices.push(vertex);
         }
-        mesh.indices
-            .extend([first, first + 1, first + 2, first, first + 2, first + 3]);
+        let quad = [first, first + 1, first + 2, first, first + 2, first + 3];
+        mesh.indices.extend(quad);
     };
     face(high, [ICE_TOP; 4]);
     let side_top = mix_color(ICE_SIDE, ICE_TOP, 0.35);
     for edge in 0..4 {
         let next = (edge + 1) % 4;
-        face(
-            [low[edge], low[next], high[next], high[edge]],
-            [ICE_DEEP, ICE_DEEP, side_top, side_top],
-        );
+        let corners = [low[edge], low[next], high[next], high[edge]];
+        face(corners, [ICE_DEEP, ICE_DEEP, side_top, side_top]);
     }
-    debug_assert_eq!(mesh.vertices.len() % (4 * FACES_PER_BLOCK), 0);
-}
-
-fn load_ice() -> Option<Material> {
-    load_material(
-        ShaderSource::Glsl {
-            vertex: ICE_VERTEX,
-            fragment: ICE_FRAGMENT,
-        },
-        MaterialParams {
-            pipeline_params: PipelineParams {
-                depth_write: true,
-                depth_test: Comparison::LessOrEqual,
-                ..Default::default()
-            },
-            uniforms: vec![
-                UniformDesc::new("Eye", UniformType::Float3),
-                UniformDesc::new("Light", UniformType::Float3),
-            ],
-            ..Default::default()
-        },
-    )
-    .ok()
 }
 
 #[cfg(test)]

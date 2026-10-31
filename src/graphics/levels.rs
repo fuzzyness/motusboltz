@@ -1,5 +1,7 @@
 //! How hot the burner and how cold the ice look, following the sliders
-//! smoothly: when a slider moves, the flames, ice, mist and background
+//! smoothly.
+//!
+//! When a slider moves, the flames, ice, mist and background
 //! glows grow or shrink over about a second instead of jumping. The
 //! reservoirs themselves change at once; only the picture eases.
 
@@ -18,11 +20,14 @@ pub fn ease(current: f32, target: f32, seconds: f32) -> f32 {
     current + (target - current) * share
 }
 
-/// The levels shown now, from 0 (nothing) to 1 (full); see `heat_level`
-/// and `cold_level`.
+/// The levels shown now, from 0 (nothing) to 1 (full).
+///
+/// See `heat_level` and `cold_level`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ReservoirLevels {
+    /// How hot the burner looks.
     pub heat: f32,
+    /// How cold the ice looks.
     pub cold: f32,
     /// The clock at the last update; `None` before the first, which starts
     /// at the settings as they are.

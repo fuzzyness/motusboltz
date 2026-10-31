@@ -4,6 +4,7 @@
 use super::*;
 use crate::sim::engine::PARTICLE_RADIUS;
 
+/// Largest position difference treated as equal.
 const POSITION_TOLERANCE: f32 = 1e-5;
 
 #[test]

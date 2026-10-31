@@ -1,7 +1,8 @@
-//! The panel's numbers, gathered from the simulation a few times a second:
-//! what the gas and the flywheel are doing now, and where the energy went
-//! over the recent turns. Formatting helpers shared by both views are
-//! here too.
+//! The panel's numbers, gathered from the simulation a few times a second.
+//!
+//! They are what the gas and the flywheel are doing now, and where the
+//! energy went over the recent turns. Formatting helpers shared by both
+//! views are here too.
 
 use crate::sim::cycle::{
     COLD,
@@ -10,77 +11,131 @@ use crate::sim::cycle::{
     loop_work, //
 };
 use crate::sim::engine::ConnectedChambers;
+use crate::sim::units::GasMeasurements;
 
-const PASCALS_PER_BAR: f64 = 100_000.0;
+/// Pascals in a bar.
+pub const PASCALS_PER_BAR: f64 = 100_000.0;
+/// Seconds in a minute.
 const SECONDS_PER_MINUTE: f64 = 60.0;
 /// Below this speed, in turns per minute, the flywheel counts as at rest.
+///
 /// Without Start, gas pushes alone drift a free shaft at about 0.1; the
 /// slowest engine that keeps turning (450/300 K) makes about 0.4.
 const AT_REST_TURNS_PER_MINUTE: f64 = 0.2;
-/// The ledger is shown as balanced to one decimal; a larger mismatch is
-/// flagged. Measured mismatches are about 0.001 J per turn.
+/// Largest ledger mismatch shown as balanced, in joules per turn.
+///
+/// The ledger is shown to one decimal; a larger mismatch is flagged.
+/// Measured mismatches are about 0.001 J per turn.
 pub const LEDGER_TOLERANCE_JOULES: f64 = 0.05;
 
+/// Shown while the flywheel is at rest.
 pub const WAITING_START: &str = "Press Start (Space) to turn the flywheel.";
+/// Shown while both sides are at one temperature.
 pub const WAITING_GAP: &str = "No temperature difference: drag Hot side up.";
+/// Shown during the first turn.
 pub const WAITING_TURN: &str = "Waiting for the flywheel to finish a turn.";
+/// Shown during the first turn after new settings.
 pub const WAITING_SETTINGS: &str = "New settings: waiting for a full turn.";
+/// Shown in place of the loop work before the first loop.
 const LOOPS_NOT_YET: &str = "Dots: each cylinder's state now";
 
-/// One cylinder's gas right now. Temperature and pressure are `None` while
-/// the cylinder holds too few particles to measure.
+/// One cylinder's gas right now.
+///
+/// Temperature and pressure are `None` while the cylinder holds too few
+/// particles to measure.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Gas {
+    /// Temperature.
     pub kelvin: Option<f64>,
-    /// Ideal-gas estimate, P = nRT/V.
+    /// Ideal-gas pressure estimate, P = nRT/V, in bar.
     pub bar: Option<f64>,
+    /// Particles in the cylinder.
     pub particles: usize,
+    /// Concentration, in mol/L.
     pub mol_per_l: f64,
 }
 
+impl From<GasMeasurements> for Gas {
+    fn from(sample: GasMeasurements) -> Self {
+        Self {
+            kelvin: sample.temperature_kelvin,
+            bar: sample.pressure_pa.map(|pa| pa / PASCALS_PER_BAR),
+            particles: sample.count,
+            mol_per_l: sample.concentration_mol_per_l,
+        }
+    }
+}
+
 /// What the gas and the flywheel are doing now, and running totals since
-/// the gas was filled. Energies in joules.
+/// the gas was filled.
+///
+/// Energies are in joules.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Now {
+    /// Hot-wall setting.
     pub hot_wall_kelvin: f32,
+    /// Cold-wall setting.
     pub cold_wall_kelvin: f32,
+    /// Gas in the hot cylinder.
     pub hot: Gas,
+    /// Gas in the cold cylinder.
     pub cold: Gas,
+    /// Particles in the opening between the cylinders.
     pub passage_particles: usize,
+    /// All particles.
     pub particles: usize,
+    /// All the helium, in moles.
     pub moles: f64,
-    /// Positive in the heat-engine direction.
+    /// Flywheel speed, positive in the heat-engine direction.
     pub turns_per_minute: f64,
+    /// Revolutions so far, either way.
     pub turns: f64,
+    /// Flywheel energy.
     pub flywheel: f64,
+    /// Energy Start and the kick gave.
     pub starter: f64,
+    /// Work the load took.
     pub to_load: f64,
+    /// Energy lost to friction.
     pub friction: f64,
+    /// Heat from the hot wall.
     pub heat_from_hot: f64,
+    /// Heat from the cold wall.
     pub heat_from_cold: f64,
+    /// Work the gas did on the pistons.
     pub gas_work: f64,
+    /// Gas first-law residual.
     pub gas_error: f64,
+    /// Flywheel energy-balance residual.
     pub shaft_error: f64,
 }
 
-/// Energy per turn, averaged over the recent turns, in joules, with the
-/// numbers each law needs.
+/// Energy per turn, averaged over the recent turns, with the numbers each
+/// law needs.
+///
+/// Energies are in joules.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Turn {
+    /// Turns averaged.
     pub turns: usize,
     /// Model seconds per turn.
     pub seconds: f64,
-    /// Heat into the gas from each wall; the cold wall's is negative when
-    /// heat leaves the gas there.
+    /// Heat into the gas from the hot wall.
     pub hot_heat: f64,
+    /// Heat into the gas from the cold wall, negative when heat leaves the
+    /// gas there.
     pub cold_heat: f64,
+    /// Work the gas did.
     pub work: f64,
     /// Change in the gas's own energy, dU.
     pub stored: f64,
+    /// Hot-wall setting over the turns.
     pub hot_kelvin: f32,
+    /// Cold-wall setting over the turns.
     pub cold_kelvin: f32,
     /// Work out over heat in, when the engine did net work.
     pub efficiency: Option<f64>,
+    /// Carnot limit for the settings.
     pub carnot: f64,
     /// Entropy change of the surroundings (both walls), in J/K.
     pub entropy: f64,
@@ -95,7 +150,9 @@ pub struct Turn {
 /// Everything the panel shows.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Readout {
+    /// What is happening now.
     pub now: Now,
+    /// The recent turns, once there is one.
     pub turn: Option<Turn>,
     /// Shown in place of the per-turn numbers until there are some.
     pub waiting: &'static str,
@@ -113,23 +170,18 @@ pub fn readout(engine: &ConnectedChambers) -> Readout {
     }
 }
 
+/// What the gas and the flywheel are doing now.
 fn now(engine: &ConnectedChambers) -> Now {
     let regions = engine.measurements();
     let pistons = engine.power_pistons();
-    let joules = |reduced: f64| engine.energy_joules(reduced);
-    let gas = |sample: crate::sim::units::GasMeasurements| Gas {
-        kelvin: sample.temperature_kelvin,
-        bar: sample.pressure_pa.map(|pa| pa / PASCALS_PER_BAR),
-        particles: sample.markers,
-        mol_per_l: sample.concentration_mol_per_l,
-    };
+    let joules = |reduced: f64| engine.units().energy_joules(reduced);
     let heat = engine.heat();
     Now {
         hot_wall_kelvin: engine.hot_kelvin(),
         cold_wall_kelvin: engine.cold_kelvin(),
-        hot: gas(regions.hot),
-        cold: gas(regions.cold),
-        passage_particles: regions.passage_markers,
+        hot: regions.hot.into(),
+        cold: regions.cold.into(),
+        passage_particles: regions.passage_count,
         particles: engine.particles.len(),
         moles: engine.total_moles(),
         turns_per_minute: turns_per_minute(engine),
@@ -149,30 +201,34 @@ fn now(engine: &ConnectedChambers) -> Now {
 /// The recent turns, averaged per turn, in joules.
 pub fn turn(engine: &ConnectedChambers, recent: TurnSummary) -> Turn {
     let per_turn = recent.per_turn();
-    let joules = |reduced: f64| engine.energy_joules(reduced);
+    let joules = |reduced: f64| engine.units().energy_joules(reduced);
     Turn {
         turns: recent.turns,
         seconds: per_turn.duration,
-        hot_heat: joules(per_turn.hot_heat),
-        cold_heat: joules(per_turn.cold_heat),
-        work: joules(per_turn.gas_work),
-        stored: joules(per_turn.gas_energy_change),
+        hot_heat: joules(per_turn.change.hot_heat),
+        cold_heat: joules(per_turn.change.cold_heat),
+        work: joules(per_turn.change.gas_work),
+        stored: joules(per_turn.change.gas_energy),
         hot_kelvin: per_turn.hot_kelvin,
         cold_kelvin: per_turn.cold_kelvin,
         efficiency: per_turn
             .efficiency()
-            .filter(|_| per_turn.gas_work > 0.0)
+            .filter(|_| per_turn.change.gas_work > 0.0)
             .map(|value| value.clamp(0.0, 1.0)),
         carnot: per_turn.carnot_limit(),
-        entropy: engine.entropy_joules_per_kelvin(per_turn.surroundings_entropy_change()),
+        entropy: engine
+            .units()
+            .entropy_joules_per_kelvin(per_turn.surroundings_entropy_change()),
         settled: per_turn.is_settled(),
         residual: joules(per_turn.first_law_residual()),
     }
 }
 
-/// What the per-turn readouts show before there is a full turn to show:
-/// that the sides need a temperature difference, how to start, that new
-/// settings started the average over, or that a turn is under way.
+/// What the per-turn readouts show before there is a full turn to show.
+///
+/// That is that the sides need a temperature difference, how to start,
+/// that new settings started the average over, or that a turn is under
+/// way.
 pub fn waiting_text(engine: &ConnectedChambers) -> &'static str {
     if engine.hot_kelvin() <= engine.cold_kelvin() {
         WAITING_GAP
@@ -188,7 +244,8 @@ pub fn waiting_text(engine: &ConnectedChambers) -> &'static str {
 /// The flywheel's speed in turns per minute of model time, positive in
 /// the heat-engine direction.
 fn turns_per_minute(engine: &ConnectedChambers) -> f64 {
-    -engine.power_pistons().angular_velocity() as f64 * SECONDS_PER_MINUTE / std::f64::consts::TAU
+    let angular_velocity = engine.power_pistons().angular_velocity() as f64;
+    -angular_velocity * SECONDS_PER_MINUTE / std::f64::consts::TAU
 }
 
 /// The work enclosed by each cylinder's last loop and their sum.
@@ -197,8 +254,9 @@ pub fn loop_text(engine: &ConnectedChambers) -> String {
     if cycle.last_loop(HOT).is_empty() {
         return LOOPS_NOT_YET.to_owned();
     }
+    let units = engine.units();
     let [hot_work, cold_work] =
-        [HOT, COLD].map(|cylinder| engine.energy_joules(loop_work(cycle.last_loop(cylinder))));
+        [HOT, COLD].map(|cylinder| units.energy_joules(loop_work(cycle.last_loop(cylinder))));
     format!(
         "Hot {} J + cold {} J = W {} J",
         signed_number(hot_work, 1),
@@ -207,8 +265,10 @@ pub fn loop_text(engine: &ConnectedChambers) -> String {
     )
 }
 
-/// A whole number of joules (or one decimal below 10) with thousands
-/// separators and a true minus sign, e.g. "5,247", "3.2" or "−12".
+/// A whole number of joules, or one decimal below 10, with thousands
+/// separators and a true minus sign.
+///
+/// For example, "5,247", "3.2" or "−12".
 pub fn amount(value: f64) -> String {
     if value.abs() < 10.0 {
         let text = format!("{:.1}", value.abs());
@@ -249,7 +309,9 @@ pub fn signed_sum(terms: &[f64]) -> String {
 }
 
 /// The flywheel's speed for the Simple view, in revolutions per minute of
-/// model time: "3.4 rpm", "−0.8 rpm" when it turns backward, or "at rest".
+/// model time.
+///
+/// For example, "3.4 rpm", "−0.8 rpm" when it turns backward, or "at rest".
 pub fn speed_text(turns_per_minute: f64) -> String {
     if turns_per_minute.abs() < AT_REST_TURNS_PER_MINUTE {
         "at rest".to_owned()

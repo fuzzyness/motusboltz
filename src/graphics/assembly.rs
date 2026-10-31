@@ -1,5 +1,6 @@
-//! The moving parts above the block, as solid metal: an aluminium piston
-//! in each bore (a hollow cup with ring grooves and a wrist pin), a steel
+//! The moving parts above the block, as solid metal.
+//!
+//! They are an aluminium piston in each bore (a hollow cup with ring grooves and a wrist pin), a steel
 //! connecting rod from each piston to its crank, the crankshaft with its
 //! webs and crank pins, the brass flywheel between the cranks, and two
 //! painted bearing stands on the block that carry the shaft.
@@ -17,14 +18,16 @@ use std::f32::consts::{
 };
 use std::ops::Range;
 
-use macroquad::models::{Mesh, Vertex};
+use macroquad::models::{
+    Mesh,
+    Vertex, //
+};
 use macroquad::prelude::{
     Camera3D,
     Color,
     Mat3,
     Material,
     Vec3,
-    Vec4,
     vec3, //
 };
 
@@ -35,7 +38,6 @@ use super::block::{
 use super::solid::{
     Frame,
     Solid,
-    draw_metal,
     finish,
     load_metal,
     turn,
@@ -43,100 +45,157 @@ use super::solid::{
 };
 use super::{
     DRAW_CALL_INDEX_CAPACITY,
-    DRAW_CALL_VERTEX_CAPACITY, //
+    DRAW_CALL_VERTEX_CAPACITY,
+    draw_lit, //
 };
 use crate::sim::geometry::ChamberGeometry;
 use crate::sim::pistons::PowerPistons;
 
-// Sizes are fractions of the bore's radius, so the parts keep their
-// proportions at any engine size.
-
-/// Pistons: the gap to the bore wall, overall height above the face (the
-/// crown faces the gas), wall and crown thickness, and the wrist pin's
-/// height above the face and its radius. The pin rests in a bar across the
-/// cup (its bosses), split in the middle for the rod.
+/// Gap between a piston and the bore wall.
+///
+/// Sizes are fractions of the bore's radius, so the parts keep their
+/// proportions at any engine size.
 const PISTON_CLEARANCE: f32 = 0.016;
+/// A piston's overall height above its face, the crown, which faces the
+/// gas.
 const PISTON_HEIGHT: f32 = 0.4;
+/// Thickness of a piston's wall.
 const PISTON_WALL: f32 = 0.05;
+/// Thickness of a piston's crown.
 const PISTON_CROWN: f32 = 0.1;
+/// Height of the wrist pin above the face.
 const WRIST_PIN_HEIGHT: f32 = 0.24;
+/// Radius of the wrist pin.
 const WRIST_PIN_RADIUS: f32 = 0.065;
+/// Radius of the bar across the cup the pin rests in (its bosses), which
+/// is split in the middle for the rod.
 const BOSS_RADIUS: f32 = 0.12;
-/// Three ring grooves near the crown: their heights, width and depth.
+/// How far the bosses reach into the piston's wall.
+const BOSS_OVERLAP: f32 = 0.01;
+/// Heights of the three ring grooves near the crown.
 const RING_HEIGHTS: [f32; 3] = [0.06, 0.12, 0.18];
+/// Width of a ring groove.
 const RING_WIDTH: f32 = 0.022;
+/// Depth of a ring groove.
 const RING_DEPTH: f32 = 0.014;
 
-/// Connecting rods: thickness along the shaft, the radius of the eye
-/// around each pin, and the shank's half-width at each end and half its
-/// thickness.
+/// Thickness of a connecting rod along the shaft.
 const ROD_THICKNESS: f32 = 0.14;
+/// Radius of the eye around the wrist pin.
 const SMALL_END_RADIUS: f32 = 0.12;
+/// Radius of the eye around the crank pin.
 const BIG_END_RADIUS: f32 = 0.17;
+/// Half-width of the shank at the small and the big end.
 const SHANK_HALF_WIDTH: (f32, f32) = (0.065, 0.095);
+/// Half the shank's thickness.
 const SHANK_HALF_THICK: f32 = 0.035;
+/// How far into each eye the shank reaches, as a share of the eye's
+/// radius out from the pin.
+const SHANK_REACH: f32 = 0.8;
 /// Space between a rod and the webs or bosses beside it.
 const SIDE_GAP: f32 = 0.02;
 
-/// Crankshaft: the shaft's radius, the crank pin's, each web's thickness,
-/// its radius around the shaft and around the pin, and how far the shaft
-/// runs past each outer web.
+/// Radius of the shaft.
 const SHAFT_RADIUS: f32 = 0.075;
+/// Radius of a crank pin.
 const CRANK_PIN_RADIUS: f32 = 0.08;
+/// Thickness of a crank web.
 const WEB_THICKNESS: f32 = 0.1;
+/// Radius of a web around the shaft.
 const WEB_SHAFT_RADIUS: f32 = 0.19;
+/// Radius of a web around the crank pin.
 const WEB_PIN_RADIUS: f32 = 0.15;
+/// How far the shaft runs past each outer web.
 const SHAFT_STUB: f32 = 0.14;
 
-/// Flywheel, in the middle of the shaft: outer radius, the rim's depth and
-/// width, the hub's radius and width, and its spokes, tapering from the hub
-/// out to the rim.
+/// Outer radius of the flywheel, in the middle of the shaft.
 const FLYWHEEL_RADIUS: f32 = 1.25;
+/// Depth of the flywheel's rim.
 const RIM_DEPTH: f32 = 0.17;
+/// Width of the rim.
 const RIM_WIDTH: f32 = 0.2;
+/// Chamfer on the rim's edges.
 const RIM_CHAMFER: f32 = 0.025;
+/// Radius of the hub.
 const HUB_RADIUS: f32 = 0.2;
+/// Width of the hub.
 const HUB_WIDTH: f32 = 0.28;
+/// Spokes, tapering from the hub out to the rim.
 const SPOKES: usize = 6;
+/// Half-width of a spoke at the hub and at the rim.
 const SPOKE_HALF_WIDTH: (f32, f32) = (0.06, 0.04);
+/// Half a spoke's thickness.
 const SPOKE_HALF_THICK: f32 = 0.035;
+/// Where a spoke starts, as a share of the hub's radius, inside the hub.
+const SPOKE_ROOT: f32 = 0.9;
+/// How far a spoke reaches into the rim.
+const SPOKE_OVERLAP: f32 = 0.02;
 
-/// Bearing stands, one each side of the flywheel: the bearing's distance
-/// from the middle, its radius and width; and the legs, from feet this far
-/// to the front and back, with half their section.
+/// Distance of each bearing stand from the middle, one each side of the
+/// flywheel.
 const STAND_X: f32 = 0.22;
+/// Radius of a bearing.
 const BEARING_RADIUS: f32 = 0.16;
+/// Width of a bearing.
 const BEARING_WIDTH: f32 = 0.12;
+/// Where the legs meet a bearing, below the shaft, in bearing radii.
+const LEG_TOP_DROP: f32 = 0.8;
+/// How far apart the legs meet a bearing, front and back, in bearing
+/// radii.
+const LEG_TOP_SPREAD: f32 = 0.5;
+/// How far the feet are to the front and back.
 const FOOT_Z: f32 = 0.9;
+/// Half a leg's width in the lean, at its foot.
 const LEG_HALF_WIDTH: f32 = 0.05;
-/// The pad each leg stands on: its height, half its length (front to
-/// back) and half its width (along the shaft).
-const FOOT_HEIGHT: f32 = 0.06;
-const FOOT_HALF_LENGTH: f32 = 0.1;
-const FOOT_HALF_WIDTH: f32 = 0.07;
+/// A leg's width at its top against its foot.
+const LEG_TAPER: f32 = 0.8;
+/// Half a leg's thickness.
 const LEG_HALF_THICK: f32 = 0.04;
-/// The crossbar between each stand's legs, as a share of their height.
+/// Height of the pad each leg stands on.
+const FOOT_HEIGHT: f32 = 0.06;
+/// Half a pad's length, front to back.
+const FOOT_HALF_LENGTH: f32 = 0.1;
+/// Half a pad's width, along the shaft.
+const FOOT_HALF_WIDTH: f32 = 0.07;
+/// Height of the crossbar between each stand's legs, as a share of theirs.
 const BRACE_HEIGHT: f32 = 0.35;
+/// Width of the crossbar against a leg's.
+const BRACE_WIDTH: f32 = 0.7;
+/// Thickness of the crossbar against a leg's.
+const BRACE_THICK: f32 = 0.8;
 
-/// Facets around each round part.
+/// Facets around each large round part.
 const ROUND_SEGMENTS: usize = 40;
+/// Facets around each small round part.
 const SMALL_SEGMENTS: usize = 20;
+/// Steps around each end of a crank web.
 const WEB_STEPS: usize = 12;
 
-/// Finishes: color and polish (see `solid.rs`), saturated in the style of
-/// a PS2 demo.
+/// Aluminium, outside.
+///
+/// Finishes are a color and polish (see `solid.rs`), saturated in the
+/// style of a PS2 demo.
 const ALUMINIUM: Color = finish(214, 222, 236, 0.7);
+/// Aluminium, inside the piston.
 const ALUMINIUM_INSIDE: Color = finish(140, 150, 175, 0.3);
+/// The bottom of a ring groove.
 const RING_GROOVE: Color = finish(50, 56, 80, 0.2);
+/// Steel.
 const STEEL: Color = finish(140, 156, 190, 0.75);
+/// Polished steel.
 const BRIGHT_STEEL: Color = finish(210, 218, 235, 0.95);
+/// Brass.
 const BRASS: Color = finish(255, 186, 36, 0.85);
+/// Brass, inside the rim.
 const BRASS_DARK: Color = finish(214, 132, 20, 0.6);
+/// The bearing stands' paint.
 const PAINT: Color = finish(48, 72, 170, 0.35);
 
-/// The crank angle of each cylinder's crank relative to the shaft angle,
-/// as in the simulation: the cold crank a quarter turn ahead.
+/// The hot crank's angle relative to the shaft angle, as in the
+/// simulation.
 const HOT_PHASE: f32 = 0.0;
+/// The cold crank's angle relative to the shaft angle: a quarter turn
+/// ahead.
 const COLD_PHASE: f32 = FRAC_PI_2;
 
 /// Rotation about the shaft (the x axis) by `angle`: a point straight above
@@ -149,12 +208,17 @@ fn about_shaft(angle: f32) -> Mat3 {
 /// Where everything goes, from the block and the crank.
 #[derive(Clone, Copy, Debug)]
 struct Layout {
+    /// The bore radius every size is a fraction of.
     unit: f32,
     /// Distance from the middle to each cylinder's axis.
     offset: f32,
+    /// Radius of each bore.
     bore: f32,
+    /// Height of the block's top, where the piston faces are at rest.
     block_top: f32,
+    /// Height of the shaft.
     shaft_y: f32,
+    /// Distance from the shaft to each crank pin.
     crank_radius: f32,
 }
 
@@ -169,6 +233,8 @@ impl Layout {
         )
     }
 
+    /// The wrist pin of the cylinder at `x`, with its piston face at
+    /// `face_y`.
     fn wrist_pin(self, x: f32, face_y: f32) -> Vec3 {
         vec3(x, face_y + WRIST_PIN_HEIGHT * self.unit, 0.0)
     }
@@ -182,35 +248,82 @@ impl Layout {
 /// Where one part's vertices are in the mesh and how it moves.
 #[derive(Clone, Debug)]
 struct Part {
+    /// Its vertices in the mesh.
     vertices: Range<usize>,
+    /// How it moves.
     motion: Motion,
 }
 
+/// How a part moves.
 #[derive(Clone, Copy, Debug)]
 enum Motion {
     /// Stays where it was built.
     Fixed,
     /// Turns with the shaft.
     Shaft,
-    /// Slides up and down with the piston at this x.
-    Piston { hot: bool },
-    /// Runs from the wrist pin to the crank pin of this side; built
-    /// standing straight up from the origin with its big end `length` up.
-    Rod { hot: bool, length: f32 },
+    /// Slides up and down with the hot or the cold piston.
+    Piston {
+        /// Whether it is the hot piston.
+        hot: bool,
+    },
+    /// Runs from the wrist pin to the crank pin of one side.
+    Rod {
+        /// Whether it is the hot side's rod.
+        hot: bool,
+        /// Distance between its pins as built, standing straight up from
+        /// the origin with its big end up.
+        length: f32,
+    },
 }
 
+/// Where a moving part goes this frame.
+///
+/// Each point `p` of the part as built goes to `to + turn * (p - from)`,
+/// after a point above `split` moves up by `stretch`.
+struct Placement {
+    /// Rotation of the part.
+    turn: Mat3,
+    /// The point turned about, as built.
+    from: Vec3,
+    /// Where that point goes.
+    to: Vec3,
+    /// Height above which points stretch.
+    split: f32,
+    /// How far points above `split` move up.
+    stretch: f32,
+}
+
+impl Placement {
+    /// Where the built point `point` goes.
+    fn apply(&self, point: Vec3) -> Vec3 {
+        let extra = if point.y > self.split {
+            self.stretch
+        } else {
+            0.0
+        };
+        self.to + self.turn * (point - self.from + vec3(0.0, extra, 0.0))
+    }
+}
+
+/// The pistons, rods, crankshaft, flywheel and stands.
 pub struct Assembly {
+    /// Where everything goes.
     layout: Layout,
     /// Every part as built, in place; the mesh holds them as posed.
     built: Vec<Vertex>,
+    /// Every part as posed.
     mesh: Mesh,
+    /// Where each part's vertices are, and how it moves.
     parts: Vec<Part>,
+    /// The lit-metal material, if it can be built.
     material: Option<Material>,
 }
 
 impl Assembly {
-    /// Builds every part for `geometry` and the crank of `pistons`. Needs a
-    /// window, for the material; `build` does the rest without one.
+    /// Builds every part for `geometry` and the crank of `pistons`.
+    ///
+    /// It needs a window, for the material; `build` does the rest without
+    /// one.
     pub fn new(geometry: ChamberGeometry, pistons: &PowerPistons) -> Self {
         let material = load_metal();
         let mut assembly = Self::build(geometry, pistons.stroke() / 2.0, pistons.shaft_height());
@@ -224,6 +337,12 @@ impl Assembly {
         assembly
     }
 
+    /// Builds every part for `geometry`, with cranks of `crank_radius` on a
+    /// shaft at `shaft_y`, posed at rest.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the parts would not fit Macroquad's buffers.
     fn build(geometry: ChamberGeometry, crank_radius: f32, shaft_y: f32) -> Self {
         let shape = BlockShape::new(geometry);
         let layout = Layout {
@@ -283,29 +402,32 @@ impl Assembly {
     /// `hot_face` and `cold_face`.
     fn pose(&mut self, angle: f32, hot_face: f32, cold_face: f32) {
         let layout = self.layout;
-        // Fixed parts stay as built (the mesh starts as a copy).
-        for part in self
-            .parts
-            .iter()
-            .filter(|part| !matches!(part.motion, Motion::Fixed))
-        {
-            let (turn, shift): (Mat3, Box<dyn Fn(Vec3) -> Vec3>) = match part.motion {
+        for part in &self.parts {
+            let placement = match part.motion {
+                // Fixed parts stay as built (the mesh starts as a copy).
                 Motion::Fixed => continue,
                 Motion::Shaft => {
                     let axis = vec3(0.0, layout.shaft_y, 0.0);
-                    let turn = about_shaft(angle);
-                    (turn, Box::new(move |point| axis + turn * (point - axis)))
+                    Placement {
+                        turn: about_shaft(angle),
+                        from: axis,
+                        to: axis,
+                        split: f32::INFINITY,
+                        stretch: 0.0,
+                    }
                 }
                 Motion::Piston { hot } => {
                     let rise = if hot { hot_face } else { cold_face } - layout.block_top;
-                    let x = side_x(layout, hot);
                     // Built for the hot side; the cold piston is the same
                     // part moved across.
-                    let across = x - side_x(layout, true);
-                    (
-                        Mat3::IDENTITY,
-                        Box::new(move |point| point + vec3(across, rise, 0.0)),
-                    )
+                    let across = side_x(layout, hot) - side_x(layout, true);
+                    Placement {
+                        turn: Mat3::IDENTITY,
+                        from: Vec3::ZERO,
+                        to: vec3(across, rise, 0.0),
+                        split: f32::INFINITY,
+                        stretch: 0.0,
+                    }
                 }
                 Motion::Rod { hot, length } => {
                     let x = side_x(layout, hot);
@@ -315,27 +437,23 @@ impl Assembly {
                         (COLD_PHASE, cold_face)
                     };
                     let small = layout.wrist_pin(x, face);
-                    let big = layout.crank_pin(x, angle + phase);
-                    let reach = big - small;
-                    let lean = reach.z.atan2(reach.y);
-                    let turn = about_shaft(lean);
-                    let stretch = reach.length() - length;
-                    (
-                        turn,
-                        Box::new(move |point| {
-                            // The big end's half moves out to its pin.
-                            let extra = if point.y > length / 2.0 { stretch } else { 0.0 };
-                            vec3(x, small.y, small.z) + turn * (point + vec3(0.0, extra, 0.0))
-                        }),
-                    )
+                    let reach = layout.crank_pin(x, angle + phase) - small;
+                    // The big end's half moves out to its pin.
+                    Placement {
+                        turn: about_shaft(reach.z.atan2(reach.y)),
+                        from: Vec3::ZERO,
+                        to: vec3(x, small.y, small.z),
+                        split: length / 2.0,
+                        stretch: reach.length() - length,
+                    }
                 }
             };
             for index in part.vertices.clone() {
                 let built = self.built[index];
                 let vertex = &mut self.mesh.vertices[index];
-                vertex.position = shift(built.position);
-                let normal = turn * built.normal.truncate();
-                vertex.normal = Vec4::new(normal.x, normal.y, normal.z, 0.0);
+                vertex.position = placement.apply(built.position);
+                let normal = placement.turn * built.normal.truncate();
+                vertex.normal = normal.extend(0.0);
             }
         }
     }
@@ -343,20 +461,9 @@ impl Assembly {
     /// Draws every part where `pistons` has the crank now.
     pub fn draw(&mut self, pistons: &PowerPistons, camera: &Camera3D) {
         self.pose(pistons.angle(), pistons.hot().face_y, pistons.cold().face_y);
-        draw_metal(
-            &self.mesh,
-            self.material.as_ref(),
-            camera,
-            key_light(camera.position),
-        );
+        let light = key_light(camera.position);
+        draw_lit([&self.mesh], self.material.as_ref(), camera, light);
     }
-}
-
-/// The flywheel's outer radius for an engine of `geometry`, for the tests
-/// of the first view.
-#[cfg(test)]
-pub fn flywheel_radius(geometry: ChamberGeometry) -> f32 {
-    FLYWHEEL_RADIUS * geometry.cylinder_radius
 }
 
 /// The x of the hot (left) or cold (right) cylinder's axis.
@@ -457,8 +564,8 @@ fn flywheel(solid: &mut Solid, layout: Layout) {
         let direction =
             about_shaft(TAU * spoke as f32 / SPOKES as f32 + PI / SPOKES as f32) * Vec3::Y;
         solid.bar(
-            center + direction * (HUB_RADIUS * unit * 0.9),
-            center + direction * (inner + 0.02 * unit),
+            center + direction * (HUB_RADIUS * unit * SPOKE_ROOT),
+            center + direction * (inner + SPOKE_OVERLAP * unit),
             Vec3::X.cross(direction),
             (SPOKE_HALF_WIDTH.0 * unit, SPOKE_HALF_WIDTH.1 * unit),
             SPOKE_HALF_THICK * unit,
@@ -471,7 +578,7 @@ fn flywheel(solid: &mut Solid, layout: Layout) {
 /// block's top between the bores.
 fn stands(solid: &mut Solid, layout: Layout) {
     let unit = layout.unit;
-    let bearing_low = layout.shaft_y - BEARING_RADIUS * unit * 0.8;
+    let bearing_low = layout.shaft_y - BEARING_RADIUS * unit * LEG_TOP_DROP;
     for side in [-1.0, 1.0] {
         let x = side * STAND_X * unit;
         let half = BEARING_WIDTH * unit / 2.0;
@@ -497,8 +604,13 @@ fn stands(solid: &mut Solid, layout: Layout) {
                 PAINT,
             );
         }
-        let tops =
-            [-1.0, 1.0].map(|front| vec3(x, bearing_low, front * 0.5 * BEARING_RADIUS * unit));
+        let tops = [-1.0, 1.0].map(|front| {
+            vec3(
+                x,
+                bearing_low,
+                front * LEG_TOP_SPREAD * BEARING_RADIUS * unit,
+            )
+        });
         let feet =
             [0, 1].map(|index| leg_start(feet[index], tops[index], pad, LEG_HALF_WIDTH * unit));
         for (foot, top) in feet.into_iter().zip(tops) {
@@ -506,7 +618,7 @@ fn stands(solid: &mut Solid, layout: Layout) {
                 foot,
                 top,
                 Vec3::X.cross(top - foot),
-                (LEG_HALF_WIDTH * unit, LEG_HALF_WIDTH * unit * 0.8),
+                (LEG_HALF_WIDTH * unit, LEG_HALF_WIDTH * unit * LEG_TAPER),
                 LEG_HALF_THICK * unit,
                 PAINT,
             );
@@ -516,19 +628,23 @@ fn stands(solid: &mut Solid, layout: Layout) {
             brace(0),
             brace(1),
             Vec3::Y,
-            (LEG_HALF_WIDTH * unit * 0.7, LEG_HALF_WIDTH * unit * 0.7),
-            LEG_HALF_THICK * unit * 0.8,
+            (
+                LEG_HALF_WIDTH * unit * BRACE_WIDTH,
+                LEG_HALF_WIDTH * unit * BRACE_WIDTH,
+            ),
+            LEG_HALF_THICK * unit * BRACE_THICK,
             PAINT,
         );
     }
 }
 
 /// Where a leg leaning from a pad at `foot` (on the block) up to `top`
-/// starts, for a pad `pad` tall and a leg `half_width` across in the lean:
-/// sunk into the pad so that its square-cut end's higher edge meets the
-/// pad's top, leaving no gap under it, while the lower edge stays inside
-/// the pad.
-pub(super) fn leg_start(foot: Vec3, top: Vec3, pad: f32, half_width: f32) -> Vec3 {
+/// starts, for a pad `pad` tall and a leg `half_width` across in the lean.
+///
+/// The leg is sunk into the pad so that its square-cut end's higher edge
+/// meets the pad's top, leaving no gap under it, while the lower edge stays
+/// inside the pad.
+fn leg_start(foot: Vec3, top: Vec3, pad: f32, half_width: f32) -> Vec3 {
     let lean = (top - foot).normalize();
     let rise = half_width * (1.0 - lean.y * lean.y).max(0.0).sqrt();
     foot + Vec3::Y * (pad - rise)
@@ -574,7 +690,7 @@ fn piston(solid: &mut Solid, layout: Layout) {
     for side in [-1.0, 1.0] {
         solid.cylinder(
             pin + Vec3::X * side * slot,
-            pin + Vec3::X * side * (inside + 0.01 * unit),
+            pin + Vec3::X * side * (inside + BOSS_OVERLAP * unit),
             BOSS_RADIUS * unit,
             SMALL_SEGMENTS,
             ALUMINIUM,
@@ -607,8 +723,8 @@ fn rod(solid: &mut Solid, layout: Layout, length: f32) {
         );
     }
     solid.bar(
-        Vec3::Y * (SMALL_END_RADIUS * unit * 0.8),
-        Vec3::Y * (length - BIG_END_RADIUS * unit * 0.8),
+        Vec3::Y * (SMALL_END_RADIUS * unit * SHANK_REACH),
+        Vec3::Y * (length - BIG_END_RADIUS * unit * SHANK_REACH),
         Vec3::Z,
         (SHANK_HALF_WIDTH.0 * unit, SHANK_HALF_WIDTH.1 * unit),
         SHANK_HALF_THICK * unit,
@@ -618,4 +734,4 @@ fn rod(solid: &mut Solid, layout: Layout, length: f32) {
 
 #[cfg(test)]
 #[path = "../../tests/unit/graphics/assembly.rs"]
-mod tests;
+pub(crate) mod tests;

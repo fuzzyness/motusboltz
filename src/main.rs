@@ -10,11 +10,14 @@ use crate::graphics::{
     DRAW_CALL_VERTEX_CAPACITY, //
 };
 
+/// Width of the window at launch, in points.
+const WINDOW_WIDTH: i32 = 1440;
+/// Height of the window at launch, in points.
+const WINDOW_HEIGHT: i32 = 900;
+
 /// Window size and title, vsync, and Macroquad's per-draw-call buffer sizes.
 fn window_conf() -> macroquad::conf::Conf {
     let mut config = macroquad::conf::Conf::default();
-    const WINDOW_WIDTH: i32 = 1440;
-    const WINDOW_HEIGHT: i32 = 900;
     config.miniquad_conf.window_width = WINDOW_WIDTH;
     config.miniquad_conf.window_height = WINDOW_HEIGHT;
     config.miniquad_conf.window_title = "MotusBoltz".to_owned();
@@ -29,6 +32,7 @@ fn window_conf() -> macroquad::conf::Conf {
     config
 }
 
+/// Opens the window and runs the app.
 #[macroquad::main(window_conf)]
 async fn main() {
     app::run().await;

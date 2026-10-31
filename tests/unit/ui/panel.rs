@@ -4,8 +4,8 @@
 use super::*;
 use crate::sim::cycle::TurnSummary;
 use crate::sim::geometry::DEFAULT_GEOMETRY;
-use crate::sim::units::DEFAULT_CONNECTED_MARKERS;
-use crate::ui::fonts::drawable;
+use crate::sim::units::DEFAULT_PARTICLES;
+use crate::ui::fonts::tests::drawable;
 use plot::LOOP_KEY;
 use readout::{
     WAITING_GAP,
@@ -18,33 +18,19 @@ use simple::{
     LAW_THIRD, //
 };
 
+/// Seed for the test gas.
 const SEED: u64 = 42;
-/// Canvas heights to check: a 1440x900 window, a 1366x768 screen used
-/// full-screen, and the canvas a browser leaves on a 1366x768 and a
-/// 1280x720 laptop after its toolbars.
+/// Height of the default 1440x900 window.
 const DEFAULT_HEIGHT: f32 = 900.0;
+/// Height of a 1366x768 screen used full-screen.
 const LAPTOP_HEIGHT: f32 = 768.0;
+/// Height of the canvas a browser leaves on a 1366x768 and a 1280x720
+/// laptop after its toolbars.
 const BROWSER_HEIGHTS: [f32; 2] = [620.0, 580.0];
 
+/// The default fill.
 fn engine() -> ConnectedChambers {
-    ConnectedChambers::with_geometry_seed(DEFAULT_CONNECTED_MARKERS, DEFAULT_GEOMETRY, SEED)
-}
-
-/// A settled heated turn, in reduced units, that balances exactly (the same
-/// as in the readout tests).
-fn heated_turn() -> TurnSummary {
-    TurnSummary {
-        turns: 3,
-        hot_heat: 3.0 * 9_000.0,
-        cold_heat: 3.0 * -8_600.0,
-        hot_entropy: 3.0 * 9_000.0 / 4.0,
-        cold_entropy: 3.0 * -8_600.0,
-        gas_work: 3.0 * 300.0,
-        gas_energy_change: 3.0 * 100.0,
-        duration: 3.0 * 80.0,
-        hot_kelvin: 1_200.0,
-        cold_kelvin: 300.0,
-    }
+    ConnectedChambers::with_geometry_seed(DEFAULT_PARTICLES, DEFAULT_GEOMETRY, SEED)
 }
 
 /// A panel holding readings and a P-V range, as after a few turns, in
@@ -53,7 +39,7 @@ fn filled_panel(engine: &ConnectedChambers, mode: PanelMode) -> EnginePanel {
     let mut panel = EnginePanel::new();
     panel.select(mode);
     panel.refresh(engine);
-    panel.readout.turn = Some(readout::turn(engine, heated_turn()));
+    panel.readout.turn = Some(readout::turn(engine, TurnSummary::heated()));
     panel.range = Some(PlotRange {
         volume: engine.cylinder_volume_range_cm3(),
         pressure: (20.0, 70.0),
@@ -65,7 +51,7 @@ fn filled_panel(engine: &ConnectedChambers, mode: PanelMode) -> EnginePanel {
 /// every string it would have drawn.
 fn layout(panel: &mut EnginePanel, engine: &ConnectedChambers, height: f32) -> (f32, Vec<String>) {
     let mut pen = Pen::offline();
-    let side = panel.draw_with_height(&mut pen, engine, None, height);
+    let side = panel.draw(&mut pen, engine, None, height);
     (side, pen.texts)
 }
 

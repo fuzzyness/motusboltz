@@ -1,5 +1,7 @@
-//! The cloud the engine stands on in the sky scenery: a cartoon cloud
-//! built from flattened puffs, in the style of a Dreamcast game. Puffs
+//! The cloud the engine stands on in the sky scenery.
+//!
+//! It is a cartoon cloud built from flattened puffs, in the style of a
+//! Dreamcast game. Puffs
 //! side by side make its gently rolling top at floor height, others bulge
 //! a little along its edge, and more billow underneath. It is solid
 //! geometry, so the engine sits on it cleanly from any angle; a soft
@@ -14,25 +16,15 @@ use std::f32::consts::{
 
 use macroquad::models::{
     Mesh,
-    Vertex,
-    draw_mesh, //
+    Vertex, //
 };
 use macroquad::prelude::{
     Camera3D,
     Color,
-    Comparison,
     Material,
-    MaterialParams,
-    PipelineParams,
-    ShaderSource,
-    UniformDesc,
-    UniformType,
     Vec2,
     Vec3,
     Vec4,
-    gl_use_default_material,
-    gl_use_material,
-    load_material,
     vec3, //
 };
 
@@ -40,33 +32,13 @@ use super::block::BlockShape;
 use super::sprites::unit_hash;
 use super::{
     DRAW_CALL_INDEX_CAPACITY,
-    DRAW_CALL_VERTEX_CAPACITY, //
+    DRAW_CALL_VERTEX_CAPACITY,
+    draw_lit,
+    load_lit, //
 };
 
-const CLOUD_VERTEX: &str = r#"#version 100
-attribute vec3 position;
-attribute vec2 texcoord;
-attribute vec4 color0;
-attribute vec4 normal;
-
-varying lowp vec4 color;
-varying lowp vec2 uv;
-varying vec3 world;
-varying vec3 surface_normal;
-
-uniform mat4 Model;
-uniform mat4 Projection;
-
-void main() {
-    vec4 placed = Model * vec4(position, 1.0);
-    world = placed.xyz;
-    surface_normal = normal.xyz;
-    color = color0 / 255.0;
-    uv = texcoord;
-    gl_Position = Projection * placed;
-}"#;
-
-/// Pale blue-white where the light falls and on top, a soft sky blue in
+/// Fragment shader for the cloud: pale blue-white where the light falls
+/// and on top, a soft sky blue in
 /// the shade (never grey), mottled by a little noise as a painted texture
 /// would be, and a pale rim toward the edges.
 const CLOUD_FRAGMENT: &str = r#"#version 100
@@ -109,40 +81,50 @@ void main() {
     gl_FragColor = vec4(lit, 1.0) * texture2D(Texture, uv);
 }"#;
 
-// Sizes are fractions of the bore's radius, so the cloud keeps its
-// proportions at any engine size.
-
-/// Half the cloud across (along the shaft) and front to back.
+/// Half the cloud across, along the shaft.
+///
+/// Sizes are fractions of the bore's radius, so the cloud keeps its
+/// proportions at any engine size.
 const HALF_LENGTH: f32 = 5.0;
+/// Half the cloud front to back.
 const HALF_DEPTH: f32 = 3.6;
 /// Every puff is squashed to this share of its width in height, so the
 /// top rolls gently instead of bulging.
 const FLATTEN: f32 = 0.35;
-/// The puffs that make the top: their radius and spacing. Their tops sit
-/// just under the floor.
+/// Radius of the puffs that make the top.
 const TOP_RADIUS: f32 = 1.7;
+/// Spacing of the puffs that make the top.
 const TOP_SPACING: f32 = 1.3;
+/// Spacing between rows of top puffs against the spacing along a row, for
+/// rows that pack.
+const ROW_SPACING_SHARE: f32 = 0.87;
+/// How far the tops of the top puffs sit under the floor.
 const BELOW_FLOOR: f32 = 0.02;
 /// How far each top puff strays from its place in the grid, as a share of
-/// the spacing, and how much its size varies, so they do not look tiled.
+/// the spacing, so they do not look tiled.
 const TOP_JITTER: f32 = 0.3;
+/// How much the size of a top puff varies.
 const TOP_SIZE_SPREAD: f32 = 0.25;
 /// The top fills the outline out to this share of it (in squared terms),
 /// leaving the edge to the rings.
 const TOP_FILL: f32 = 0.85;
 
-/// Rings of puffs around and under the top: how many, how far out (as a
-/// share of the cloud's size), their smallest and largest radius, and how
-/// high their middles sit against the floor (as a share of their height,
-/// then a drop in bore radii).
+/// A ring of puffs around and under the top.
 struct Ring {
+    /// How many puffs.
     puffs: u32,
+    /// How far out, as a share of the cloud's size.
     reach: f32,
+    /// Smallest and largest radius.
     radius: (f32, f32),
+    /// How high the middles sit against the floor, as a share of the
+    /// puffs' height.
     rise: f32,
+    /// How far the middles drop below that, in bore radii.
     drop: f32,
 }
 
+/// The rings, from the edge down.
 const RINGS: [Ring; 3] = [
     // Low bumps along the edge, rising a little above the top.
     Ring {
@@ -169,24 +151,35 @@ const RINGS: [Ring; 3] = [
         drop: 0.8,
     },
 ];
+/// Color of every puff.
 const PUFF_COLOR: Color = Color::from_rgba(240, 244, 252, 255);
-/// Facets: rings from pole to pole, and around.
+/// Facets of a puff from pole to pole.
 const LATITUDES: usize = 7;
+/// Facets of a puff around.
 const LONGITUDES: usize = 12;
+/// Added to every top puff's place in the grid for its seed, keeping its
+/// random numbers apart from the rings'.
+const TOP_SEED: u32 = 1_000;
 
+/// Salt for each puff's angle, or a top puff's stray across.
 const SALT_ANGLE: u32 = 21;
+/// Salt for each puff's radius.
 const SALT_RADIUS: u32 = 22;
+/// Salt for each puff's reach, or a top puff's stray front to back.
 const SALT_REACH: u32 = 23;
 
-/// One puff: its middle and its radius across (its height is `FLATTEN`
-/// of that).
+/// One puff.
 #[derive(Clone, Copy, Debug)]
 struct Puff {
+    /// Its middle.
     center: Vec3,
+    /// Its radius across; its height is `FLATTEN` of that.
     radius: f32,
 }
 
+/// The cloud under the engine.
 pub struct CloudFloor {
+    /// Every puff.
     mesh: Mesh,
     /// Made on the first draw (it needs a window); `Some(None)` where it
     /// cannot be built, and the cloud is drawn flat white.
@@ -194,6 +187,11 @@ pub struct CloudFloor {
 }
 
 impl CloudFloor {
+    /// The cloud under a block of `shape`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the cloud would not fit Macroquad's buffers.
     pub fn new(shape: BlockShape) -> Self {
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
@@ -214,14 +212,10 @@ impl CloudFloor {
 
     /// Draws the cloud seen from `camera`, lit from `light`.
     pub fn draw(&mut self, camera: &Camera3D, light: Vec3) {
-        let material = self.material.get_or_insert_with(load_cloud);
-        if let Some(material) = material {
-            material.set_uniform("Eye", camera.position);
-            material.set_uniform("Light", light);
-            gl_use_material(material);
-        }
-        draw_mesh(&self.mesh);
-        gl_use_default_material();
+        let material = self
+            .material
+            .get_or_insert_with(|| load_lit(CLOUD_FRAGMENT, &[]));
+        draw_lit([&self.mesh], material.as_ref(), camera, light);
     }
 }
 
@@ -241,11 +235,11 @@ fn puffs(shape: BlockShape) -> Vec<Puff> {
         for column in -columns..=columns {
             // Every other row shifted half a step, so the puffs pack.
             let x = (column as f32 + 0.5 * (row & 1) as f32) * spacing;
-            let z = row as f32 * spacing * 0.87;
+            let z = row as f32 * spacing * ROW_SPACING_SHARE;
             if (x / length).powi(2) + (z / depth).powi(2) > TOP_FILL {
                 continue;
             }
-            let seed = ((row + rows) * (2 * columns + 1) + column + columns) as u32 + 1_000;
+            let seed = ((row + rows) * (2 * columns + 1) + column + columns) as u32 + TOP_SEED;
             let jitter = |salt| TOP_JITTER * spacing * (2.0 * unit_hash(seed, salt) - 1.0);
             let (x, z) = (x + jitter(SALT_ANGLE), z + jitter(SALT_REACH));
             let radius = radius * (1.0 + TOP_SIZE_SPREAD * (unit_hash(seed, SALT_RADIUS) - 0.5));
@@ -277,8 +271,10 @@ fn puffs(shape: BlockShape) -> Vec<Puff> {
     puffs
 }
 
-/// A flattened puff. A sphere squashed in height keeps its normals square
-/// to the surface by stretching them the other way.
+/// Adds a flattened puff.
+///
+/// A sphere squashed in height keeps its normals square to the surface by
+/// stretching them the other way.
 fn add_sphere(vertices: &mut Vec<Vertex>, indices: &mut Vec<u16>, puff: Puff) {
     let first = vertices.len() as u16;
     for latitude in 0..=LATITUDES {
@@ -292,11 +288,8 @@ fn add_sphere(vertices: &mut Vec<Vertex>, indices: &mut Vec<u16>, puff: Puff) {
             );
             let squash = vec3(1.0, FLATTEN, 1.0);
             let normal = (round / squash).normalize();
-            let mut vertex = Vertex::new2(
-                puff.center + round * squash * puff.radius,
-                Vec2::ZERO,
-                PUFF_COLOR,
-            );
+            let position = puff.center + round * squash * puff.radius;
+            let mut vertex = Vertex::new2(position, Vec2::ZERO, PUFF_COLOR);
             vertex.normal = Vec4::new(normal.x, normal.y, normal.z, 0.0);
             vertices.push(vertex);
         }
@@ -309,28 +302,6 @@ fn add_sphere(vertices: &mut Vec<Vertex>, indices: &mut Vec<u16>, puff: Puff) {
             indices.extend([a, b, a + 1, a + 1, b, b + 1]);
         }
     }
-}
-
-fn load_cloud() -> Option<Material> {
-    load_material(
-        ShaderSource::Glsl {
-            vertex: CLOUD_VERTEX,
-            fragment: CLOUD_FRAGMENT,
-        },
-        MaterialParams {
-            pipeline_params: PipelineParams {
-                depth_write: true,
-                depth_test: Comparison::LessOrEqual,
-                ..Default::default()
-            },
-            uniforms: vec![
-                UniformDesc::new("Eye", UniformType::Float3),
-                UniformDesc::new("Light", UniformType::Float3),
-            ],
-            ..Default::default()
-        },
-    )
-    .ok()
 }
 
 #[cfg(test)]

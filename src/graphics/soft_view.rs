@@ -1,8 +1,10 @@
 //! The 3D view drawn a little below the window's resolution and scaled up
-//! smoothly, for the slightly soft look of a Dreamcast game rather than
-//! the crisp edges of a modern one. The panel, buttons
-//! and text are drawn afterwards at full resolution, so they stay sharp.
-//! It also means fewer pixels to fill on slow laptops and phones.
+//! smoothly.
+//!
+//! The scaling gives the slightly soft look of a Dreamcast game rather
+//! than the crisp edges of a modern one. The panel, buttons and text are
+//! drawn afterwards at full resolution, so they stay sharp. It also means
+//! fewer pixels to fill on slow laptops and phones.
 
 use macroquad::prelude::{
     Camera2D,
@@ -25,13 +27,16 @@ use macroquad::prelude::{
     vec2, //
 };
 
-/// The view's height as a share of the window's height in screen points
-/// (not physical pixels, so a high-DPI screen gets the same softness).
+/// The view's height as a share of the window's height in screen points.
+///
+/// The share is of points, not physical pixels, so a high-DPI screen gets
+/// the same softness.
 const SCALE: f32 = 0.85;
 /// Fewest lines drawn, so a small window or phone is not too blurry,
 /// unless the screen itself has fewer.
 const MIN_LINES: f32 = 600.0;
 
+/// Vertex shader for the copy to the screen.
 const COPY_VERTEX: &str = r#"#version 100
 attribute vec3 position;
 attribute vec2 texcoord;
@@ -46,8 +51,10 @@ void main() {
     uv = texcoord;
 }"#;
 
-/// Copies the view as it is, fully opaque: blending inside the view leaves
-/// its alpha below 1 in places, which must not show the screen through.
+/// Fragment shader that copies the view as it is, fully opaque.
+///
+/// Blending inside the view leaves its alpha below 1 in places, which must
+/// not show the screen through.
 const COPY_FRAGMENT: &str = r#"#version 100
 precision mediump float;
 
@@ -71,12 +78,17 @@ pub fn pixels(width: f32, height: f32, dpi: f32) -> (u32, u32) {
     )
 }
 
+/// The softened view.
 pub struct SoftView {
+    /// The copy shader, made on first use (it needs a window); `Some(None)`
+    /// where it cannot be built.
     copy: Option<Option<Material>>,
+    /// The image the view is drawn into, and its size in pixels.
     target: Option<(RenderTarget, (u32, u32))>,
 }
 
 impl SoftView {
+    /// A view with nothing made yet.
     pub fn new() -> Self {
         Self {
             copy: None,
@@ -85,8 +97,10 @@ impl SoftView {
     }
 
     /// The image to draw the view into for a `width` by `height` window
-    /// at `dpi`, made or remade as needed; `None` where its shader cannot
-    /// be built, and the view is drawn straight to the screen.
+    /// at `dpi`, made or remade as needed.
+    ///
+    /// It is `None` where its shader cannot be built, and the view is drawn
+    /// straight to the screen.
     pub fn target(&mut self, width: f32, height: f32, dpi: f32) -> Option<RenderTarget> {
         let copy = self.copy.get_or_insert_with(|| {
             load_material(
@@ -128,8 +142,9 @@ impl SoftView {
         camera
     }
 
-    /// Scales the view up over the whole `width` by `height` window. The
-    /// screen camera must be set.
+    /// Scales the view up over the whole `width` by `height` window.
+    ///
+    /// The screen camera must be set.
     pub fn present(&self, width: f32, height: f32) {
         let (Some(Some(copy)), Some((target, _))) = (&self.copy, &self.target) else {
             return;

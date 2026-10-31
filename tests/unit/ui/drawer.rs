@@ -2,12 +2,14 @@
 
 use super::*;
 
+/// The panel's card in a 1440x900 window.
 const CARD_RECT: Rect = Rect {
     x: 12.0,
     y: 12.0,
     w: 340.0,
     h: 876.0,
 };
+/// A card like the sliders' at a window's right edge.
 const SLIDER_CARD: Rect = Rect {
     x: 1134.0,
     y: 6.0,
@@ -63,8 +65,8 @@ fn hump_stands_out_on_the_inner_side() {
 #[test]
 fn tabs_hug_their_edges() {
     let width = 1440.0;
-    let left = tab(Edge::Left, width, 28.0, 450.0);
-    let right = tab(Edge::Right, width, 28.0, 150.0);
+    let left = tab(Edge::Left, width, 450.0);
+    let right = tab(Edge::Right, width, 150.0);
     assert_eq!(left.x, 0.0);
     assert!((right.right() - width).abs() < 1e-3);
     assert!((left.center().y - 450.0).abs() < 1e-3);

@@ -1,5 +1,6 @@
-//! The background behind the engine, in one of two sceneries. The sky: a
-//! blue sky with drifting clouds above the horizon and a sea of clouds
+//! The background behind the engine, in one of two sceneries.
+//!
+//! The sky: a blue sky with drifting clouds above the horizon and a sea of clouds
 //! below it, seen along each pixel's line of sight, so it turns with the
 //! camera. The grid: deep blue, a little lighter toward the floor and
 //! darker at the window's corners. Both add a warm glow behind the hot
@@ -33,8 +34,10 @@ use macroquad::prelude::{
     vec3, //
 };
 
+use super::levels::ReservoirLevels;
 use crate::sim::geometry::ChamberGeometry;
 
+/// Vertex shader for the full-window quad.
 const BACKDROP_VERTEX: &str = r#"#version 100
 attribute vec3 position;
 attribute vec2 texcoord;
@@ -50,6 +53,8 @@ void main() {
     uv = texcoord;
 }"#;
 
+/// Fragment shader of the grid scenery.
+///
 /// `uv` runs from the window's top left (0, 0) to its bottom right (1, 1).
 /// Each glow is (x, y, radius, strength), with x and y in `uv` and the
 /// radius as a share of the window's height.
@@ -89,6 +94,8 @@ void main() {
     gl_FragColor = vec4(color, 1.0) * texture2D(Texture, uv);
 }"#;
 
+/// Fragment shader of the sky scenery.
+///
 /// Each pixel's line of sight comes from `Unproject` (the camera's view
 /// and projection, inverted). Above the horizon: the sky, brighter toward
 /// the sun, with thin clouds on a high layer. Below it: the tops of a sea
@@ -191,6 +198,7 @@ pub enum Scenery {
 }
 
 impl Scenery {
+    /// The other scenery.
     pub fn toggled(self) -> Self {
         match self {
             Self::Sky => Self::Grid,
@@ -202,8 +210,9 @@ impl Scenery {
 /// How far below the floor the sea of clouds lies, in bore radii.
 const SEA_DEPTH: f32 = 7.0;
 
-/// Strength of each glow at full heat or cold.
+/// Strength of the hot glow at full heat.
 const HOT_GLOW: f32 = 0.38;
+/// Strength of the cold glow at full cold.
 const COLD_GLOW: f32 = 0.3;
 /// A glow's radius against the cylinder's height on the screen.
 const GLOW_REACH: f32 = 1.0;
@@ -212,7 +221,9 @@ const GLOW_REACH: f32 = 1.0;
 /// of the window (see the shader).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Spot {
+    /// Middle of the glow.
     pub center: Vec2,
+    /// Reach of the glow.
     pub radius: f32,
 }
 
@@ -235,14 +246,20 @@ pub fn spot(matrix: Mat4, axis_x: f32, bottom: f32, top: f32) -> Option<Spot> {
     })
 }
 
+/// The background quad and its two shaders.
 pub struct Backdrop {
+    /// The grid scenery's shader, if it can be built.
     grid: Option<Material>,
+    /// The sky scenery's shader, if it can be built.
     sky: Option<Material>,
+    /// The full-window quad.
     mesh: Mesh,
+    /// Where the cylinders are, for the glows.
     geometry: ChamberGeometry,
 }
 
 impl Backdrop {
+    /// The background for the engine of `geometry`.
     pub fn new(geometry: ChamberGeometry) -> Self {
         let material = |fragment, sky: bool| {
             let mut uniforms = vec![
@@ -282,19 +299,17 @@ impl Backdrop {
         }
     }
 
-    /// Fills the `width` by `height` view, in screen points, in `scenery`,
-    /// with a 2D camera over it set. `heat` and `cold` are the reservoirs'
-    /// levels (see `heat_level` and `cold_level`); `seconds` drifts the
+    /// Fills the view of `size`, in screen points, in `scenery`, with a 2D
+    /// camera over it set.
+    ///
+    /// The glows follow the reservoirs' `levels`; `seconds` drifts the
     /// clouds.
-    #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
         scenery: Scenery,
         camera: &Camera3D,
-        width: f32,
-        height: f32,
-        heat: f32,
-        cold: f32,
+        size: Vec2,
+        levels: ReservoirLevels,
         seconds: f64,
     ) {
         let material = match scenery {
@@ -312,15 +327,11 @@ impl Backdrop {
                 Vec4::new(spot.center.x, spot.center.y, spot.radius, strength)
             })
         };
-        material.set_uniform(
-            "Hot",
-            uniform(self.geometry.hot_center_x(), HOT_GLOW * heat),
-        );
-        material.set_uniform(
-            "Cold",
-            uniform(self.geometry.cold_center_x(), COLD_GLOW * cold),
-        );
-        material.set_uniform("Aspect", width / height.max(1.0));
+        let hot = uniform(self.geometry.hot_center_x(), HOT_GLOW * levels.heat);
+        let cold = uniform(self.geometry.cold_center_x(), COLD_GLOW * levels.cold);
+        material.set_uniform("Hot", hot);
+        material.set_uniform("Cold", cold);
+        material.set_uniform("Aspect", size.x / size.y.max(1.0));
         if scenery == Scenery::Sky && self.sky.is_some() {
             material.set_uniform("Unproject", matrix.inverse());
             material.set_uniform("Eye", camera.position);
@@ -329,12 +340,16 @@ impl Backdrop {
             material.set_uniform("Sea", floor - SEA_DEPTH * self.geometry.cylinder_radius);
         }
         self.mesh.vertices.clear();
-        for (x, y) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
-            self.mesh.vertices.push(Vertex::new2(
-                vec3(x * width, y * height, 0.0),
-                vec2(x, y),
-                WHITE,
-            ));
+        for corner in [
+            vec2(0.0, 0.0),
+            vec2(1.0, 0.0),
+            vec2(1.0, 1.0),
+            vec2(0.0, 1.0),
+        ] {
+            let position = (corner * size).extend(0.0);
+            self.mesh
+                .vertices
+                .push(Vertex::new2(position, corner, WHITE));
         }
         gl_use_material(material);
         draw_mesh(&self.mesh);

@@ -1,25 +1,34 @@
 //! Particle-renderer tests for `src/graphics/particles.rs`.
 
 use super::*;
-use crate::sim::engine::{
-    ConnectedChambers,
-    PARTICLE_RADIUS, //
-};
+use crate::sim::engine::ConnectedChambers;
 use crate::sim::geometry::DEFAULT_GEOMETRY;
 use crate::sim::units::{
-    DEFAULT_CONNECTED_MARKERS,
-    MAX_SIMULATED_MARKERS, //
+    DEFAULT_PARTICLES,
+    MAX_PARTICLES, //
 };
 
+/// Height of the test chamber.
 const CHAMBER_HEIGHT: f32 = 4.0;
+/// Radius of the test chamber.
 const CHAMBER_RADIUS: f32 = 2.0;
-
+/// The test chamber.
+const CHAMBER: CylinderDimensions = CylinderDimensions {
+    radius: CHAMBER_RADIUS,
+    height: CHAMBER_HEIGHT,
+};
+/// Corners of a triangle.
 const VERTICES_PER_TRIANGLE: usize = 3;
+/// Background distant particles fade toward.
 const TEST_BACKGROUND: Color = Color::from_rgba(12, 18, 30, 255);
+/// Where the test camera stands.
 const TEST_CAMERA_POSITION: Vec3 = Vec3::new(0.0, 0.0, 8.0);
+/// A pan of the test camera.
 const TEST_CAMERA_TRANSLATION: Vec3 = Vec3::new(1.0, -2.0, 3.0);
+/// Largest difference treated as equal.
 const FLOAT_TOLERANCE: f32 = 1e-6;
 
+/// A camera on the z axis looking at the origin.
 fn test_camera() -> Camera3D {
     Camera3D {
         position: TEST_CAMERA_POSITION,
@@ -161,8 +170,8 @@ fn depth_fade_uses_cylindrical_projection() {
 
 #[test]
 fn batches_cover_all_particles_without_overflowing_indices() {
-    let mut renderer = ParticleRenderer::new();
-    let particle_count = MAX_SIMULATED_MARKERS;
+    let mut renderer = ParticleRenderer::new(CHAMBER);
+    let particle_count = MAX_PARTICLES;
     renderer.resize_batches(particle_count);
 
     let total_particles: usize = renderer
@@ -186,7 +195,7 @@ fn batches_cover_all_particles_without_overflowing_indices() {
 
 #[test]
 fn resizing_rebuilds_only_the_batch_layout() {
-    let mut renderer = ParticleRenderer::new();
+    let mut renderer = ParticleRenderer::new(CHAMBER);
 
     renderer.resize_batches(PARTICLES_PER_BATCH);
     assert_eq!(renderer.batches.len(), 1);
@@ -201,26 +210,13 @@ fn resizing_rebuilds_only_the_batch_layout() {
 fn maximum_fill_mesh_benchmark() {
     const SAMPLE_FRAMES: usize = 1_000;
     const SEED: u64 = 42;
-    let simulation =
-        ConnectedChambers::with_geometry_seed(MAX_SIMULATED_MARKERS, DEFAULT_GEOMETRY, SEED);
-    let mut renderer = ParticleRenderer::new();
+    let simulation = ConnectedChambers::with_geometry_seed(MAX_PARTICLES, DEFAULT_GEOMETRY, SEED);
+    let mut renderer = ParticleRenderer::new(CHAMBER);
     let camera = test_camera();
-    let chamber = CylinderDimensions {
-        radius: CHAMBER_RADIUS,
-        height: CHAMBER_HEIGHT,
-    };
-    renderer.resize_batches(MAX_SIMULATED_MARKERS);
+    renderer.resize_batches(MAX_PARTICLES);
     let start = std::time::Instant::now();
     for _ in 0..SAMPLE_FRAMES {
-        renderer.prepare(
-            &simulation.particles,
-            simulation.collision_flashes(),
-            &[],
-            PARTICLE_RADIUS,
-            &camera,
-            chamber,
-            TEST_BACKGROUND,
-        );
+        renderer.prepare(&simulation, &camera, TEST_BACKGROUND);
         std::hint::black_box(&renderer.batches);
     }
     println!(
@@ -241,8 +237,8 @@ fn maximum_fill_mesh_benchmark() {
 
 #[test]
 fn high_fill_detail_reduction_preserves_particles_and_valid_geometry() {
-    let mut renderer = ParticleRenderer::new();
-    renderer.resize_batches(MAX_SIMULATED_MARKERS);
+    let mut renderer = ParticleRenderer::new(CHAMBER);
+    renderer.resize_batches(MAX_PARTICLES);
     assert!(renderer.low_detail);
     let low_vertices = renderer.template.positions.len();
     for triangle in renderer
@@ -256,7 +252,7 @@ fn high_fill_detail_reduction_preserves_particles_and_valid_geometry() {
         let c = renderer.template.positions[triangle[2] as usize];
         assert!((b - a).cross(c - a).dot(a + b + c) > 0.0);
     }
-    renderer.resize_batches(DEFAULT_CONNECTED_MARKERS);
+    renderer.resize_batches(DEFAULT_PARTICLES);
     assert!(!renderer.low_detail);
     assert!(renderer.template.positions.len() > low_vertices);
     let represented: usize = renderer
@@ -264,5 +260,5 @@ fn high_fill_detail_reduction_preserves_particles_and_valid_geometry() {
         .iter()
         .map(|mesh| mesh.vertices.len() / renderer.template.positions.len())
         .sum();
-    assert_eq!(represented, DEFAULT_CONNECTED_MARKERS);
+    assert_eq!(represented, DEFAULT_PARTICLES);
 }

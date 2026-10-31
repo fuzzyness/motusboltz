@@ -2,6 +2,7 @@
 
 use super::*;
 
+/// One frame at 60 frames per second.
 const FRAME: f64 = 1.0 / 60.0;
 
 #[test]

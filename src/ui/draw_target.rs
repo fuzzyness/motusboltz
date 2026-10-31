@@ -1,6 +1,8 @@
 //! Switching where drawing goes: the 3D scene, an offscreen image or the
-//! screen. Every switch also works around a texture bug in Miniquad 0.4.11
-//! that turned all text into black boxes on high-DPI screens.
+//! screen.
+//!
+//! Every switch also works around a texture bug in Miniquad 0.4.11 that
+//! turned all text into black boxes on high-DPI screens.
 //!
 //! Macroquad draws everything queued so far whenever the camera changes,
 //! which can leave the font's texture bound. Text queued later in the same
@@ -32,9 +34,11 @@ pub fn draw_to_screen() {
     forget_texture_bindings();
 }
 
-/// Clears Miniquad's record of bound textures (and buffers), exactly as it
-/// does at the end of every frame. Only the OpenGL backend keeps such a
-/// record; on Metal, `commit_frame` would end the frame instead.
+/// Clears Miniquad's record of bound textures and buffers, exactly as it
+/// does at the end of every frame.
+///
+/// Only the OpenGL backend keeps such a record; on Metal, `commit_frame`
+/// would end the frame instead.
 fn forget_texture_bindings() {
     // SAFETY: called on the main thread between Macroquad's own draws, as
     // Macroquad itself calls `commit_frame` at the end of each frame.

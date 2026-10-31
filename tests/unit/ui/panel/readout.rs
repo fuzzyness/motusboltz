@@ -1,30 +1,17 @@
 //! Wording and number tests for `src/ui/panel/readout.rs`.
 
 use super::*;
+use crate::sim::cycle::CycleTotals;
 use crate::sim::engine::ConnectedChambers;
 use crate::sim::geometry::DEFAULT_GEOMETRY;
-use crate::sim::units::DEFAULT_CONNECTED_MARKERS;
+use crate::sim::units::DEFAULT_PARTICLES;
 
+/// Seed for the test gas.
 const SEED: u64 = 42;
 
+/// The default fill.
 fn engine() -> ConnectedChambers {
-    ConnectedChambers::with_geometry_seed(DEFAULT_CONNECTED_MARKERS, DEFAULT_GEOMETRY, SEED)
-}
-
-/// A settled heated turn, in reduced units, that balances exactly.
-fn heated_turn() -> TurnSummary {
-    TurnSummary {
-        turns: 3,
-        hot_heat: 3.0 * 9_000.0,
-        cold_heat: 3.0 * -8_600.0,
-        hot_entropy: 3.0 * 9_000.0 / 4.0,
-        cold_entropy: 3.0 * -8_600.0,
-        gas_work: 3.0 * 300.0,
-        gas_energy_change: 3.0 * 100.0,
-        duration: 3.0 * 80.0,
-        hot_kelvin: 1_200.0,
-        cold_kelvin: 300.0,
-    }
+    ConnectedChambers::with_geometry_seed(DEFAULT_PARTICLES, DEFAULT_GEOMETRY, SEED)
 }
 
 #[test]
@@ -53,7 +40,7 @@ fn speed_reads_at_rest_forward_or_backward() {
 #[test]
 fn a_heated_turn_balances_and_counts_as_settled() {
     let engine = engine();
-    let turn = turn(&engine, heated_turn());
+    let turn = turn(&engine, TurnSummary::heated());
     assert_eq!(turn.turns, 3);
     assert!((turn.seconds - 80.0).abs() < 1e-9);
     let efficiency = turn.efficiency.expect("net work out");
@@ -69,12 +56,16 @@ fn a_heated_turn_balances_and_counts_as_settled() {
 #[test]
 fn turns_without_net_work_or_still_warming_say_so() {
     let engine = engine();
+    let heated = TurnSummary::heated();
     let no_work = turn(
         &engine,
         TurnSummary {
-            gas_work: -30.0,
-            cold_heat: 3.0 * -8_900.0 + 30.0,
-            ..heated_turn()
+            change: CycleTotals {
+                gas_work: -30.0,
+                cold_heat: 3.0 * -8_900.0 + 30.0,
+                ..heated.change
+            },
+            ..heated
         },
     );
     assert!(no_work.efficiency.is_none());
@@ -82,9 +73,12 @@ fn turns_without_net_work_or_still_warming_say_so() {
     let warming = turn(
         &engine,
         TurnSummary {
-            gas_energy_change: 3.0 * 2_000.0,
-            cold_heat: 3.0 * -6_700.0,
-            ..heated_turn()
+            change: CycleTotals {
+                gas_energy: 3.0 * 2_000.0,
+                cold_heat: 3.0 * -6_700.0,
+                ..heated.change
+            },
+            ..heated
         },
     );
     assert!(!warming.settled);

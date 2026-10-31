@@ -1,7 +1,7 @@
 //! Button layout and label tests for `src/ui/controls.rs`.
 
 use super::*;
-use crate::ui::fonts::drawable;
+use crate::ui::fonts::tests::drawable;
 use crate::ui::layout::{
     scene_left,
     scene_span, //

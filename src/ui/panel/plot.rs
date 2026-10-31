@@ -8,6 +8,7 @@ use macroquad::prelude::{
     vec2, //
 };
 
+use super::readout::PASCALS_PER_BAR;
 use super::{
     COLD_COLOR,
     CONTENT_WIDTH,
@@ -32,42 +33,49 @@ pub const PLOT_LEFT: f32 = 34.0;
 pub const PLOT_BOTTOM: f32 = 3.0 * SMALL_LINE + 4.0;
 /// Widest plot that fits the panel.
 pub const MAX_PLOT_SIDE: f32 = CONTENT_WIDTH - PLOT_LEFT;
+/// Thickness of a finished loop's outline.
 const LOOP_THICKNESS: f32 = 2.0;
+/// Thickness of the trace of the turn in progress.
 const TRACE_THICKNESS: f32 = 1.0;
+/// Radius of the dot for each cylinder now.
 const DOT_RADIUS: f32 = 4.0;
+/// Opacity of a loop's fill.
 const LOOP_FILL_ALPHA: f32 = 0.18;
+/// Opacity of the trace.
 const TRACE_ALPHA: f32 = 0.45;
 /// Pressure axis limits are rounded out to multiples of this many bar.
 const PRESSURE_STEP_BAR: f64 = 10.0;
-const PASCALS_PER_BAR: f64 = 100_000.0;
+/// Label of the volume axis.
 const VOLUME_UNIT: &str = "V (cm³)";
+/// Label of the pressure axis.
 const PRESSURE_UNIT: &str = "bar";
+/// The key under the plot, one line per loop.
 pub const LOOP_KEY: [(&str, Color); 2] = [
     ("Hot loop: gas does work on the piston (+)", HOT_COLOR),
     ("Cold loop: piston does work on the gas (−)", COLD_COLOR),
 ];
 
-/// Axis limits for the P-V plot: volume in cm³ and pressure in bar.
+/// Axis limits for the P-V plot.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlotRange {
+    /// Volume, in cm³.
     pub volume: (f64, f64),
+    /// Pressure, in bar.
     pub pressure: (f64, f64),
 }
 
+/// The plot's axis limits, or `None` before the crank has swept a single
+/// bin.
+///
 /// Volume spans one cylinder's full stroke. Pressure spans the last loops
-/// and the turn in progress, rounded out to `PRESSURE_STEP_BAR`. `None`
-/// before the crank has swept a single bin.
+/// and the turn in progress, rounded out to `PRESSURE_STEP_BAR`.
 pub fn plot_range(engine: &ConnectedChambers) -> Option<PlotRange> {
     let cycle = engine.cycle();
     let mut low = f64::INFINITY;
     let mut high = f64::NEG_INFINITY;
     for cylinder in [HOT, COLD] {
-        let points = cycle
-            .last_loop(cylinder)
-            .iter()
-            .copied()
-            .chain(cycle.current_trace(cylinder));
-        for point in points {
+        let last = cycle.last_loop(cylinder).iter().copied();
+        for point in last.chain(cycle.current_trace(cylinder)) {
             let (_, bar) = point_units(engine, point);
             low = low.min(bar);
             high = high.max(bar);
@@ -86,7 +94,7 @@ pub fn plot_range(engine: &ConnectedChambers) -> Option<PlotRange> {
 
 /// Draws the plot in `plot`, with axis labels to its left and below it.
 pub fn draw_plot(pen: &mut Pen, engine: &ConnectedChambers, plot: Rect, range: PlotRange) {
-    pen.rect(plot.x, plot.y, plot.w, plot.h, TRACK);
+    pen.rect(plot, TRACK);
     draw_axis_labels(pen, plot, range);
     let to_screen = |point: LoopPoint| {
         let (volume, pressure) = point_units(engine, point);
@@ -109,27 +117,18 @@ pub fn draw_plot(pen: &mut Pen, engine: &ConnectedChambers, plot: Rect, range: P
             ..color
         };
         for pair in trace.windows(2) {
-            pen.line(
-                pair[0].x,
-                pair[0].y,
-                pair[1].x,
-                pair[1].y,
-                TRACE_THICKNESS,
-                faint,
-            );
+            pen.line(pair[0], pair[1], TRACE_THICKNESS, faint);
         }
-        if let Some(now) = trace.last() {
-            pen.circle(now.x, now.y, DOT_RADIUS, color);
+        if let Some(&now) = trace.last() {
+            pen.circle(now, DOT_RADIUS, color);
         }
     }
 }
 
-/// A loop point as (volume in cm3, pressure in bar).
+/// A loop point as (volume in cm³, pressure in bar).
 fn point_units(engine: &ConnectedChambers, point: LoopPoint) -> (f64, f64) {
-    (
-        volume_cm3(point.volume),
-        engine.pressure_pa(point.pressure) / PASCALS_PER_BAR,
-    )
+    let bar = engine.units().pressure_pa(point.pressure) / PASCALS_PER_BAR;
+    (volume_cm3(point.volume), bar)
 }
 
 /// Position of `value` within `range`, clamped to 0..=1.
@@ -137,11 +136,14 @@ fn fraction(value: f64, range: (f64, f64)) -> f32 {
     ((value - range.0) / (range.1 - range.0)).clamp(0.0, 1.0) as f32
 }
 
+/// Draws the axis limits and units, and the loop key under them.
 fn draw_axis_labels(pen: &mut Pen, plot: Rect, range: PlotRange) {
     let left = plot.x - PLOT_LEFT;
     let below = plot.bottom() + SMALL_LINE;
     let low_volume = format!("{:.0}", range.volume.0);
     let high_volume = format!("{:.0}", range.volume.1);
+    let volume_unit_left = plot.x + (plot.w - pen.measure(VOLUME_UNIT, SMALL_SIZE)) / 2.0;
+    let high_volume_left = plot.right() - pen.measure(&high_volume, SMALL_SIZE);
     let labels = [
         (
             format!("{:.0}", range.pressure.1),
@@ -150,16 +152,8 @@ fn draw_axis_labels(pen: &mut Pen, plot: Rect, range: PlotRange) {
         ),
         (format!("{:.0}", range.pressure.0), left, plot.bottom()),
         (PRESSURE_UNIT.to_owned(), left, plot.y + plot.h / 2.0),
-        (
-            VOLUME_UNIT.to_owned(),
-            plot.x + (plot.w - pen.measure(VOLUME_UNIT, SMALL_SIZE)) / 2.0,
-            below,
-        ),
-        (
-            high_volume.clone(),
-            plot.right() - pen.measure(&high_volume, SMALL_SIZE),
-            below,
-        ),
+        (VOLUME_UNIT.to_owned(), volume_unit_left, below),
+        (high_volume, high_volume_left, below),
         (low_volume, plot.x, below),
     ];
     for (text, x, y) in labels {
@@ -172,31 +166,30 @@ fn draw_axis_labels(pen: &mut Pen, plot: Rect, range: PlotRange) {
     }
 }
 
-/// A closed loop, lightly filled, with a solid outline.
+/// Draws a closed loop, lightly filled, with a solid outline.
 fn draw_closed_loop(pen: &mut Pen, points: &[Vec2], color: Color) {
     if points.len() < 3 {
         return;
     }
-    fill_polygon(
-        pen,
-        points,
-        Color {
-            a: LOOP_FILL_ALPHA,
-            ..color
-        },
-    );
+    let fill = Color {
+        a: LOOP_FILL_ALPHA,
+        ..color
+    };
+    fill_polygon(pen, points, fill);
     for (&a, &b) in points.iter().zip(points.iter().cycle().skip(1)) {
-        pen.line(a.x, a.y, b.x, b.y, LOOP_THICKNESS, color);
+        pen.line(a, b, LOOP_THICKNESS, color);
     }
 }
 
-/// Fills a closed polygon one pixel column at a time with the even-odd
-/// rule, which is correct for concave and self-crossing outlines alike.
+/// Fills a closed polygon one pixel column at a time.
+///
+/// The even-odd rule is correct for concave and self-crossing outlines
+/// alike.
 fn fill_polygon(pen: &mut Pen, points: &[Vec2], color: Color) {
     let (left, right) = points
         .iter()
-        .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), p| {
-            (lo.min(p.x), hi.max(p.x))
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(low, high), point| {
+            (low.min(point.x), high.max(point.x))
         });
     let mut crossings = Vec::with_capacity(points.len());
     let mut x = left.floor();
@@ -211,7 +204,7 @@ fn fill_polygon(pen: &mut Pen, points: &[Vec2], color: Color) {
         }
         crossings.sort_by(f32::total_cmp);
         for &[top, bottom] in crossings.as_chunks::<2>().0 {
-            pen.rect(x, top, 1.0, bottom - top, color);
+            pen.rect(Rect::new(x, top, 1.0, bottom - top), color);
         }
         x += 1.0;
     }

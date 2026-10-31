@@ -57,10 +57,10 @@ fn a_refill_shows_it_at_once() {
 fn start_hides_the_button_and_a_refill_brings_it_back() {
     use crate::sim::engine::ConnectedChambers;
     use crate::sim::geometry::DEFAULT_GEOMETRY;
-    use crate::sim::units::DEFAULT_CONNECTED_MARKERS;
+    use crate::sim::units::DEFAULT_PARTICLES;
     const SEED: u64 = 42;
     let mut engine =
-        ConnectedChambers::with_geometry_seed(DEFAULT_CONNECTED_MARKERS, DEFAULT_GEOMETRY, SEED);
+        ConnectedChambers::with_geometry_seed(DEFAULT_PARTICLES, DEFAULT_GEOMETRY, SEED);
     let mut prompt = StartPrompt::new();
     assert_eq!(engine.power_pistons().start_speed_fraction(), 0.0);
     engine.start_engine();

@@ -1,14 +1,31 @@
 //! Spatial-grid unit tests for `src/sim/grid.rs`.
 
-use super::*;
-use crate::sim::gas::Particle;
 use macroquad::prelude::vec3;
 
-const CHAMBER_DIAMETER: f32 = 4.0;
-const PARTICLE_RADIUS: f32 = 0.18;
+use super::*;
+use crate::sim::gas::Particle;
 
+/// Side of the test lattice cube.
+const CHAMBER_DIAMETER: f32 = 4.0;
+/// Radius of the test particles.
+const PARTICLE_RADIUS: f32 = 0.18;
+/// Speed of the test particles.
 const PARTICLE_SPEED: f32 = 1.0;
+/// A cell boundary along x, by its lattice index.
 const BOUNDARY_CELL_INDEX: usize = 5;
+
+impl SpatialGrid {
+    /// A grid storing the whole cube of side `chamber_size`.
+    fn new(chamber_size: f32, particle_radius: f32) -> Self {
+        let half = Vec3::splat(chamber_size / 2.0);
+        Self::covering(chamber_size, particle_radius, -half, half)
+    }
+
+    /// Index of the cell holding `position`.
+    fn cell_index(&self, position: Vec3) -> usize {
+        self.locate(position).index as usize
+    }
+}
 
 /// A contact callback that records the pairs that bounced.
 fn record_impacts(impacts: &mut Vec<(usize, usize)>) -> impl FnMut(usize, usize, Contact) + '_ {
@@ -19,6 +36,7 @@ fn record_impacts(impacts: &mut Vec<(usize, usize)>) -> impl FnMut(usize, usize,
     }
 }
 
+/// A particle at `x` on the x axis moving along it at `velocity_x`.
 fn particle(x: f32, velocity_x: f32) -> Particle {
     Particle {
         position: vec3(x, 0.0, 0.0),

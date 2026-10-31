@@ -1,21 +1,28 @@
 //! Tests for the ice heap and its mist, `src/graphics/ice.rs`.
 
 use super::*;
-use crate::graphics::outline::outside_block;
+use crate::graphics::outline::tests::outside_block;
 use crate::sim::geometry::DEFAULT_GEOMETRY;
 
+/// Moments to sample the animation at, including a long-running clock.
 const TIMES: [f64; 5] = [0.0, 1.1, 4.5, 9.0, 86_400.25];
+/// Direction of the light.
 const LIGHT: Vec3 = Vec3::new(0.4, 0.8, 0.4);
+/// Faces of a block: the top and four sides.
+const FACES_PER_BLOCK: usize = 5;
 
+/// The heap around the default block.
 fn ice() -> (BlockShape, Ice) {
     let shape = BlockShape::new(DEFAULT_GEOMETRY);
     (shape, Ice::new(shape))
 }
 
+/// Facing a camera that looks down at the engine from its front right.
 fn facing() -> Facing {
     Facing::along(Vec3::new(-1.0, -0.66, -1.0).normalize())
 }
 
+/// Builds the heap and mist at `cold` and `seconds`.
 fn build(ice: &mut Ice, cold: f32, seconds: f64) {
     ice.build(cold, seconds, LIGHT.normalize(), facing());
 }
@@ -33,8 +40,8 @@ fn cold_level_runs_from_none_at_room_temperature_to_full_at_the_bottom() {
 fn no_ice_or_mist_at_300_k() {
     let (_, mut ice) = ice();
     build(&mut ice, cold_level(MAX_COLD_KELVIN), 3.0);
-    assert!(ice.solid().indices.is_empty());
-    assert_eq!(ice.mist().len(), 0);
+    assert!(ice.solid.indices.is_empty());
+    assert_eq!(ice.mist.len(), 0);
 }
 
 #[test]
@@ -43,9 +50,9 @@ fn heap_grows_block_by_block_as_it_gets_colder() {
     let mut previous = (0, 0.0);
     for kelvin in [290.0, 260.0, 230.0, 200.0, 170.0, 140.0, 100.0] {
         build(&mut ice, cold_level(kelvin), 0.0);
-        let vertices = ice.solid().vertices.len();
+        let vertices = ice.solid.vertices.len();
         let top = ice
-            .solid()
+            .solid
             .vertices
             .iter()
             .map(|vertex| vertex.position.y - shape.base)
@@ -61,7 +68,7 @@ fn heap_grows_block_by_block_as_it_gets_colder() {
     );
     build(&mut ice, cold_level(290.0), 0.0);
     assert!(
-        ice.solid().vertices.len() < previous.0 / 4,
+        ice.solid.vertices.len() < previous.0 / 4,
         "a slight chill shows a little ice"
     );
 }
@@ -70,7 +77,7 @@ fn heap_grows_block_by_block_as_it_gets_colder() {
 fn heap_rests_on_the_floor_beside_the_cold_half_and_stays_low() {
     let (shape, mut ice) = ice();
     build(&mut ice, 1.0, 0.0);
-    for vertex in &ice.solid().vertices {
+    for vertex in &ice.solid.vertices {
         let position = vertex.position;
         assert!(position.y >= shape.base - 1e-5);
         // Low enough to leave most of the cold cylinder's window clear.
@@ -82,7 +89,7 @@ fn heap_rests_on_the_floor_beside_the_cold_half_and_stays_low() {
             "{position} is inside the block"
         );
     }
-    assert!(ice.solid().vertices.len() < crate::graphics::DRAW_CALL_VERTEX_CAPACITY);
+    assert!(ice.solid.vertices.len() < crate::graphics::DRAW_CALL_VERTEX_CAPACITY);
 }
 
 #[test]
@@ -93,7 +100,7 @@ fn mist_thickens_with_cold_and_never_sinks_through_the_floor() {
         let mut cover = 0.0;
         for seconds in TIMES {
             build(ice, cold, seconds);
-            for (center, color) in ice.mist().centers() {
+            for (center, color) in ice.mist.centers() {
                 assert!(center.y > shape.base, "{center} is under the floor");
                 count += 1;
                 cover += color.a;

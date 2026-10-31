@@ -25,18 +25,18 @@ use crate::sim::gas::{
 };
 use crate::sim::geometry::{
     ChamberGeometry,
+    DEFAULT_GEOMETRY,
     WALL_PROJECTION_MARGIN, //
 };
 use crate::sim::grid::SpatialGrid;
 use crate::sim::pistons::{
-    KickDirection,
     PistonSide,
     PistonState,
     PowerPistons,
     starting_energy, //
 };
 use crate::sim::reservoir::{
-    HeatTransfer,
+    PerReservoir,
     ReservoirSide,
     ThermalReservoirs, //
 };
@@ -45,43 +45,47 @@ use crate::sim::units::{
     GasMeasurements,
     HeliumCalibration,
     KineticMoments,
-    MAX_INITIAL_CONCENTRATION_MOL_PER_L,
-    MAX_SIMULATED_MARKERS,
+    MAX_CONCENTRATION,
+    MAX_PARTICLES,
     METERS_PER_UNIT,
-    MIN_CONNECTED_MARKERS,
-    MIN_INITIAL_CONCENTRATION_MOL_PER_L,
+    MIN_CONCENTRATION,
+    MIN_PARTICLES,
     volume_cm3, //
 };
 
-/// Collision and rendering radius of every particle, at every fill level.
+/// Collision and drawing radius of every particle, at every fill.
 pub const PARTICLE_RADIUS: f32 = 0.13;
-/// Initial fill lattice spacing must be at least radius / 0.4, so
-/// neighboring particles start with a gap.
-const PARTICLE_RADIUS_TO_SPACING: f32 = 0.4;
-/// How long, in model time, a particle stays highlighted after a collision.
-/// The highlight is drawn only; it changes no energy.
+/// Least fill lattice spacing over the particle radius, so neighboring
+/// particles start with a gap.
+const SPACING_PER_RADIUS: f32 = 2.5;
+/// Model time a particle stays highlighted after a collision; drawing only.
 pub const COLLISION_FLASH_DURATION: f32 = 0.01;
+/// Fixed steps per second of model time.
 const FIXED_STEPS_PER_SECOND: u32 = 120;
+/// Length of one fixed step.
 const FIXED_DT: f32 = 1.0 / FIXED_STEPS_PER_SECOND as f32;
-/// Most fixed steps run in one frame, bounding catch-up work so a slow
-/// frame cannot create an ever-growing backlog. Six steps cover a 20 FPS
-/// frame, so a display held at 30 FPS (for example Safari in Low Power
-/// Mode) keeps real time even when its frames arrive unevenly.
+/// Most fixed steps run in one frame, so a slow frame cannot build an
+/// ever-growing backlog.
+///
+/// Six steps cover a 20 FPS frame, so a display held at 30 FPS (for example
+/// Safari in Low Power Mode) keeps real time even when its frames arrive
+/// unevenly.
 const MAX_FIXED_STEPS_PER_FRAME: usize = 6;
-/// Longest frame time accepted per update, exactly the step budget; longer
+/// Longest frame time taken per update, exactly the step budget; longer
 /// frames are clipped and reported as limited.
 const MAX_FRAME_TIME: f32 = MAX_FIXED_STEPS_PER_FRAME as f32 * FIXED_DT;
-/// Substep limits: no particle moves more than this many radii relative to
-/// a piston, and the crank turns at most this far. Collisions are found as
-/// overlaps at the end of each substep, so longer substeps miss a few
-/// grazing ones: at 0.75, 2,048 particles collide 1.5% less often than at
-/// 0.5 (2.9% less than at 0.25), while turns, heat and work stay within the
-/// scatter between seeds. Every substep costs a full collision pass, so
-/// this limit sets most of the physics time.
+/// Most a particle moves relative to a piston in one substep, in radii.
+///
+/// Collisions are found as overlaps at the end of each substep, so longer
+/// substeps miss a few grazing ones: at 0.75, 2,048 particles collide 1.5%
+/// less often than at 0.5 (2.9% less than at 0.25), while turns, heat and
+/// work stay within the scatter between seeds. Every substep costs a full
+/// collision pass, so this limit sets most of the physics time.
 const MAX_TRAVEL_RADII: f32 = 0.75;
+/// Most the crank turns in one substep.
 const MAX_CRANK_STEP_RADIANS: f32 = 0.02;
 
-/// Which part of the connected gas volume contains a particle center.
+/// Which part of the connected gas volume holds a particle center.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Region {
     /// The heated cylinder, on the left (negative x).
@@ -95,263 +99,203 @@ pub enum Region {
 /// SI readings for each cylinder, and the passage's particle count.
 #[derive(Clone, Copy, Debug)]
 pub struct ChamberMeasurements {
+    /// The hot cylinder.
     pub hot: GasMeasurements,
-    pub passage_markers: usize,
+    /// Particles in the opening between the bores.
+    pub passage_count: usize,
+    /// The cold cylinder.
     pub cold: GasMeasurements,
 }
 
 /// The complete simulation: gas particles in two cylinders joined by an
 /// opening through the wall between them, thermal cylinder walls, and
-/// pistons coupled to the flywheel. Pistons and the opening are insulated;
-/// only cylinder sides and floors exchange heat.
+/// pistons coupled to the flywheel.
+///
+/// The pistons and the opening are insulated; only the cylinders' sides and
+/// floors exchange heat.
 pub struct ConnectedChambers {
+    /// The gas.
     pub particles: Vec<Particle>,
+    /// Model time left on each particle's collision highlight.
     flashes: Vec<f32>,
+    /// Finds nearby pairs for collisions.
     grid: SpatialGrid,
-    /// Particles moved by collision overlap correction in the current
-    /// substep, which are the only ones that can have crossed a wall since
-    /// the wall check.
+    /// Particles moved by overlap correction in the current substep, the
+    /// only ones that can have crossed a wall since the wall check.
     nudged: Vec<usize>,
+    /// Shape of the chamber.
     geometry: ChamberGeometry,
+    /// Crankshaft, flywheel and pistons.
     pistons: PowerPistons,
-    #[cfg(test)]
-    initial_volume_m3: f64,
+    /// Work done by the gas on the pistons since the fill.
     piston_work_by_gas: f64,
+    /// Frame time not yet run as fixed steps.
     accumulator: f32,
+    /// Hot and cold walls.
     thermal: ThermalReservoirs,
-    gas: HeliumCalibration,
+    /// Conversions to SI units.
+    units: HeliumCalibration,
+    /// Gas kinetic energy at the fill.
     initial_energy: f32,
+    /// Per-turn records.
     cycle: CycleMonitor,
     /// The particles being followed, if tracers are on.
     tracers: Option<Tracers>,
 }
 
 impl ConnectedChambers {
-    /// Fills the default geometry with `count` particles using a random seed
-    /// drawn from Macroquad's global generator.
-    pub fn new(count: usize) -> Self {
-        Self::with_geometry(count, ChamberGeometry::default())
+    /// Fills the default chamber at `concentration` (mol/L) with a random
+    /// seed from Macroquad's global generator.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `concentration` is outside the fill range.
+    pub fn with_concentration(concentration: f32) -> Self {
+        let count = Self::particles_for_concentration(concentration);
+        Self::with_geometry_seed(count, DEFAULT_GEOMETRY, gen_range(0, u64::MAX))
     }
 
-    /// Fills the default geometry at an initial concentration in mol/L.
-    /// 1 mol/L corresponds to the maximum particle count.
-    pub fn with_initial_concentration(concentration: f32) -> Self {
-        Self::new(Self::markers_for_concentration(concentration))
+    /// Particles for an initial concentration in mol/L.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `concentration` is outside the fill range.
+    fn particles_for_concentration(concentration: f32) -> usize {
+        assert!((MIN_CONCENTRATION..=MAX_CONCENTRATION).contains(&concentration));
+        ((concentration as f64 / MAX_CONCENTRATION as f64 * MAX_PARTICLES as f64).round() as usize)
+            .clamp(MIN_PARTICLES, MAX_PARTICLES)
     }
 
-    fn markers_for_concentration(concentration: f32) -> usize {
-        assert!(concentration.is_finite());
-        assert!(
-            (MIN_INITIAL_CONCENTRATION_MOL_PER_L..=MAX_INITIAL_CONCENTRATION_MOL_PER_L)
-                .contains(&concentration)
-        );
-        ((concentration as f64 / MAX_INITIAL_CONCENTRATION_MOL_PER_L as f64
-            * MAX_SIMULATED_MARKERS as f64)
-            .round() as usize)
-            .clamp(MIN_CONNECTED_MARKERS, MAX_SIMULATED_MARKERS)
-    }
-
-    /// Refills the whole system at a new concentration (mol/L) with a fresh
-    /// random fill; reservoir temperatures and the running state are kept.
-    pub fn set_initial_concentration(&mut self, concentration: f32) {
-        self.set_particle_count(Self::markers_for_concentration(concentration));
-    }
-
-    /// Fills the given geometry with `count` particles using a random seed
-    /// drawn from Macroquad's global generator.
-    pub fn with_geometry(count: usize, geometry: ChamberGeometry) -> Self {
-        Self::with_geometry_seed(count, geometry, gen_range(0, u64::MAX))
-    }
-
-    /// Fills the given geometry with `count` particles. The same seed gives
-    /// the same initial velocities and wall-heating random stream, and each
-    /// simulation has its own generator, independent of any other.
+    /// Fills `geometry` with `count` particles at 300 K, the shaft at rest.
+    ///
+    /// The same `seed` gives the same velocities and wall-impact draws, and
+    /// each simulation has its own generator.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `count` is zero or above `MAX_PARTICLES`, or if `geometry`
+    /// cannot hold the particles.
     pub fn with_geometry_seed(count: usize, geometry: ChamberGeometry, seed: u64) -> Self {
-        let random = RandGenerator::new();
-        random.srand(seed);
         assert!(
-            count > 0 && count <= MAX_SIMULATED_MARKERS,
-            "marker count must be between 1 and {MAX_SIMULATED_MARKERS}"
+            (1..=MAX_PARTICLES).contains(&count),
+            "particle count must be between 1 and {MAX_PARTICLES}"
         );
         geometry.validate(PARTICLE_RADIUS);
+        let random = RandGenerator::new();
+        random.srand(seed);
         let mut pistons = PowerPistons::new(geometry, PARTICLE_RADIUS);
-        // Piston-back pressure equals the initial gas pressure at 300 K:
-        // P = N kT / V with kT = 1 in reduced units and V in model units.
-        // This is a mechanical boundary condition, not a heat source.
-        let volume_units = pistons.volume_m3(geometry) / METERS_PER_UNIT.powi(3);
-        pistons.set_reference_pressure(count as f32 / volume_units as f32);
+        // The back pressure equals the gas's initial pressure, P = N kT / V
+        // with kT = 1 in reduced units: a mechanical boundary condition, not
+        // a heat source.
+        let volume_m3 = pistons.volume_m3(geometry);
+        pistons.set_reference_pressure(count as f32 / (volume_m3 / METERS_PER_UNIT.powi(3)) as f32);
         pistons.set_starting_energy(starting_energy(count));
 
-        let sites = Self::fill_sites(geometry, &pistons, count);
-        // Sample velocities at 300 K, then remove each region's mean velocity
-        // and rescale, so every region starts at exactly 300 K with no flow.
-        let mut hot = Vec::new();
-        let mut passage = Vec::new();
-        let mut cold = Vec::new();
+        // Sort the particles by region, then bring each region to rest on
+        // average and to exactly 300 K, so no region starts with a flow.
+        let sites = fill_sites(geometry, &pistons, count);
+        let mut regions: [Vec<Particle>; 3] = Default::default();
         for index in 0..count {
-            let site = ((2 * index + 1) * sites.len()) / (2 * count);
-            let position = sites[site];
+            let position = sites[((2 * index + 1) * sites.len()) / (2 * count)];
             let particle = Particle {
                 position,
                 velocity: gas::sample_thermal_velocity(INITIAL_TEMPERATURE, &random),
             };
-            if geometry.within_cylinder(
-                position,
-                geometry.hot_center_x(),
-                PARTICLE_RADIUS,
-                pistons.hot().face_y,
-            ) {
-                hot.push(particle);
-            } else if geometry.within_cylinder(
-                position,
-                geometry.cold_center_x(),
-                PARTICLE_RADIUS,
-                pistons.cold().face_y,
-            ) {
-                cold.push(particle);
-            } else {
-                passage.push(particle);
-            }
+            regions[region_of(geometry, &pistons, position) as usize].push(particle);
         }
-
-        for region in [&mut hot, &mut passage, &mut cold] {
-            if region.len() >= 2 {
-                let mean = gas::mean_velocity(region);
-                for particle in region.iter_mut() {
-                    particle.velocity -= mean;
-                }
-                gas::rescale_thermal_velocities(region, INITIAL_TEMPERATURE);
-            }
+        for region in &mut regions {
+            gas::thermalize(region, INITIAL_TEMPERATURE);
         }
-        let mut particles = Vec::with_capacity(count);
-        particles.extend(hot);
-        particles.extend(passage);
-        particles.extend(cold);
+        let particles = regions.concat();
 
-        let initial_energy = gas::kinetic_energy(&particles);
-        let initial_volume_m3 = pistons.volume_m3(geometry);
-        let cycle = CycleMonitor::new(
-            pistons.face_area() as f64,
-            CycleTotals {
-                gas_energy: gas_energy(&particles),
-                ..CycleTotals::default()
-            },
-        );
+        let (lower, upper) = geometry.gas_bounds();
+        let start = CycleTotals {
+            gas_energy: gas_energy(&particles),
+            ..CycleTotals::default()
+        };
         Self {
-            particles,
+            initial_energy: gas::kinetic_energy(&particles),
             flashes: vec![0.0; count],
-            grid: {
-                let (lower, upper) = geometry.gas_bounds();
-                SpatialGrid::covering(geometry.grid_side(), PARTICLE_RADIUS, lower, upper)
-            },
+            particles,
+            grid: SpatialGrid::covering(geometry.grid_side(), PARTICLE_RADIUS, lower, upper),
             nudged: Vec::new(),
             geometry,
+            cycle: CycleMonitor::new(pistons.face_area() as f64, start),
             pistons,
-            #[cfg(test)]
-            initial_volume_m3,
             piston_work_by_gas: 0.0,
             accumulator: 0.0,
             thermal: ThermalReservoirs::with_seed(random.gen_range(0, u64::MAX)),
-            gas: HeliumCalibration::new(
-                initial_volume_m3,
-                MAX_SIMULATED_MARKERS,
-                MAX_INITIAL_CONCENTRATION_MOL_PER_L as f64,
-            ),
-            initial_energy,
-            cycle,
+            units: HeliumCalibration::new(volume_m3),
             tracers: None,
         }
     }
 
-    /// Starting positions for at least `count` particles: one lattice
-    /// spanning both bores and the passage, refined until there are enough
-    /// sites. A single lattice cannot overlap itself at the junctions.
-    fn fill_sites(geometry: ChamberGeometry, pistons: &PowerPistons, count: usize) -> Vec<Vec3> {
-        let mut divisions = 0_usize;
-        loop {
-            divisions += 1;
-            let spacing = 2.0 * geometry.cylinder_radius / divisions as f32;
-            let half_width = geometry.cylinder_offset + geometry.cylinder_radius;
-            let x_divisions = (2.0 * half_width / spacing).ceil() as usize;
-            let full_height = geometry.cylinder_height;
-            let y_divisions = (full_height / spacing).ceil() as usize;
-            let x_spacing = 2.0 * half_width / x_divisions as f32;
-            let y_spacing = full_height / y_divisions as f32;
-            assert!(
-                spacing.min(x_spacing).min(y_spacing) * PARTICLE_RADIUS_TO_SPACING
-                    >= PARTICLE_RADIUS,
-                "chamber is too small for {count} particles of radius {PARTICLE_RADIUS}; enlarge the geometry"
-            );
-            let mut sites = Vec::new();
-
-            for iy in 0..y_divisions {
-                let y = geometry.floor() + (iy as f32 + 0.5) * y_spacing;
-                for iz in 0..divisions {
-                    let z = -geometry.cylinder_radius + (iz as f32 + 0.5) * spacing;
-                    for ix in 0..x_divisions {
-                        let x = -half_width + (ix as f32 + 0.5) * x_spacing;
-                        let position = vec3(x, y, z);
-                        if geometry.contains(
-                            position,
-                            PARTICLE_RADIUS,
-                            pistons.hot().face_y,
-                            pistons.cold().face_y,
-                        ) {
-                            sites.push(position);
-                        }
-                    }
-                }
-            }
-
-            if sites.len() >= count {
-                return sites;
-            }
-        }
-    }
-
-    /// Rebuilds the simulation with a fresh random seed and `count`
-    /// particles, keeping reservoir temperatures and the running state.
-    /// Heat, work, starter work and the per-turn records restart from zero.
+    /// Rebuilds the simulation with `count` particles and a fresh random
+    /// seed, keeping the reservoir temperatures.
+    ///
+    /// The shaft starts at rest, and heat, work, starter work and the
+    /// per-turn records start over.
     fn refill(&mut self, count: usize) {
-        let hot_kelvin = self.thermal.hot_kelvin();
-        let running = self.pistons.running();
-        let cold_kelvin = self.thermal.cold_kelvin();
-        *self = Self::with_geometry(count, self.geometry);
+        let (hot_kelvin, cold_kelvin) = (self.hot_kelvin(), self.cold_kelvin());
+        *self = Self::with_geometry_seed(count, self.geometry, gen_range(0, u64::MAX));
         self.thermal.set_hot_kelvin(hot_kelvin);
         self.thermal.set_cold_kelvin(cold_kelvin);
-        self.pistons.set_running(running);
     }
 
-    /// Refills with the same particle count (same helium amount) at 300 K
-    /// and a new random seed.
+    /// Refills with the same amount of helium at 300 K.
     pub fn reset(&mut self) {
         self.refill(self.particles.len());
     }
 
-    /// Refills with a different particle count. Each particle represents a
-    /// fixed amount of helium, so this changes the amount of gas.
-    pub fn set_particle_count(&mut self, count: usize) {
+    /// Refills at a new concentration in mol/L, if it changes the particle
+    /// count; each particle stands for a fixed amount of helium.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `concentration` is outside the fill range.
+    pub fn set_concentration(&mut self, concentration: f32) {
+        let count = Self::particles_for_concentration(concentration);
         if count != self.particles.len() {
             self.refill(count);
         }
     }
 
-    /// Sets the hot wall temperature; particles change only when they hit
-    /// it. A change discards the per-turn history (see `CycleMonitor`).
+    /// Sets the hot wall temperature; the gas changes only as it hits it.
+    ///
+    /// A change discards the per-turn history (see `CycleMonitor`).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `kelvin` is outside the hot range.
     pub fn set_hot_kelvin(&mut self, kelvin: f32) {
-        if kelvin != self.thermal.hot_kelvin() {
+        if kelvin != self.hot_kelvin() {
             self.cycle.mark_settings_changed();
         }
         self.thermal.set_hot_kelvin(kelvin);
     }
 
-    /// Sets the cold wall temperature; particles change only when they hit
-    /// it. A change discards the per-turn history (see `CycleMonitor`).
+    /// Sets the cold wall temperature; the gas changes only as it hits it.
+    ///
+    /// A change discards the per-turn history (see `CycleMonitor`).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `kelvin` is outside the cold range.
     pub fn set_cold_kelvin(&mut self, kelvin: f32) {
-        if kelvin != self.thermal.cold_kelvin() {
+        if kelvin != self.cold_kelvin() {
             self.cycle.mark_settings_changed();
         }
         self.thermal.set_cold_kelvin(kelvin);
+    }
+
+    /// The hot wall temperature.
+    pub fn hot_kelvin(&self) -> f32 {
+        self.thermal.hot_kelvin()
+    }
+
+    /// The cold wall temperature.
+    pub fn cold_kelvin(&self) -> f32 {
+        self.thermal.cold_kelvin()
     }
 
     /// Per-turn heat, work, entropy and pressure-volume records.
@@ -359,85 +303,64 @@ impl ConnectedChambers {
         &self.cycle
     }
 
-    pub fn cold_kelvin(&self) -> f32 {
-        self.thermal.cold_kelvin()
-    }
-
-    pub fn hot_kelvin(&self) -> f32 {
-        self.thermal.hot_kelvin()
-    }
-
-    /// Cumulative heat each reservoir has given the gas since the fill.
-    pub fn heat(&self) -> HeatTransfer {
+    /// Heat each reservoir has given the gas since the fill.
+    pub fn heat(&self) -> PerReservoir {
         self.thermal.heat()
     }
 
-    /// Gas first-law residual, ideally zero: change in gas kinetic energy,
-    /// minus wall heat into the gas, plus work done by the gas on the pistons.
+    /// Gas first-law residual, ideally zero: the change in gas energy, minus
+    /// wall heat into the gas, plus work done by the gas on the pistons.
     pub fn energy_balance_error(&self) -> f64 {
         self.kinetic_energy() as f64 - self.initial_energy as f64 - self.heat().total()
             + self.piston_work_by_gas
     }
 
-    /// Cumulative work done by the gas on both pistons; negative when the
+    /// Flywheel energy-balance residual, ideally zero: flywheel energy minus
+    /// gas work, starter work and back-pressure work, plus drag losses.
+    pub fn mechanical_balance_error(&self) -> f64 {
+        let pistons = &self.pistons;
+        pistons.kinetic_energy()
+            - self.piston_work_by_gas
+            - pistons.starter_work()
+            - pistons.back_pressure_work()
+            + pistons.drag_loss()
+    }
+
+    /// Work done by the gas on both pistons since the fill; negative when the
     /// pistons have done net work on the gas.
     pub fn piston_work_by_gas(&self) -> f64 {
         self.piston_work_by_gas
     }
 
+    /// Crankshaft, flywheel and pistons.
     pub fn power_pistons(&self) -> &PowerPistons {
         &self.pistons
     }
 
-    #[cfg(test)]
-    pub fn set_pistons_running(&mut self, running: bool) {
-        self.pistons.set_running(running);
-    }
-
     /// Brings the flywheel up to the starting speed for this fill (see
-    /// `PowerPistons::start`). Returns whether the speed changed.
+    /// `PowerPistons::start`); returns whether the speed changed.
     pub fn start_engine(&mut self) -> bool {
         self.pistons.start()
     }
 
-    /// Applies one additive kick to the flywheel (see `PowerPistons::kick`).
-    pub fn kick_flywheel(&mut self, direction: KickDirection) {
-        self.pistons.kick(direction);
+    /// Kicks the flywheel once (see `PowerPistons::kick`).
+    pub fn kick_flywheel(&mut self) {
+        self.pistons.kick();
     }
 
-    /// Flywheel energy-balance residual, ideally zero: flywheel energy minus
-    /// gas work, starter work and back-pressure work, plus drag losses.
-    pub fn mechanical_balance_error(&self) -> f64 {
-        self.pistons.kinetic_energy()
-            - self.piston_work_by_gas
-            - self.pistons.starter_work()
-            - self.pistons.back_pressure_work()
-            + self.pistons.drag_loss()
-    }
-
-    #[cfg(test)]
-    pub fn volume_m3(&self) -> f64 {
-        self.pistons.volume_m3(self.geometry)
-    }
-
-    /// Current chamber dimensions, shared with rendering and diagnostics.
+    /// Shape of the chamber.
     pub fn geometry(&self) -> ChamberGeometry {
         self.geometry
     }
 
-    /// Converts an energy in reduced simulation units to joules.
-    pub fn energy_joules(&self, reduced_energy: impl Into<f64>) -> f64 {
-        self.gas.energy_joules(reduced_energy)
+    /// Conversions from reduced units to SI.
+    pub fn units(&self) -> HeliumCalibration {
+        self.units
     }
 
-    /// Converts a reduced entropy (energy per reduced temperature) to J/K.
-    pub fn entropy_joules_per_kelvin(&self, reduced_entropy: f64) -> f64 {
-        self.gas.entropy_joules_per_kelvin(reduced_entropy)
-    }
-
-    /// Converts a reduced pressure to pascals.
-    pub fn pressure_pa(&self, reduced_pressure: f64) -> f64 {
-        self.gas.pressure_pa(reduced_pressure)
+    /// Helium amount represented by all the particles.
+    pub fn total_moles(&self) -> f64 {
+        self.units.total_moles(self.particles.len())
     }
 
     /// Smallest and largest gas volume of one cylinder over a turn, in cm3.
@@ -451,51 +374,35 @@ impl ConnectedChambers {
         )
     }
 
-    /// Temperature, concentration and ideal-gas pressure for each cylinder,
-    /// with each region's mean flow removed from its temperature; the
-    /// passage reports only its particle count.
+    /// Temperature, concentration and ideal-gas pressure for each cylinder.
+    ///
+    /// Each region's mean flow is left out of its temperature; the passage
+    /// reports only its particle count.
     pub fn measurements(&self) -> ChamberMeasurements {
-        let mut hot = KineticMoments::default();
-        let mut passage_markers = 0;
-        let mut cold = KineticMoments::default();
-
+        let mut moments = [KineticMoments::default(); 3];
         for particle in &self.particles {
-            match self.region(particle.position) {
-                Region::Hot => hot.record(particle.velocity),
-                Region::Passage => passage_markers += 1,
-                Region::Cold => cold.record(particle.velocity),
-            }
+            moments[self.region(particle.position) as usize].record(particle.velocity);
         }
-
+        let measure = |region: Region, piston: PistonState| {
+            let volume = self.pistons.cylinder_volume_m3(self.geometry, piston);
+            self.units.measure(moments[region as usize], volume)
+        };
         ChamberMeasurements {
-            hot: self.gas.measure(
-                hot,
-                self.pistons
-                    .cylinder_volume_m3(self.geometry, self.pistons.hot()),
-            ),
-            passage_markers,
-            cold: self.gas.measure(
-                cold,
-                self.pistons
-                    .cylinder_volume_m3(self.geometry, self.pistons.cold()),
-            ),
+            hot: measure(Region::Hot, self.pistons.hot()),
+            passage_count: moments[Region::Passage as usize].count(),
+            cold: measure(Region::Cold, self.pistons.cold()),
         }
     }
 
-    /// Helium amount represented by all particles.
-    pub fn total_moles(&self) -> f64 {
-        self.gas.total_moles(self.particles.len())
-    }
-
-    /// Model time left on each particle's collision highlight.
-    /// Starts following `count` particles (fewer if the gas is smaller),
-    /// chosen with `seed`: alternately from the hot and the cold cylinder,
-    /// so both sides have one to watch. Display only; the physics is
-    /// unchanged.
+    /// Starts following up to `count` particles chosen with `seed`; drawing
+    /// only.
+    ///
+    /// They are picked alternately from the hot and the cold cylinder, so
+    /// both sides have one to watch.
     pub fn follow_particles(&mut self, count: usize, seed: u64) {
         let random = RandGenerator::new();
         random.srand(seed);
-        let mut sides: [Vec<usize>; 2] = [Vec::new(), Vec::new()];
+        let mut sides: [Vec<usize>; 2] = Default::default();
         for (index, particle) in self.particles.iter().enumerate() {
             match self.region(particle.position) {
                 Region::Hot => sides[0].push(index),
@@ -506,10 +413,11 @@ impl ConnectedChambers {
         let mut chosen = Vec::with_capacity(count);
         for pick in 0..count.min(self.particles.len()) {
             let side = if sides[pick % 2].is_empty() {
-                &mut sides[(pick + 1) % 2]
+                (pick + 1) % 2
             } else {
-                &mut sides[pick % 2]
+                pick % 2
             };
+            let side = &mut sides[side];
             if side.is_empty() {
                 break;
             }
@@ -519,6 +427,7 @@ impl ConnectedChambers {
         self.tracers = Some(Tracers::new(&chosen, &self.particles));
     }
 
+    /// Stops following particles.
     pub fn stop_following(&mut self) {
         self.tracers = None;
     }
@@ -528,147 +437,30 @@ impl ConnectedChambers {
         self.tracers.as_ref()
     }
 
+    /// Model time left on each particle's collision highlight.
     pub fn collision_flashes(&self) -> &[f32] {
         &self.flashes
     }
 
-    /// Total kinetic (internal) energy of the gas.
+    /// Kinetic (internal) energy of the gas.
     pub fn kinetic_energy(&self) -> f32 {
         gas::kinetic_energy(&self.particles)
     }
 
-    /// Classifies a particle center. A position inside either cylinder counts
-    /// as that cylinder, so only the part of the opening between the bores
-    /// counts as passage.
+    /// Which region holds a particle centered at `position`.
     pub fn region(&self, position: Vec3) -> Region {
-        let geometry = self.geometry;
-        if geometry.within_cylinder(
-            position,
-            geometry.hot_center_x(),
-            PARTICLE_RADIUS,
-            self.pistons.hot().face_y,
-        ) {
-            Region::Hot
-        } else if geometry.within_cylinder(
-            position,
-            geometry.cold_center_x(),
-            PARTICLE_RADIUS,
-            self.pistons.cold().face_y,
-        ) {
-            Region::Cold
-        } else {
-            Region::Passage
-        }
+        region_of(self.geometry, &self.pistons, position)
     }
 
-    /// Whether an escaped position is past one cylinder's side wall or floor,
-    /// the thermal surfaces. Piston faces are handled separately and never
-    /// exchange heat.
-    fn beyond_thermal_wall(
-        geometry: ChamberGeometry,
-        position: Vec3,
-        center_x: f32,
-        radius: f32,
-    ) -> bool {
-        let dx = position.x - center_x;
-        let limit = geometry.cylinder_radius - radius;
-        dx * dx + position.z * position.z > limit * limit
-            || position.y < -geometry.cylinder_height / 2.0 + radius
-    }
-
-    /// Moves an escaped position to the nearest point inside the cylinders or
-    /// passage. Also returns which reservoir that wall belongs to: hot or
-    /// cold for a cylinder's side or floor, `None` for the insulated passage.
-    fn nearest_inside(
-        geometry: ChamberGeometry,
-        position: Vec3,
-        radius: f32,
-        hot_top: f32,
-        cold_top: f32,
-    ) -> (Vec3, Option<ReservoirSide>) {
-        let candidates = [
-            (
-                geometry.project_to_cylinder(position, geometry.hot_center_x(), radius, hot_top),
-                Self::beyond_thermal_wall(geometry, position, geometry.hot_center_x(), radius)
-                    .then_some(ReservoirSide::Hot),
-            ),
-            (
-                geometry.project_to_cylinder(position, geometry.cold_center_x(), radius, cold_top),
-                Self::beyond_thermal_wall(geometry, position, geometry.cold_center_x(), radius)
-                    .then_some(ReservoirSide::Cold),
-            ),
-            (geometry.project_to_passage(position, radius), None),
-        ];
-        let (mut nearest, mut wall) = candidates[0];
-        let mut distance_sq = position.distance_squared(nearest);
-        for (candidate, surface) in &candidates[1..] {
-            let candidate_distance_sq = position.distance_squared(*candidate);
-            if candidate_distance_sq < distance_sq {
-                nearest = *candidate;
-                wall = *surface;
-                distance_sq = candidate_distance_sq;
-            }
-        }
-        (nearest, wall)
-    }
-
-    /// Pulls an escaped particle back inside. With `reflect`, it also bounces
-    /// off the wall it crossed, exchanging heat if that wall is thermal. Use
-    /// `reflect = false` after particle collisions, which only nudge
-    /// positions and must not count as extra wall impacts.
-    fn constrain_particle(
-        particle: &mut Particle,
-        geometry: ChamberGeometry,
-        radius: f32,
-        thermal: &mut ThermalReservoirs,
-        hot_top: f32,
-        cold_top: f32,
-        reflect: bool,
-    ) {
-        if geometry.contains(particle.position, radius, hot_top, cold_top) {
-            return;
-        }
-
-        let (nearest, reservoir) =
-            Self::nearest_inside(geometry, particle.position, radius, hot_top, cold_top);
-        let displacement = particle.position - nearest;
-        particle.position = nearest;
-        if reflect && displacement.length_squared() > f32::EPSILON {
-            thermal.reflect(particle, displacement.normalize(), reservoir);
-        }
-    }
-
-    /// Bounces a particle that has reached a piston face and passes the
-    /// impulse to the shaft. Returns the work done by the particle on the
-    /// piston, which equals the particle's loss of kinetic energy.
-    fn bounce_piston(
-        particle: &mut Particle,
-        geometry: ChamberGeometry,
-        center_x: f32,
-        radius: f32,
-        piston: PistonState,
-        side: PistonSide,
-        flywheel: &mut PowerPistons,
-    ) -> f32 {
-        let radial_limit = geometry.cylinder_radius - radius;
-        let dx = particle.position.x - center_x;
-        if dx * dx + particle.position.z * particle.position.z > radial_limit * radial_limit
-            || particle.position.y <= piston.face_y - radius
-        {
-            return 0.0;
-        }
-
-        particle.position.y =
-            piston.face_y - radius - (geometry.grid_side() * WALL_PROJECTION_MARGIN);
-        let old_speed = particle.velocity.y;
-        let new_speed = flywheel.collide(side, old_speed, PARTICLE_MASS);
-        particle.velocity.y = new_speed;
-        0.5 * PARTICLE_MASS * (old_speed * old_speed - new_speed * new_speed)
-    }
-
-    /// Advances the simulation by one frame's worth of fixed steps, at most
-    /// `MAX_FIXED_STEPS_PER_FRAME`. Returns true when frame time had to be
-    /// dropped to keep the UI responsive; the step size never grows to catch up.
+    /// Advances the simulation by `frame_time` of fixed steps, at most
+    /// `MAX_FIXED_STEPS_PER_FRAME`.
+    ///
+    /// Returns true when frame time had to be dropped to keep the window
+    /// responsive; the step size never grows to catch up.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `frame_time` is negative or not finite.
     pub fn update(&mut self, frame_time: f32) -> bool {
         assert!(frame_time.is_finite() && frame_time >= 0.0);
         let mut limited = frame_time > MAX_FRAME_TIME;
@@ -687,16 +479,16 @@ impl ConnectedChambers {
         limited
     }
 
-    /// Advances one fixed step, split into substeps short enough that no
+    /// Advances one fixed step of `dt`, in substeps short enough that no
     /// particle moves more than `MAX_TRAVEL_RADII` relative to a piston and
-    /// the crank turns at most `MAX_CRANK_STEP_RADIANS` per substep.
+    /// the crank turns at most `MAX_CRANK_STEP_RADIANS` in each.
     fn step(&mut self, dt: f32) {
         let mut remaining = dt;
         while remaining > 0.0 {
             let max_speed = self
                 .particles
                 .iter()
-                .map(|p| p.velocity.length_squared())
+                .map(|particle| particle.velocity.length_squared())
                 .fold(0.0_f32, f32::max)
                 .sqrt();
             let wall_speed = self
@@ -712,44 +504,31 @@ impl ConnectedChambers {
         }
     }
 
-    /// One substep: move the shaft, then move particles, bounce them off
-    /// pistons and walls, then resolve particle-particle collisions.
+    /// One substep of `dt`: moves the shaft, then the particles, bounces
+    /// them off the pistons and walls, and resolves particle collisions.
     fn integrate(&mut self, dt: f32) {
-        assert!(dt.is_finite() && dt > 0.0 && dt <= FIXED_DT);
         self.pistons.advance(dt);
-        let hot = self.pistons.hot();
-        let cold = self.pistons.cold();
+        let (hot, cold) = (self.pistons.hot(), self.pistons.cold());
+        let walls = Walls {
+            geometry: self.geometry,
+            hot_top: hot.face_y,
+            cold_top: cold.face_y,
+        };
         for particle in &mut self.particles {
             particle.position += particle.velocity * dt;
-            let (center, face, side) = if particle.position.x < 0.0 {
+            let (center_x, piston, side) = if particle.position.x < 0.0 {
                 (self.geometry.hot_center_x(), hot, PistonSide::Hot)
             } else {
                 (self.geometry.cold_center_x(), cold, PistonSide::Cold)
             };
-            self.piston_work_by_gas += Self::bounce_piston(
-                particle,
-                self.geometry,
-                center,
-                PARTICLE_RADIUS,
-                face,
-                side,
-                &mut self.pistons,
-            ) as f64;
-            Self::constrain_particle(
-                particle,
-                self.geometry,
-                PARTICLE_RADIUS,
-                &mut self.thermal,
-                hot.face_y,
-                cold.face_y,
-                true,
-            );
+            let work = walls.bounce_piston(particle, center_x, piston, side, &mut self.pistons);
+            self.piston_work_by_gas += work as f64;
+            walls.constrain(particle, &mut self.thermal, true);
         }
 
         for remaining in &mut self.flashes {
             *remaining = (*remaining - dt).max(0.0);
         }
-
         let (flashes, nudged) = (&mut self.flashes, &mut self.nudged);
         nudged.clear();
         self.grid
@@ -760,34 +539,30 @@ impl ConnectedChambers {
                 }
                 nudged.extend([a, b]);
             });
-
-        // Collision overlap correction may have pushed those centers past a
-        // wall; every other particle is where the wall check left it.
+        // Overlap correction may have pushed those centers past a wall;
+        // every other particle is where the wall check left it.
         nudged.sort_unstable();
         nudged.dedup();
         for &index in nudged.iter() {
-            Self::constrain_particle(
-                &mut self.particles[index],
-                self.geometry,
-                PARTICLE_RADIUS,
-                &mut self.thermal,
-                hot.face_y,
-                cold.face_y,
-                false,
-            );
+            walls.constrain(&mut self.particles[index], &mut self.thermal, false);
         }
 
         if let Some(tracers) = &mut self.tracers {
             tracers.record(dt as f64, &self.particles);
         }
+        self.record_cycle(dt);
+    }
 
+    /// Reports the substep of `dt` just taken to the cycle monitor.
+    fn record_cycle(&mut self, dt: f32) {
+        let pistons = &mut self.pistons;
         let substep = Substep {
-            total_angle: self.pistons.total_angle(),
-            crank_angle: self.pistons.angle(),
+            total_angle: pistons.total_angle(),
+            crank_angle: pistons.angle(),
             dt: dt as f64,
-            gas_impulse: self.pistons.take_gas_impulse(),
-            volume: [self.pistons.hot(), self.pistons.cold()].map(|piston| {
-                self.pistons.cylinder_volume_m3(self.geometry, piston) / METERS_PER_UNIT.powi(3)
+            gas_impulse: pistons.take_gas_impulse(),
+            volume: [pistons.hot(), pistons.cold()].map(|piston| {
+                pistons.cylinder_volume_m3(self.geometry, piston) / METERS_PER_UNIT.powi(3)
             }),
         };
         let kelvin = (self.thermal.hot_kelvin(), self.thermal.cold_kelvin());
@@ -802,6 +577,169 @@ impl ConnectedChambers {
             gas_energy: gas_energy(particles),
         });
     }
+}
+
+/// The chamber's walls with the piston faces where they are, for keeping
+/// particles inside during one substep.
+#[derive(Clone, Copy)]
+struct Walls {
+    /// Shape of the chamber.
+    geometry: ChamberGeometry,
+    /// Height of the hot piston's face.
+    hot_top: f32,
+    /// Height of the cold piston's face.
+    cold_top: f32,
+}
+
+impl Walls {
+    /// Whether a particle centered at `position` is past the side wall or
+    /// floor of the cylinder whose axis is at `center_x`.
+    fn beyond_thermal_wall(self, position: Vec3, center_x: f32) -> bool {
+        let dx = position.x - center_x;
+        let limit = self.geometry.cylinder_radius - PARTICLE_RADIUS;
+        dx * dx + position.z * position.z > limit * limit
+            || position.y < -self.geometry.cylinder_height / 2.0 + PARTICLE_RADIUS
+    }
+
+    /// The nearest place inside the gas volume to an escaped `position`, and
+    /// the reservoir owning the wall it crossed: hot or cold for a
+    /// cylinder's side or floor, `None` for the insulated opening.
+    fn nearest_inside(self, position: Vec3) -> (Vec3, Option<ReservoirSide>) {
+        let geometry = self.geometry;
+        let cylinder = |center_x: f32, top: f32, side: ReservoirSide| {
+            (
+                geometry.project_to_cylinder(position, center_x, PARTICLE_RADIUS, top),
+                self.beyond_thermal_wall(position, center_x).then_some(side),
+            )
+        };
+        let candidates = [
+            cylinder(geometry.hot_center_x(), self.hot_top, ReservoirSide::Hot),
+            cylinder(geometry.cold_center_x(), self.cold_top, ReservoirSide::Cold),
+            (geometry.project_to_passage(position, PARTICLE_RADIUS), None),
+        ];
+        let (mut nearest, mut wall) = candidates[0];
+        let mut distance_sq = position.distance_squared(nearest);
+        for &(candidate, surface) in &candidates[1..] {
+            let candidate_distance_sq = position.distance_squared(candidate);
+            if candidate_distance_sq < distance_sq {
+                (nearest, wall, distance_sq) = (candidate, surface, candidate_distance_sq);
+            }
+        }
+        (nearest, wall)
+    }
+
+    /// Pulls an escaped particle back inside.
+    ///
+    /// With `reflect` it also bounces off the wall it crossed, exchanging
+    /// heat if that wall is thermal. After particle collisions, which only
+    /// nudge positions, `reflect` is false so the nudge does not count as
+    /// another wall impact.
+    fn constrain(self, particle: &mut Particle, thermal: &mut ThermalReservoirs, reflect: bool) {
+        if self.geometry.contains(
+            particle.position,
+            PARTICLE_RADIUS,
+            self.hot_top,
+            self.cold_top,
+        ) {
+            return;
+        }
+        let (nearest, reservoir) = self.nearest_inside(particle.position);
+        let displacement = particle.position - nearest;
+        particle.position = nearest;
+        if reflect && displacement.length_squared() > f32::EPSILON {
+            thermal.reflect(particle, displacement.normalize(), reservoir);
+        }
+    }
+
+    /// Bounces a particle that has reached the face of `piston` on `side`,
+    /// in the cylinder whose axis is at `center_x`, and passes the impulse
+    /// to the shaft.
+    ///
+    /// Returns the work done by the particle on the piston, its loss of
+    /// kinetic energy.
+    fn bounce_piston(
+        self,
+        particle: &mut Particle,
+        center_x: f32,
+        piston: PistonState,
+        side: PistonSide,
+        pistons: &mut PowerPistons,
+    ) -> f32 {
+        let radial_limit = self.geometry.cylinder_radius - PARTICLE_RADIUS;
+        let dx = particle.position.x - center_x;
+        if dx * dx + particle.position.z * particle.position.z > radial_limit * radial_limit
+            || particle.position.y <= piston.face_y - PARTICLE_RADIUS
+        {
+            return 0.0;
+        }
+        particle.position.y =
+            piston.face_y - PARTICLE_RADIUS - (self.geometry.grid_side() * WALL_PROJECTION_MARGIN);
+        let old_speed = particle.velocity.y;
+        let new_speed = pistons.collide(side, old_speed, PARTICLE_MASS);
+        particle.velocity.y = new_speed;
+        0.5 * PARTICLE_MASS * (old_speed * old_speed - new_speed * new_speed)
+    }
+}
+
+/// Which region of `geometry`, with the `pistons` where they are, holds a
+/// particle centered at `position`.
+///
+/// A center inside either cylinder counts as that cylinder, so only the part
+/// of the opening between the bores counts as passage.
+fn region_of(geometry: ChamberGeometry, pistons: &PowerPistons, position: Vec3) -> Region {
+    let within = |center_x: f32, piston: PistonState| {
+        geometry.within_cylinder(position, center_x, PARTICLE_RADIUS, piston.face_y)
+    };
+    if within(geometry.hot_center_x(), pistons.hot()) {
+        Region::Hot
+    } else if within(geometry.cold_center_x(), pistons.cold()) {
+        Region::Cold
+    } else {
+        Region::Passage
+    }
+}
+
+/// Starting positions for at least `count` particles in `geometry`.
+///
+/// One lattice spans both bores and the passage, refined until there are
+/// enough sites; a single lattice cannot overlap itself where the parts
+/// meet.
+///
+/// # Panics
+///
+/// Panics if the lattice gets too fine for the particle radius.
+fn fill_sites(geometry: ChamberGeometry, pistons: &PowerPistons, count: usize) -> Vec<Vec3> {
+    let half_width = geometry.cylinder_offset + geometry.cylinder_radius;
+    let height = geometry.cylinder_height;
+    let (hot_top, cold_top) = (pistons.hot().face_y, pistons.cold().face_y);
+    for divisions in 1.. {
+        let spacing = 2.0 * geometry.cylinder_radius / divisions as f32;
+        let x_divisions = (2.0 * half_width / spacing).ceil() as usize;
+        let y_divisions = (height / spacing).ceil() as usize;
+        let x_spacing = 2.0 * half_width / x_divisions as f32;
+        let y_spacing = height / y_divisions as f32;
+        assert!(
+            spacing.min(x_spacing).min(y_spacing) >= SPACING_PER_RADIUS * PARTICLE_RADIUS,
+            "chamber is too small for {count} particles of radius {PARTICLE_RADIUS}"
+        );
+        let mut sites = Vec::new();
+        for iy in 0..y_divisions {
+            let y = geometry.floor() + (iy as f32 + 0.5) * y_spacing;
+            for iz in 0..divisions {
+                let z = -geometry.cylinder_radius + (iz as f32 + 0.5) * spacing;
+                for ix in 0..x_divisions {
+                    let position = vec3(-half_width + (ix as f32 + 0.5) * x_spacing, y, z);
+                    if geometry.contains(position, PARTICLE_RADIUS, hot_top, cold_top) {
+                        sites.push(position);
+                    }
+                }
+            }
+        }
+        if sites.len() >= count {
+            return sites;
+        }
+    }
+    unreachable!("the lattice refines until it fits or fails the assertion")
 }
 
 /// Gas kinetic (internal) energy summed in f64, so per-turn differences of a

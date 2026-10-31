@@ -7,30 +7,39 @@
 //! the first and second laws can be checked honestly. A partial turn mixes
 //! different compression phases and is never reported.
 //!
-//! Everything here is in reduced simulation units; the engine converts to SI.
+//! Everything here is in reduced simulation units; the engine converts to
+//! SI.
 
 use std::f64::consts::TAU;
 
-/// Pressure-volume samples per turn, binned by crank angle. Each bin
-/// averages the pressure over 10 degrees of crank rotation; narrower bins
-/// show mostly the noise of individual particle impacts.
+/// Pressure-volume samples per turn, binned by crank angle.
+///
+/// Each bin averages the pressure over 10 degrees of crank rotation;
+/// narrower bins show mostly the noise of single particle impacts.
 pub const LOOP_BINS: usize = 36;
-/// Number of most recent turns combined in `CycleMonitor::recent`.
+/// Most recent turns combined in `CycleMonitor::recent`.
 pub const TURNS_AVERAGED: usize = 3;
-/// Turns count as settled when the gas's energy changes by at most this
-/// fraction of the heat flowing through it.
+/// Largest change in the gas's energy, as a share of the heat flowing
+/// through it, for turns to count as settled.
 const SETTLED_FRACTION: f64 = 0.10;
 /// Bound on the visit list when the shaft rocks back and forth in one turn.
 const MAX_VISITS: usize = 4 * LOOP_BINS;
+/// Index of the hot cylinder in per-cylinder arrays.
+pub const HOT: usize = 0;
+/// Index of the cold cylinder in per-cylinder arrays.
+pub const COLD: usize = 1;
 
-/// Cumulative totals read from the simulation at a turn boundary.
+/// Running totals read from the simulation at a turn boundary, or their
+/// changes over some turns.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct CycleTotals {
-    /// Heat into the gas from each reservoir (`HeatTransfer`).
+    /// Heat into the gas from the hot reservoir.
     pub hot_heat: f64,
+    /// Heat into the gas from the cold reservoir.
     pub cold_heat: f64,
-    /// Heat over reservoir temperature (`EntropyFlow`).
+    /// Heat from the hot reservoir over its temperature.
     pub hot_entropy: f64,
+    /// Heat from the cold reservoir over its temperature.
     pub cold_entropy: f64,
     /// Work done by the gas on the pistons.
     pub gas_work: f64,
@@ -38,111 +47,94 @@ pub struct CycleTotals {
     pub gas_energy: f64,
 }
 
+impl CycleTotals {
+    /// Combines each quantity of `self` with the same one of `other`.
+    fn zip(self, other: Self, combine: impl Fn(f64, f64) -> f64) -> Self {
+        Self {
+            hot_heat: combine(self.hot_heat, other.hot_heat),
+            cold_heat: combine(self.cold_heat, other.cold_heat),
+            hot_entropy: combine(self.hot_entropy, other.hot_entropy),
+            cold_entropy: combine(self.cold_entropy, other.cold_entropy),
+            gas_work: combine(self.gas_work, other.gas_work),
+            gas_energy: combine(self.gas_energy, other.gas_energy),
+        }
+    }
+}
+
 /// Changes over one or more complete turns at fixed reservoir temperatures.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct TurnSummary {
-    /// Number of turns combined.
+    /// Turns combined.
     pub turns: usize,
-    pub hot_heat: f64,
-    pub cold_heat: f64,
-    pub hot_entropy: f64,
-    pub cold_entropy: f64,
-    pub gas_work: f64,
-    /// Change in gas internal energy, dU.
-    pub gas_energy_change: f64,
+    /// Changes over those turns; `gas_energy` is the change in the gas's
+    /// internal energy, dU.
+    pub change: CycleTotals,
     /// Model time taken.
     pub duration: f64,
+    /// Hot reservoir temperature throughout.
     pub hot_kelvin: f32,
+    /// Cold reservoir temperature throughout.
     pub cold_kelvin: f32,
 }
 
 impl TurnSummary {
-    fn between(start: CycleTotals, end: CycleTotals, duration: f64, kelvin: (f32, f32)) -> Self {
-        Self {
-            turns: 1,
-            hot_heat: end.hot_heat - start.hot_heat,
-            cold_heat: end.cold_heat - start.cold_heat,
-            hot_entropy: end.hot_entropy - start.hot_entropy,
-            cold_entropy: end.cold_entropy - start.cold_entropy,
-            gas_work: end.gas_work - start.gas_work,
-            gas_energy_change: end.gas_energy - start.gas_energy,
-            duration,
-            hot_kelvin: kelvin.0,
-            cold_kelvin: kelvin.1,
-        }
-    }
-
-    /// Sum of two summaries taken at the same reservoir temperatures.
-    fn combined(self, other: Self) -> Self {
-        Self {
-            turns: self.turns + other.turns,
-            hot_heat: self.hot_heat + other.hot_heat,
-            cold_heat: self.cold_heat + other.cold_heat,
-            hot_entropy: self.hot_entropy + other.hot_entropy,
-            cold_entropy: self.cold_entropy + other.cold_entropy,
-            gas_work: self.gas_work + other.gas_work,
-            gas_energy_change: self.gas_energy_change + other.gas_energy_change,
-            duration: self.duration + other.duration,
-            ..self
-        }
-    }
-
     /// The same quantities averaged per turn.
     pub fn per_turn(self) -> Self {
         let turns = self.turns.max(1) as f64;
         Self {
             turns: 1,
-            hot_heat: self.hot_heat / turns,
-            cold_heat: self.cold_heat / turns,
-            hot_entropy: self.hot_entropy / turns,
-            cold_entropy: self.cold_entropy / turns,
-            gas_work: self.gas_work / turns,
-            gas_energy_change: self.gas_energy_change / turns,
+            change: self.change.zip(self.change, |value, _| value / turns),
             duration: self.duration / turns,
             ..self
         }
     }
 
-    /// First law check, ideally zero: Q hot + Q cold - W - dU.
+    /// First-law residual, ideally zero: Q hot + Q cold - W - dU.
     pub fn first_law_residual(self) -> f64 {
-        self.hot_heat + self.cold_heat - self.gas_work - self.gas_energy_change
+        let change = self.change;
+        change.hot_heat + change.cold_heat - change.gas_work - change.gas_energy
     }
 
-    /// Work out divided by heat in from the hot wall; `None` when the hot
-    /// wall delivered no net heat, so efficiency is undefined.
+    /// Work out over heat in from the hot wall, or `None` when the hot wall
+    /// gave no net heat.
     pub fn efficiency(self) -> Option<f64> {
-        (self.hot_heat > 0.0).then(|| self.gas_work / self.hot_heat)
+        (self.change.hot_heat > 0.0).then(|| self.change.gas_work / self.change.hot_heat)
     }
 
-    /// Carnot limit 1 - Tc/Th for these reservoir temperatures.
+    /// The Carnot limit 1 - Tc/Th for these reservoir temperatures.
     pub fn carnot_limit(self) -> f64 {
         (1.0 - self.cold_kelvin as f64 / self.hot_kelvin as f64).max(0.0)
     }
 
     /// Entropy change of both reservoirs, -(Qh/Th + Qc/Tc).
     pub fn surroundings_entropy_change(self) -> f64 {
-        -(self.hot_entropy + self.cold_entropy)
+        -(self.change.hot_entropy + self.change.cold_entropy)
     }
 
     /// Whether the gas ended the turns with nearly the energy it started
-    /// with. Only then is the gas's own entropy change negligible, so the
+    /// with.
+    ///
+    /// Only then is the gas's own entropy change negligible, so the
     /// surroundings' change is the change of the universe.
     pub fn is_settled(self) -> bool {
-        let throughput = (self.hot_heat.abs() + self.cold_heat.abs()) / 2.0;
-        throughput > 0.0 && self.gas_energy_change.abs() <= SETTLED_FRACTION * throughput
+        let throughput = (self.change.hot_heat.abs() + self.change.cold_heat.abs()) / 2.0;
+        throughput > 0.0 && self.change.gas_energy.abs() <= SETTLED_FRACTION * throughput
     }
 }
 
-/// One point of the pressure-volume loop: volume in cubic model units and
-/// pressure in reduced units.
+/// One point of a pressure-volume loop.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct LoopPoint {
+    /// Gas volume, in cubic model units.
     pub volume: f64,
+    /// Gas pressure, in reduced units.
     pub pressure: f64,
 }
 
 /// Work enclosed by a closed loop, the trapezoid sum of P dV around it.
-/// Positive when the gas expands at higher pressure than it is compressed.
+///
+/// It is positive when the gas expands at higher pressure than it is
+/// compressed.
 pub fn loop_work(points: &[LoopPoint]) -> f64 {
     points
         .iter()
@@ -151,21 +143,20 @@ pub fn loop_work(points: &[LoopPoint]) -> f64 {
         .sum()
 }
 
-/// Index of the hot cylinder in per-cylinder arrays; the cold one is 1.
-pub const HOT: usize = 0;
-pub const COLD: usize = 1;
-
-/// Per cylinder: gas impulse on its piston, and volume, accumulated over one
-/// crank-angle bin along with the time spent in it.
+/// Gas impulse and volume for each cylinder, gathered over one crank-angle
+/// bin along with the time spent in it.
 #[derive(Clone, Copy, Debug, Default)]
 struct LoopBin {
+    /// Upward impulse on each piston face.
     impulse: [f64; 2],
+    /// Each cylinder's volume integrated over time.
     volume_time: [f64; 2],
+    /// Model time spent in the bin.
     time: f64,
 }
 
 impl LoopBin {
-    /// Mean volume of one cylinder and mean gas pressure on its piston.
+    /// Mean volume of `cylinder` and mean gas pressure on its piston.
     fn point(self, cylinder: usize, face_area: f64) -> Option<LoopPoint> {
         (self.time > 0.0).then(|| LoopPoint {
             volume: self.volume_time[cylinder] / self.time,
@@ -174,14 +165,16 @@ impl LoopBin {
     }
 }
 
-/// What the simulation reports after each integration substep. Arrays are
-/// indexed by `HOT` and `COLD`.
+/// What the simulation reports after each integration substep.
+///
+/// Arrays are indexed by `HOT` and `COLD`.
 #[derive(Clone, Copy, Debug)]
 pub struct Substep {
-    /// Total signed crank rotation since the fill, in radians.
+    /// Signed crank rotation since the fill, in radians.
     pub total_angle: f64,
     /// Crank angle reduced to 0..2 pi.
     pub crank_angle: f32,
+    /// Model time the substep took.
     pub dt: f64,
     /// Upward impulse the gas gave each piston face during the substep.
     pub gas_impulse: [f64; 2],
@@ -202,27 +195,44 @@ pub struct Substep {
 /// from the last one crossed; it then has the same piston positions as at
 /// the start. Crossing the same angle again (the shaft rocked backward)
 /// restarts the count instead. A turn during which a reservoir temperature
-/// changed is discarded, along with the history, so averages always use
-/// one setting.
+/// changed is discarded, along with the history, so averages always use one
+/// setting.
 pub struct CycleMonitor {
     /// Area of one piston face, in square model units.
     face_area: f64,
+    /// Whole turns of the crank since the fill, rounded down.
     turn_index: i64,
+    /// The whole-turn angle last crossed, in turns.
     last_boundary: i64,
+    /// Totals when the turn in progress began.
     start: CycleTotals,
+    /// Model time since the turn in progress began.
     elapsed: f64,
+    /// A reservoir temperature changed during the turn in progress.
     settings_changed: bool,
+    /// The most recent turns, as a ring.
     history: [TurnSummary; TURNS_AVERAGED],
+    /// Turns held in `history`.
     history_len: usize,
+    /// Where the next turn goes in `history`.
     history_next: usize,
+    /// Turns recorded since the fill.
     completed_turns: u64,
+    /// The turn in progress, binned by crank angle.
     bins: [LoopBin; LOOP_BINS],
+    /// Bins in the order the crank swept them this turn.
     visits: Vec<usize>,
+    /// Each cylinder's loop for the last complete turn.
     last_loops: [Vec<LoopPoint>; 2],
 }
 
 impl CycleMonitor {
-    /// Starts at crank angle zero with the given cumulative totals.
+    /// Starts at crank angle zero with the totals `start`, for pistons of
+    /// face area `face_area`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `face_area` is not positive and finite.
     pub fn new(face_area: f64, start: CycleTotals) -> Self {
         assert!(face_area.is_finite() && face_area > 0.0);
         Self {
@@ -242,9 +252,10 @@ impl CycleMonitor {
         }
     }
 
-    /// Records a substep. `totals` is called only at a turn boundary, so
-    /// the full-gas energy sum is not computed every substep. `kelvin` is
-    /// (hot, cold).
+    /// Records a substep at reservoir temperatures `kelvin` (hot, cold).
+    ///
+    /// `totals` is called only at a turn boundary, so the full gas energy
+    /// sum is not computed every substep.
     pub fn record(
         &mut self,
         substep: Substep,
@@ -268,14 +279,19 @@ impl CycleMonitor {
         if index == self.turn_index {
             return;
         }
-        // Moving backward crosses the boundary at the old index; forward,
-        // at the new one.
+        // Moving backward crosses the boundary at the old index; forward, at
+        // the new one.
         let boundary = self.turn_index.max(index);
         self.turn_index = index;
         let end = totals();
         if boundary != self.last_boundary && !self.settings_changed {
-            let summary = TurnSummary::between(self.start, end, self.elapsed, kelvin);
-            self.history[self.history_next] = summary;
+            self.history[self.history_next] = TurnSummary {
+                turns: 1,
+                change: end.zip(self.start, |end, start| end - start),
+                duration: self.elapsed,
+                hot_kelvin: kelvin.0,
+                cold_kelvin: kelvin.1,
+            };
             self.history_next = (self.history_next + 1) % TURNS_AVERAGED;
             self.history_len = (self.history_len + 1).min(TURNS_AVERAGED);
             self.completed_turns += 1;
@@ -289,7 +305,8 @@ impl CycleMonitor {
         self.visits.clear();
     }
 
-    /// The bins of the finished turn, in the order the crank swept them.
+    /// Builds each cylinder's loop from the bins of the finished turn, in
+    /// the order the crank swept them.
     fn rebuild_last_loops(&mut self) {
         let mut seen = [false; LOOP_BINS];
         for points in &mut self.last_loops {
@@ -307,8 +324,8 @@ impl CycleMonitor {
         }
     }
 
-    /// Discards the turn in progress and the history; call when a
-    /// reservoir temperature changes.
+    /// Discards the turn in progress and the history; call when a reservoir
+    /// temperature changes.
     pub fn mark_settings_changed(&mut self) {
         self.settings_changed = true;
         self.history_len = 0;
@@ -318,36 +335,34 @@ impl CycleMonitor {
         }
     }
 
-    /// Turns completed and recorded since the fill or the last settings
-    /// change.
+    /// Turns recorded since the fill.
     pub fn completed_turns(&self) -> u64 {
         self.completed_turns
     }
 
-    /// The most recent turn, if any.
-    #[cfg(test)]
-    pub fn last_turn(&self) -> Option<TurnSummary> {
-        (self.history_len > 0)
-            .then(|| self.history[(self.history_next + TURNS_AVERAGED - 1) % TURNS_AVERAGED])
-    }
-
-    /// Up to `TURNS_AVERAGED` most recent turns combined (not yet divided;
-    /// see `TurnSummary::per_turn`).
+    /// Up to `TURNS_AVERAGED` most recent turns combined, not yet divided
+    /// (see `TurnSummary::per_turn`).
     pub fn recent(&self) -> Option<TurnSummary> {
         self.history[..self.history_len]
             .iter()
             .copied()
-            .reduce(TurnSummary::combined)
+            .reduce(|a, b| TurnSummary {
+                turns: a.turns + b.turns,
+                change: a.change.zip(b.change, |a, b| a + b),
+                duration: a.duration + b.duration,
+                ..a
+            })
     }
 
-    /// One cylinder's pressure-volume loop for the most recent turn, in
+    /// The pressure-volume loop of `cylinder` for the most recent turn, in
     /// sweep order; empty before the first turn.
     pub fn last_loop(&self, cylinder: usize) -> &[LoopPoint] {
         &self.last_loops[cylinder]
     }
 
-    /// One cylinder's points for the turn in progress, in sweep order,
-    /// leaving out the bin still being filled; the last point is the most
+    /// The points of `cylinder` for the turn in progress, in sweep order.
+    ///
+    /// The bin still being filled is left out, so the last point is the most
     /// recent complete reading.
     pub fn current_trace(&self, cylinder: usize) -> impl Iterator<Item = LoopPoint> + '_ {
         let complete = self.visits.len().saturating_sub(1);

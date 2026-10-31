@@ -16,55 +16,53 @@ use std::f32::consts::{
 
 use macroquad::models::{
     Mesh,
-    Vertex,
-    draw_mesh, //
+    Vertex, //
 };
 use macroquad::prelude::{
     Camera3D,
     Color,
-    Comparison,
     Material,
-    MaterialParams,
-    PipelineParams,
-    ShaderSource,
-    UniformDesc,
     UniformType,
     Vec2,
     Vec3,
     Vec4,
-    gl_use_default_material,
-    gl_use_material,
-    load_material,
     vec3, //
 };
 
 use super::{
     DRAW_CALL_INDEX_CAPACITY,
     DRAW_CALL_VERTEX_CAPACITY,
+    draw_lit,
+    load_lit,
     mix_color, //
 };
 use crate::sim::geometry::ChamberGeometry;
 
-/// Steel around each bore beyond its radius, and under the floors.
+/// Steel around each bore beyond its radius.
 pub const WALL_THICKNESS: f32 = 0.3;
+/// Steel under the floors.
 const BASE_THICKNESS: f32 = 0.3;
 /// Columns around each bore away from the opening, before the opening's
 /// own columns and the block's corners are added.
 const AROUND_SEGMENTS: usize = 96;
 /// Steps across half of the opening's rim; its whole rim has twice this.
 const RIM_STEPS: usize = 24;
-/// The window: how far its sides reach past each cylinder's axis, as a
-/// fraction of the bore radius; the metal left above and below it; and the
-/// radius of its corners.
+/// How far the window's sides reach past each cylinder's axis, as a
+/// fraction of the bore radius.
 const WINDOW_REACH: f32 = 0.82;
+/// Metal left above and below the window.
 const WINDOW_FRAME: f32 = 0.35;
+/// Radius of the window's corners.
 const WINDOW_CORNER: f32 = 1.4;
-/// Key light, from the upper front right in world space.
-/// The key light, relative to the camera: mostly from above, a little
+/// How much the key light comes from above.
+///
+/// The key light is set relative to the camera: mostly from above, a little
 /// from the camera's side and from its left, so the outside the viewer
 /// sees is always lit from any angle.
 const LIGHT_UP: f32 = 0.8;
+/// How much the key light comes from the camera's side.
 const LIGHT_TOWARD_CAMERA: f32 = 0.55;
+/// How much the key light comes from the camera's left.
 const LIGHT_LEFT: f32 = 0.35;
 /// Brightness of the surfaces inside the block (bore walls and floors,
 /// the opening) relative to the outside, which takes the light first.
@@ -72,38 +70,24 @@ const LIGHT_LEFT: f32 = 0.35;
 const INTERIOR_SHADE: u8 = 150;
 /// Triangles smaller than this (in square model units) are left out.
 const MIN_TRIANGLE_AREA: f32 = 1e-9;
+/// Points nearer than the square root of this are the same point.
+const SAME_POINT_SQUARED: f32 = 1e-10;
+/// Columns nearer in angle than this are the same column.
+const SAME_ANGLE: f32 = 1e-4;
 
-// Saturated, painted-looking colors in the style of a PS2 demo: copper on
-// the hot side, cobalt on the cold side, a neutral steel where they meet,
-// and teal for the insulated opening (the color of its old outline).
+/// Neutral steel, under the block.
+///
+/// The colors are saturated and painted-looking, in the style of a PS2
+/// demo.
 const STEEL: Color = Color::from_rgba(150, 160, 178, 255);
+/// Teal, for the insulated opening (the color of its old outline).
 const OPENING_STEEL: Color = Color::from_rgba(52, 196, 168, 255);
+/// Copper, on the hot side.
 const HOT_STEEL: Color = Color::from_rgba(232, 122, 58, 255);
+/// Cobalt, on the cold side.
 const COLD_STEEL: Color = Color::from_rgba(58, 128, 236, 255);
 
-const BLOCK_VERTEX: &str = r#"#version 100
-attribute vec3 position;
-attribute vec2 texcoord;
-attribute vec4 color0;
-attribute vec4 normal;
-
-varying lowp vec4 color;
-varying lowp vec2 uv;
-varying vec3 world;
-varying vec3 surface_normal;
-
-uniform mat4 Model;
-uniform mat4 Projection;
-
-void main() {
-    vec4 placed = Model * vec4(position, 1.0);
-    world = placed.xyz;
-    surface_normal = normal.xyz;
-    color = color0 / 255.0;
-    uv = texcoord;
-    gl_Position = Projection * placed;
-}"#;
-
+/// Fragment shader that cuts the window and lights the steel.
 const BLOCK_FRAGMENT: &str = r#"#version 100
 precision mediump float;
 
@@ -160,18 +144,24 @@ void main() {
 pub struct BlockShape {
     /// Distance from the middle of the shared wall to each bore's axis.
     pub offset: f32,
+    /// Radius of each bore.
     pub bore: f32,
     /// Radius of the block's rounded ends around each axis.
     pub outer: f32,
+    /// Height of the bores' floors.
     pub floor: f32,
+    /// Height of the block's top.
     pub top: f32,
     /// Height of the block's underside.
     pub base: f32,
+    /// Radius of the opening between the bores.
     pub opening: f32,
+    /// Height of the opening's axis.
     pub opening_y: f32,
 }
 
 impl BlockShape {
+    /// The block around the chamber of `geometry`.
     pub fn new(geometry: ChamberGeometry) -> Self {
         Self {
             offset: geometry.cylinder_offset,
@@ -216,10 +206,12 @@ impl BlockShape {
 struct Column {
     /// Angle around the axis, from +x toward +z.
     angle: f32,
-    /// The wall below the opening (or below the middle, away from it) runs
-    /// from the floor up to `lower`; the wall above it from `upper` to the
-    /// top. Away from the opening, both points are the same.
+    /// Top of the wall below the opening, or below the middle away from
+    /// it, which runs up from the floor.
     lower: Vec3,
+    /// Bottom of the wall above the opening, which runs up to the top.
+    ///
+    /// Away from the opening, it is the same point as `lower`.
     upper: Vec3,
 }
 
@@ -228,45 +220,37 @@ struct Column {
 /// the halves (x = 0).
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Rim {
+    /// The rounded end.
     Round,
+    /// The front or back face.
     Face,
+    /// The plane between the halves.
     Middle,
 }
 
 /// Builds the meshes once and draws them with the cutting shader.
 pub struct EngineBlock {
+    /// The block's dimensions.
     shape: BlockShape,
+    /// The whole block.
     mesh: Mesh,
+    /// The cutting shader.
     material: Material,
 }
 
 impl EngineBlock {
-    /// Builds the block for `geometry`. Returns `None` if the shader cannot
-    /// be built, so the caller can draw the plain frames instead.
+    /// Builds the block for `geometry`.
+    ///
+    /// Returns `None` if the shader cannot be built, so the caller can
+    /// draw the plain frames instead.
     pub fn new(geometry: ChamberGeometry) -> Option<Self> {
         let shape = BlockShape::new(geometry);
-        let material = load_material(
-            ShaderSource::Glsl {
-                vertex: BLOCK_VERTEX,
-                fragment: BLOCK_FRAGMENT,
-            },
-            MaterialParams {
-                pipeline_params: PipelineParams {
-                    depth_write: true,
-                    depth_test: Comparison::LessOrEqual,
-                    ..Default::default()
-                },
-                uniforms: vec![
-                    UniformDesc::new("Eye", UniformType::Float3),
-                    UniformDesc::new("CutNormal", UniformType::Float3),
-                    UniformDesc::new("Window", UniformType::Float4),
-                    UniformDesc::new("Offset", UniformType::Float1),
-                    UniformDesc::new("Light", UniformType::Float3),
-                ],
-                ..Default::default()
-            },
-        )
-        .ok()?;
+        let window = [
+            ("CutNormal", UniformType::Float3),
+            ("Window", UniformType::Float4),
+            ("Offset", UniformType::Float1),
+        ];
+        let material = load_lit(BLOCK_FRAGMENT, &window)?;
         Some(Self {
             shape,
             mesh: block_mesh(shape),
@@ -277,17 +261,13 @@ impl EngineBlock {
     /// Draws the block with its window cut toward `camera`.
     pub fn draw(&self, camera: &Camera3D) {
         let [half_width, middle, half_height, corner] = self.shape.window();
-        self.material.set_uniform("Eye", camera.position);
+        let window = Vec4::new(half_width, middle, half_height, corner);
         self.material
             .set_uniform("CutNormal", cut_normal(camera.position));
-        self.material
-            .set_uniform("Window", Vec4::new(half_width, middle, half_height, corner));
+        self.material.set_uniform("Window", window);
         self.material.set_uniform("Offset", self.shape.offset);
-        self.material
-            .set_uniform("Light", key_light(camera.position));
-        gl_use_material(&self.material);
-        draw_mesh(&self.mesh);
-        gl_use_default_material();
+        let light = key_light(camera.position);
+        draw_lit([&self.mesh], Some(&self.material), camera, light);
     }
 }
 
@@ -354,7 +334,7 @@ fn hot_columns(shape: BlockShape) -> Vec<Column> {
         });
     }
     columns.sort_by(|a, b| a.angle.total_cmp(&b.angle));
-    columns.dedup_by(|a, b| (a.angle - b.angle).abs() < 1e-4);
+    columns.dedup_by(|a, b| (a.angle - b.angle).abs() < SAME_ANGLE);
     columns
 }
 
@@ -400,11 +380,14 @@ fn mirror(point: Vec3) -> Vec3 {
 /// Collects triangles with per-vertex normals and colors, leaving out
 /// slivers.
 struct Builder {
+    /// Every corner, with its normal and color.
     vertices: Vec<Vertex>,
+    /// Triangles, three corners each.
     indices: Vec<u16>,
 }
 
 impl Builder {
+    /// Adds a corner and returns its index.
     fn vertex(&mut self, position: Vec3, normal: Vec3, color: Color) -> u16 {
         let mut vertex = Vertex::new2(position, Vec2::ZERO, color);
         vertex.normal = Vec4::new(normal.x, normal.y, normal.z, 0.0);
@@ -412,6 +395,7 @@ impl Builder {
         (self.vertices.len() - 1) as u16
     }
 
+    /// Adds a triangle unless it is a sliver.
     fn triangle(&mut self, a: u16, b: u16, c: u16) {
         let [pa, pb, pc] = [a, b, c].map(|index| self.vertices[index as usize].position);
         if (pb - pa).cross(pc - pa).length() / 2.0 > MIN_TRIANGLE_AREA {
@@ -419,20 +403,19 @@ impl Builder {
         }
     }
 
-    /// A quad with corners in order around it.
-    fn quad(&mut self, corners: [(Vec3, Vec3, Color); 4]) {
-        let [a, b, c, d] =
-            corners.map(|(position, normal, color)| self.vertex(position, normal, color));
+    /// Adds a quad with corners in order around it.
+    fn quad(&mut self, corners: [Vec3; 4], normals: [Vec3; 4], colors: [Color; 4]) {
+        let [a, b, c, d] = [0, 1, 2, 3].map(|i| self.vertex(corners[i], normals[i], colors[i]));
         self.triangle(a, b, c);
         self.triangle(a, c, d);
     }
 }
 
-/// Steel tinted by side: warm on the hot side, cool on the cold side,
-/// blending across the shared wall.
-fn side_steel(x: f32, shape: BlockShape) -> Color {
+/// Steel tinted by the side of `point`: warm on the hot side, cool on the
+/// cold side, blending across the shared wall.
+fn side_steel(point: Vec3, shape: BlockShape) -> Color {
     let wall = shape.offset - shape.bore;
-    let t = ((x + wall) / (2.0 * wall)).clamp(0.0, 1.0);
+    let t = ((point.x + wall) / (2.0 * wall)).clamp(0.0, 1.0);
     mix_color(HOT_STEEL, COLD_STEEL, t * t * (3.0 - 2.0 * t))
 }
 
@@ -455,47 +438,30 @@ fn block_mesh(shape: BlockShape) -> Mesh {
             let next = &hot[(index + 1) % hot.len()];
             let [lower, upper, next_lower, next_upper] =
                 [column.lower, column.upper, next.lower, next.upper].map(place);
-            let at = |point: Vec3, y: f32| vec3(point.x, y, point.z);
+            let on_floor = |point: Vec3| vec3(point.x, shape.floor, point.z);
+            let on_top = |point: Vec3| vec3(point.x, shape.top, point.z);
             // Bore wall below and above the opening (or the middle).
-            builder.quad([
-                (at(lower, shape.floor), toward_axis(lower), bore_color),
-                (
-                    at(next_lower, shape.floor),
-                    toward_axis(next_lower),
-                    bore_color,
-                ),
-                (next_lower, toward_axis(next_lower), bore_color),
-                (lower, toward_axis(lower), bore_color),
-            ]);
-            builder.quad([
-                (upper, toward_axis(upper), bore_color),
-                (next_upper, toward_axis(next_upper), bore_color),
-                (
-                    at(next_upper, shape.top),
-                    toward_axis(next_upper),
-                    bore_color,
-                ),
-                (at(upper, shape.top), toward_axis(upper), bore_color),
-            ]);
+            let corners = [on_floor(lower), on_floor(next_lower), next_lower, lower];
+            let normals = [lower, next_lower, next_lower, lower].map(toward_axis);
+            builder.quad(corners, normals, [bore_color; 4]);
+            let corners = [upper, next_upper, on_top(next_upper), on_top(upper)];
+            let normals = [upper, next_upper, next_upper, upper].map(toward_axis);
+            builder.quad(corners, normals, [bore_color; 4]);
             // Bore floor: a fan from the axis.
-            let center = builder.vertex(at(axis, shape.floor), Vec3::Y, bore_color);
-            let a = builder.vertex(at(lower, shape.floor), Vec3::Y, bore_color);
-            let b = builder.vertex(at(next_lower, shape.floor), Vec3::Y, bore_color);
+            let [center, a, b] =
+                [axis, lower, next_lower].map(|p| builder.vertex(on_floor(p), Vec3::Y, bore_color));
             builder.triangle(center, a, b);
             // Top face, from the bore's rim out to the block's edge.
             let (edge, _) = hot_top_edge(shape, column.upper);
             let (next_edge, _) = hot_top_edge(shape, next.upper);
-            let (edge, next_edge) = (place(edge), place(next_edge));
-            builder.quad([
-                (at(upper, shape.top), Vec3::Y, side_steel(upper.x, shape)),
-                (
-                    at(next_upper, shape.top),
-                    Vec3::Y,
-                    side_steel(next_upper.x, shape),
-                ),
-                (next_edge, Vec3::Y, side_steel(next_edge.x, shape)),
-                (edge, Vec3::Y, side_steel(edge.x, shape)),
-            ]);
+            let corners = [
+                on_top(upper),
+                on_top(next_upper),
+                place(next_edge),
+                place(edge),
+            ];
+            let colors = corners.map(|corner| side_steel(corner, shape));
+            builder.quad(corners, [Vec3::Y; 4], colors);
         }
     }
 
@@ -506,14 +472,11 @@ fn block_mesh(shape: BlockShape) -> Mesh {
     for (index, &(point, normal)) in outline.iter().enumerate() {
         let (next, next_normal) = outline[(index + 1) % outline.len()];
         let low = |p: Vec3| vec3(p.x, shape.base, p.z);
-        builder.quad([
-            (low(point), normal, side_steel(point.x, shape)),
-            (low(next), next_normal, side_steel(next.x, shape)),
-            (next, next_normal, side_steel(next.x, shape)),
-            (point, normal, side_steel(point.x, shape)),
-        ]);
-        let a = builder.vertex(low(point), -Vec3::Y, side_steel(point.x, shape));
-        let b = builder.vertex(low(next), -Vec3::Y, side_steel(next.x, shape));
+        let corners = [low(point), low(next), next, point];
+        let colors = corners.map(|corner| side_steel(corner, shape));
+        builder.quad(corners, [normal, next_normal, next_normal, normal], colors);
+        let a = builder.vertex(low(point), -Vec3::Y, colors[0]);
+        let b = builder.vertex(low(next), -Vec3::Y, colors[1]);
         builder.triangle(center, b, a);
     }
 
@@ -525,28 +488,10 @@ fn block_mesh(shape: BlockShape) -> Mesh {
             let (sin, cos) = angle.sin_cos();
             vec3(0.0, -cos, -sin)
         };
-        builder.quad([
-            (
-                shape.rim_point(-1.0, angle),
-                inward(angle),
-                interior(OPENING_STEEL),
-            ),
-            (
-                shape.rim_point(1.0, angle),
-                inward(angle),
-                interior(OPENING_STEEL),
-            ),
-            (
-                shape.rim_point(1.0, next),
-                inward(next),
-                interior(OPENING_STEEL),
-            ),
-            (
-                shape.rim_point(-1.0, next),
-                inward(next),
-                interior(OPENING_STEEL),
-            ),
-        ]);
+        let ends = [(-1.0, angle), (1.0, angle), (1.0, next), (-1.0, next)];
+        let corners = ends.map(|(side, psi)| shape.rim_point(side, psi));
+        let normals = ends.map(|(_, psi)| inward(psi));
+        builder.quad(corners, normals, [interior(OPENING_STEEL); 4]);
     }
 
     assert!(builder.vertices.len() < DRAW_CALL_VERTEX_CAPACITY);
@@ -594,20 +539,18 @@ fn outline(shape: BlockShape, hot: &[Column]) -> Vec<(Vec3, Vec3)> {
         .rev()
         .map(|&(point, normal)| (mirror(point), mirror(normal)))
         .collect();
+    let same = |a: Vec3, b: Vec3| a.distance_squared(b) <= SAME_POINT_SQUARED;
     let mut loop_points: Vec<(Vec3, Vec3)> = Vec::new();
     for item in hot_half.into_iter().chain(cold_half) {
         if loop_points
             .last()
-            .is_none_or(|(last, _)| last.distance_squared(item.0) > 1e-10)
+            .is_none_or(|&(last, _)| !same(last, item.0))
         {
             loop_points.push(item);
         }
     }
-    if loop_points.len() > 1
-        && loop_points[0]
-            .0
-            .distance_squared(loop_points[loop_points.len() - 1].0)
-            <= 1e-10
+    if let [first, .., last] = loop_points.as_slice()
+        && same(first.0, last.0)
     {
         loop_points.pop();
     }

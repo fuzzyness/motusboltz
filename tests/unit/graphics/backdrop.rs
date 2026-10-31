@@ -3,6 +3,7 @@
 use super::*;
 use crate::sim::geometry::DEFAULT_GEOMETRY;
 
+/// Width over height of the test window.
 const ASPECT: f32 = 1.6;
 
 /// The matrix Macroquad's `Camera3D` makes (its own method needs a window

@@ -1,27 +1,35 @@
-//! Frame rate and physics time, averaged over short windows so they can be
-//! read on a machine whose frame rate swings, and when the "physics time
-//! limited" warning shows. Both are drawn in the corner of the scene, so
-//! they show in every panel tab and with the panel hidden.
+//! Frame rate and physics time, and when the "physics time limited"
+//! warning shows.
+//!
+//! The readings are averaged over short windows so they can be read on a
+//! machine whose frame rate swings. Both are drawn in the corner of the
+//! scene, so they show in every panel tab and with the panel hidden.
 
 use std::collections::VecDeque;
 
 /// Seconds of frames averaged into each reading.
 const WINDOW_SECONDS: f64 = 0.5;
 /// Seconds the warning stays up after the last frame that dropped time.
-pub const LIMITED_HOLD_SECONDS: f64 = 3.0;
-/// The warning shows only after this many frames dropped time within
-/// `LIMITED_WINDOW_SECONDS`. One slow frame (a browser hiccup, a tab
-/// switch) drops time once and then the physics keeps up; a computer that
-/// cannot keep up drops time on frame after frame.
+const LIMITED_HOLD_SECONDS: f64 = 3.0;
+/// Frames that must drop time within `LIMITED_WINDOW_SECONDS` before the
+/// warning shows.
+///
+/// One slow frame (a browser hiccup, a tab switch) drops time once and then
+/// the physics keeps up; a computer that cannot keep up drops time on frame
+/// after frame.
 const LIMITED_MIN_FRAMES: usize = 3;
+/// Seconds within which `LIMITED_MIN_FRAMES` drops raise the warning.
 const LIMITED_WINDOW_SECONDS: f64 = 1.0;
+/// Milliseconds in a second.
 const MILLISECONDS_PER_SECOND: f64 = 1_000.0;
 
+/// Warning shown while the physics cannot keep up.
 pub const LIMITED_TEXT: &str = "Physics time limited: computer too slow";
 
 /// Averages over one finished window.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Reading {
+    /// Frames per second.
     fps: f64,
     /// Mean physics time per frame, in milliseconds.
     physics_ms: f64,
@@ -29,18 +37,26 @@ struct Reading {
     worst_ms: f64,
 }
 
+/// The frame-rate readout and the warning.
 pub struct FrameStats {
+    /// Wall time the current window started, once a frame has been seen.
     window_start: Option<f64>,
+    /// Frames in the current window.
     frames: u32,
+    /// Physics time in the current window, in seconds.
     physics_seconds: f64,
+    /// Longest physics time of a frame in the current window, in seconds.
     worst_seconds: f64,
+    /// Averages over the last finished window.
     reading: Option<Reading>,
-    /// Times of the recent frames that dropped time, within the window.
+    /// Times of the last `LIMITED_MIN_FRAMES` frames that dropped time.
     recent_drops: VecDeque<f64>,
+    /// Wall time until which the warning stays up.
     limited_until: f64,
 }
 
 impl FrameStats {
+    /// A readout with nothing recorded.
     pub fn new() -> Self {
         Self {
             window_start: None,
@@ -53,7 +69,7 @@ impl FrameStats {
         }
     }
 
-    /// Records one frame that ended at wall time `now` (seconds), spent
+    /// Records one frame that ended at wall time `now`, spent
     /// `physics_seconds` stepping the physics, and dropped time if `limited`.
     pub fn record(&mut self, now: f64, physics_seconds: f64, limited: bool) {
         if limited {
@@ -93,23 +109,19 @@ impl FrameStats {
         })
     }
 
-    /// Notes a frame that dropped time. The warning starts once enough
-    /// drops fall within the window; while it is up, every drop restarts
-    /// the hold, so a swinging frame rate keeps it up steadily instead of
-    /// flashing it.
+    /// Notes a frame that dropped time at wall time `now`.
+    ///
+    /// The warning starts once enough drops fall within the window. While
+    /// it is up, every drop restarts the hold, so a swinging frame rate
+    /// keeps it up steadily instead of flashing it.
     fn record_drop(&mut self, now: f64) {
-        while self
-            .recent_drops
-            .front()
-            .is_some_and(|&time| now - time > LIMITED_WINDOW_SECONDS)
-        {
-            self.recent_drops.pop_front();
-        }
         if self.recent_drops.len() == LIMITED_MIN_FRAMES {
             self.recent_drops.pop_front();
         }
         self.recent_drops.push_back(now);
-        if self.recent_drops.len() >= LIMITED_MIN_FRAMES || self.limited(now) {
+        let repeated = self.recent_drops.len() == LIMITED_MIN_FRAMES
+            && now - self.recent_drops[0] <= LIMITED_WINDOW_SECONDS;
+        if repeated || self.limited(now) {
             self.limited_until = now + LIMITED_HOLD_SECONDS;
         }
     }

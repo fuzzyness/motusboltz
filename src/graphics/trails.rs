@@ -26,20 +26,24 @@ use crate::sim::tracers::{
 
 /// Ribbon width, in model units (a particle is 0.26 across).
 const TRAIL_WIDTH: f32 = 0.1;
+/// Color of the newest end of a trail.
+///
 /// Bright yellow stands out against the muted particles and against both
 /// the sky and the dark grid.
 const TRAIL_COLOR: Color = Color::from_rgba(255, 224, 40, 255);
-/// Opacity of the newest end of a trail.
-const TRAIL_OPACITY: f32 = 1.0;
+/// Corners of one ribbon quad.
 const VERTICES_PER_SEGMENT: usize = 4;
+/// Indices of one ribbon quad's two triangles.
 const INDICES_PER_SEGMENT: usize = 6;
 
 /// The trail mesh, rebuilt every frame in reused buffers.
 pub struct TrailRenderer {
+    /// The ribbons.
     mesh: Mesh,
 }
 
 impl TrailRenderer {
+    /// A renderer with nothing built yet.
     pub fn new() -> Self {
         Self {
             mesh: Mesh {
@@ -59,6 +63,7 @@ impl TrailRenderer {
         }
     }
 
+    /// Rebuilds the ribbons, turned to face `eye`.
     fn build(&mut self, tracers: &Tracers, particles: &[Particle], eye: Vec3) {
         self.mesh.vertices.clear();
         self.mesh.indices.clear();
@@ -68,18 +73,18 @@ impl TrailRenderer {
                 time: now,
                 position: particles[index].position,
             };
-            let mut previous: Option<PathPoint> = None;
+            let mut previous = None;
             for point in points.iter().copied().chain([current]) {
-                if let Some(start) = previous {
+                if let Some(start) = previous.replace(point) {
                     self.add_segment(start, point, now, eye);
                 }
-                previous = Some(point);
             }
         }
     }
 
-    /// One ribbon quad from `start` to `end`, turned to face `eye`, with
-    /// each end's opacity falling with its age.
+    /// Adds one ribbon quad from `start` to `end`, turned to face `eye`.
+    ///
+    /// Each end's opacity falls with its age at time `now`.
     fn add_segment(&mut self, start: PathPoint, end: PathPoint, now: f64, eye: Vec3) {
         let along = end.position - start.position;
         let middle = (start.position + end.position) / 2.0;
@@ -93,18 +98,16 @@ impl TrailRenderer {
         let color_at = |time: f64| {
             let freshness = (1.0 - (now - time) / TRAIL_SECONDS).clamp(0.0, 1.0) as f32;
             Color {
-                a: TRAIL_OPACITY * freshness,
+                a: freshness,
                 ..TRAIL_COLOR
             }
         };
         let first = self.mesh.vertices.len() as u16;
-        for (position, time) in [(start.position, start.time), (end.position, end.time)] {
+        for point in [start, end] {
             for offset in [side, -side] {
-                self.mesh.vertices.push(Vertex::new2(
-                    position + offset,
-                    Vec2::ZERO,
-                    color_at(time),
-                ));
+                let vertex =
+                    Vertex::new2(point.position + offset, Vec2::ZERO, color_at(point.time));
+                self.mesh.vertices.push(vertex);
             }
         }
         self.mesh

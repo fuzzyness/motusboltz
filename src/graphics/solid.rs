@@ -7,52 +7,18 @@
 //! light as the engine block, adds a highlight that tightens with polish,
 //! and reflects a stylized sky in the metal, as PS2 demos did with chrome.
 
-use macroquad::models::{
-    Mesh,
-    Vertex,
-    draw_mesh, //
-};
+use macroquad::models::Vertex;
 use macroquad::prelude::{
-    Camera3D,
     Color,
-    Comparison,
     Material,
-    MaterialParams,
-    PipelineParams,
-    ShaderSource,
-    UniformDesc,
-    UniformType,
     Vec2,
     Vec3,
-    Vec4,
-    gl_use_default_material,
-    gl_use_material,
-    load_material, //
+    Vec4, //
 };
 
-const METAL_VERTEX: &str = r#"#version 100
-attribute vec3 position;
-attribute vec2 texcoord;
-attribute vec4 color0;
-attribute vec4 normal;
+use super::load_lit;
 
-varying lowp vec4 color;
-varying lowp vec2 uv;
-varying vec3 world;
-varying vec3 surface_normal;
-
-uniform mat4 Model;
-uniform mat4 Projection;
-
-void main() {
-    vec4 placed = Model * vec4(position, 1.0);
-    world = placed.xyz;
-    surface_normal = normal.xyz;
-    color = color0 / 255.0;
-    uv = texcoord;
-    gl_Position = Projection * placed;
-}"#;
-
+/// Fragment shader for lit metal.
 const METAL_FRAGMENT: &str = r#"#version 100
 precision mediump float;
 
@@ -92,58 +58,28 @@ void main() {
 
 /// The lit-metal material, or `None` if its shader cannot be built.
 pub fn load_metal() -> Option<Material> {
-    load_material(
-        ShaderSource::Glsl {
-            vertex: METAL_VERTEX,
-            fragment: METAL_FRAGMENT,
-        },
-        MaterialParams {
-            pipeline_params: PipelineParams {
-                depth_write: true,
-                depth_test: Comparison::LessOrEqual,
-                ..Default::default()
-            },
-            uniforms: vec![
-                UniformDesc::new("Eye", UniformType::Float3),
-                UniformDesc::new("Light", UniformType::Float3),
-            ],
-            ..Default::default()
-        },
-    )
-    .ok()
-}
-
-/// Draws `mesh` as lit metal seen from `camera`, lit from `light`; or, with
-/// no material, in its plain colors.
-pub fn draw_metal(mesh: &Mesh, material: Option<&Material>, camera: &Camera3D, light: Vec3) {
-    let Some(material) = material else {
-        draw_mesh(mesh);
-        return;
-    };
-    material.set_uniform("Eye", camera.position);
-    material.set_uniform("Light", light);
-    gl_use_material(material);
-    draw_mesh(mesh);
-    gl_use_default_material();
+    load_lit(METAL_FRAGMENT, &[])
 }
 
 /// A color and how polished the surface is (see the top of this file).
 pub const fn finish(red: u8, green: u8, blue: u8, polish: f32) -> Color {
-    Color::new(
-        red as f32 / 255.0,
-        green as f32 / 255.0,
-        blue as f32 / 255.0,
-        polish,
-    )
+    Color {
+        a: polish,
+        ..Color::from_rgba(red, green, blue, u8::MAX)
+    }
 }
 
-/// Directions for building a part: `axis` and two directions square to
-/// it and to each other.
+/// Directions for building a part: `axis` and two directions square to it
+/// and to each other.
 #[derive(Clone, Copy, Debug)]
 pub struct Frame {
+    /// Where the part starts.
     pub origin: Vec3,
+    /// The part's axis, a unit vector.
     pub axis: Vec3,
+    /// A unit vector square to the axis.
     pub u: Vec3,
+    /// A unit vector square to the axis and to `u`.
     pub v: Vec3,
 }
 
@@ -166,21 +102,25 @@ impl Frame {
         self.origin + self.axis * along + self.radial(angle) * radius
     }
 
+    /// The unit vector square to the axis toward `angle` around it.
     fn radial(self, angle: f32) -> Vec3 {
         let (sin, cos) = angle.sin_cos();
         self.u * cos + self.v * sin
     }
 }
 
-/// One point of a turned part's outline: its distance from the axis, its
-/// place along the axis, and its color.
+/// One point of a turned part's outline.
 #[derive(Clone, Copy, Debug)]
 pub struct Turn {
+    /// Distance from the axis.
     pub radius: f32,
+    /// Place along the axis.
     pub along: f32,
+    /// Color and polish.
     pub color: Color,
 }
 
+/// The outline point `radius` from the axis, `along` it, in `color`.
 pub const fn turn(radius: f32, along: f32, color: Color) -> Turn {
     Turn {
         radius,
@@ -191,11 +131,14 @@ pub const fn turn(radius: f32, along: f32, color: Color) -> Turn {
 
 /// Triangles with per-vertex normals and finishes, for a mesh.
 pub struct Solid {
+    /// Every corner, with its normal and finish.
     pub vertices: Vec<Vertex>,
+    /// Triangles, three corners each.
     pub indices: Vec<u16>,
 }
 
 impl Solid {
+    /// An empty solid.
     pub fn new() -> Self {
         Self {
             vertices: Vec::new(),
@@ -203,6 +146,7 @@ impl Solid {
         }
     }
 
+    /// Adds a corner and returns its index.
     fn vertex(&mut self, position: Vec3, normal: Vec3, color: Color) -> u16 {
         let mut vertex = Vertex::new2(position, Vec2::ZERO, color);
         vertex.normal = Vec4::new(normal.x, normal.y, normal.z, 0.0);
@@ -210,15 +154,17 @@ impl Solid {
         (self.vertices.len() - 1) as u16
     }
 
-    /// A four-sided face with corners in order around it.
+    /// Adds a four-sided face with corners in order around it.
     fn quad(&mut self, corners: [Vec3; 4], normals: [Vec3; 4], colors: [Color; 4]) {
         let [a, b, c, d] = [0, 1, 2, 3].map(|i| self.vertex(corners[i], normals[i], colors[i]));
         self.indices.extend([a, b, c, a, c, d]);
     }
 
-    /// A part turned about `frame.axis`: each pair of outline points sweeps
-    /// a band around the axis, shaded smoothly around it and evenly along
-    /// it, so edges between bands stay crisp.
+    /// Adds a part turned about `frame.axis`, in `segments` around it.
+    ///
+    /// Each pair of outline points sweeps a band around the axis, shaded
+    /// smoothly around it and evenly along it, so edges between bands stay
+    /// crisp.
     pub fn lathe(&mut self, frame: Frame, outline: &[Turn], segments: usize) {
         for pair in outline.windows(2) {
             let (start, end) = (pair[0], pair[1]);
@@ -235,40 +181,36 @@ impl Solid {
             for step in 0..=segments {
                 let angle = std::f32::consts::TAU * step as f32 / segments as f32;
                 let normal = frame.radial(angle) * out + frame.axis * ahead;
-                self.vertex(
-                    frame.point(start.along, start.radius, angle),
-                    normal,
-                    start.color,
-                );
-                self.vertex(frame.point(end.along, end.radius, angle), normal, end.color);
+                for point in [start, end] {
+                    let position = frame.point(point.along, point.radius, angle);
+                    self.vertex(position, normal, point.color);
+                }
             }
             for step in 0..segments as u16 {
                 let (low, high) = (first + 2 * step, first + 2 * step + 1);
                 let (next_low, next_high) = (low + 2, high + 2);
-                self.indices
-                    .extend([low, next_low, next_high, low, next_high, high]);
+                let band = [low, next_low, next_high, low, next_high, high];
+                self.indices.extend(band);
             }
         }
     }
 
-    /// A closed round bar from `start` to `end`.
+    /// Adds a closed round bar from `start` to `end`.
     pub fn cylinder(&mut self, start: Vec3, end: Vec3, radius: f32, segments: usize, color: Color) {
         let length = start.distance(end);
-        self.lathe(
-            Frame::along(start, end - start),
-            &[
-                turn(0.0, 0.0, color),
-                turn(radius, 0.0, color),
-                turn(radius, length, color),
-                turn(0.0, length, color),
-            ],
-            segments,
-        );
+        let outline = [
+            turn(0.0, 0.0, color),
+            turn(radius, 0.0, color),
+            turn(radius, length, color),
+            turn(0.0, length, color),
+        ];
+        self.lathe(Frame::along(start, end - start), &outline, segments);
     }
 
-    /// A closed bar of rectangular section from `start` to `end`, `across`
-    /// one way (half-widths at each end) and `thick` the other (half the
-    /// thickness). `side` sets which way is across.
+    /// Adds a closed bar of rectangular section from `start` to `end`.
+    ///
+    /// The bar is `across` one way (half-widths at each end) and `thick`
+    /// the other (half the thickness). `side` sets which way is across.
     pub fn bar(
         &mut self,
         start: Vec3,
@@ -301,8 +243,8 @@ impl Solid {
         self.quad(high, [axis; 4], [color; 4]);
     }
 
-    /// A flat plate: the convex `outline` (in `frame.u`, `frame.v`) raised
-    /// `thickness` along `frame.axis` from `frame.origin`.
+    /// Adds a flat plate: the convex `outline` (in `frame.u`, `frame.v`)
+    /// raised `thickness` along `frame.axis` from `frame.origin`.
     pub fn plate(&mut self, frame: Frame, outline: &[Vec2], thickness: f32, color: Color) {
         let place = |point: Vec2, along: f32| {
             frame.origin + frame.u * point.x + frame.v * point.y + frame.axis * along
@@ -316,8 +258,8 @@ impl Solid {
             }
             let count = outline.len() as u16;
             for index in 0..count {
-                self.indices
-                    .extend([center, first + index, first + (index + 1) % count]);
+                let next = first + (index + 1) % count;
+                self.indices.extend([center, first + index, next]);
             }
         }
         for (index, &point) in outline.iter().enumerate() {
@@ -325,16 +267,13 @@ impl Solid {
             let edge = next - point;
             let out = Vec2::new(edge.y, -edge.x).normalize();
             let normal = frame.u * out.x + frame.v * out.y;
-            self.quad(
-                [
-                    place(point, 0.0),
-                    place(next, 0.0),
-                    place(next, thickness),
-                    place(point, thickness),
-                ],
-                [normal; 4],
-                [color; 4],
-            );
+            let corners = [
+                place(point, 0.0),
+                place(next, 0.0),
+                place(next, thickness),
+                place(point, thickness),
+            ];
+            self.quad(corners, [normal; 4], [color; 4]);
         }
     }
 }

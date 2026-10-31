@@ -9,18 +9,18 @@ use macroquad::prelude::{
 
 use crate::sim::units::METERS_PER_UNIT;
 
-/// Particle centers are pushed back this fraction of the grid size inside
-/// a wall, so floating-point rounding cannot leave them just outside.
+/// How far inside a wall, as a share of the grid's side, particle centers
+/// are put back, so rounding cannot leave them just outside.
 pub const WALL_PROJECTION_MARGIN: f32 = 16.0 * f32::EPSILON;
 
 /// Linear scale of the default chamber geometry.
-pub const DEFAULT_CHAMBER_SCALE: f32 = 1.8;
+const DEFAULT_CHAMBER_SCALE: f32 = 1.8;
 /// Bore radius per unit of chamber scale.
 const CYLINDER_RADIUS_PER_SCALE: f32 = 1.4;
 /// Thickness of the wall between the two bores, per unit of chamber scale.
 const SHARED_WALL_PER_SCALE: f32 = 0.28;
 /// Cylinder height per unit of chamber scale: room for the full stroke
-/// above the opening (see `pistons.rs`).
+/// above the opening (see `pistons`).
 const CYLINDER_HEIGHT_PER_SCALE: f32 = 4.62;
 /// Opening radius per unit of chamber scale. Gas sloshing between the
 /// cylinders limits how fast the engine turns, so the opening is wide: with
@@ -28,7 +28,7 @@ const CYLINDER_HEIGHT_PER_SCALE: f32 = 4.62;
 /// settled at 16.5 s per turn against 23.7 s for 0.5 (and 26.5 s for the
 /// U passage below the floors used before v0.6).
 const PASSAGE_RADIUS_PER_SCALE: f32 = 0.9;
-/// Number of intervals in the Simpson's rule sum for the passage volume.
+/// Intervals in the Simpson's rule sum for the passage volume.
 const VOLUME_INTERVALS: usize = 512;
 
 /// Dimensions of two matching cylinders and the opening between them.
@@ -36,17 +36,21 @@ const VOLUME_INTERVALS: usize = 512;
 pub struct ChamberGeometry {
     /// Distance from the middle of the shared wall to each cylinder's axis.
     pub cylinder_offset: f32,
+    /// Radius of each bore.
     pub cylinder_radius: f32,
+    /// Height of each bore, from its floor to the top of the stroke.
     pub cylinder_height: f32,
-    /// Radius of the straight, round opening through the shared wall. Its
-    /// axis runs between the cylinder axes, one radius above the floors, so
-    /// its lowest line is flush with them.
+    /// Radius of the straight, round opening through the shared wall.
+    ///
+    /// Its axis runs between the cylinder axes, one radius above the
+    /// floors, so its lowest line is flush with them.
     pub passage_radius: f32,
 }
 
 impl ChamberGeometry {
-    /// The default proportions at a uniform `scale`. The fields are public
-    /// so a test can change one dimension at a time.
+    /// The default proportions at a uniform `scale`.
+    ///
+    /// The fields are public so a test can change one dimension at a time.
     pub const fn scaled(scale: f32) -> Self {
         Self {
             cylinder_offset: (CYLINDER_RADIUS_PER_SCALE + SHARED_WALL_PER_SCALE / 2.0) * scale,
@@ -102,8 +106,8 @@ impl ChamberGeometry {
         self.floor() + 2.0 * self.passage_radius
     }
 
-    /// Side of the cubic collision grid, centered on the origin; large enough
-    /// to contain both cylinders.
+    /// Side of the cubic collision grid, centered on the origin, which holds
+    /// both cylinders.
     pub fn grid_side(self) -> f32 {
         (2.0 * (self.cylinder_offset + self.cylinder_radius)).max(self.cylinder_height)
     }
@@ -119,6 +123,7 @@ impl ChamberGeometry {
     }
 
     /// The opening's axis, from the hot cylinder's axis to the cold one's.
+    ///
     /// The parts of the round tube around it that lie inside the bores add
     /// nothing; the part between them is the passage.
     pub fn passage_axis(self) -> (Vec3, Vec3) {
@@ -129,11 +134,12 @@ impl ChamberGeometry {
         )
     }
 
-    /// Volume of the opening outside both bores: for each point of its
-    /// round cross section, the length between the two bore walls, summed
-    /// with Simpson's rule. With z = r sin(t), the cross section's width
-    /// 2 sqrt(r^2 - z^2) and the bore walls' distance from the axes,
-    /// sqrt(R^2 - z^2), give a smooth integrand in t.
+    /// Volume of the opening outside both bores.
+    ///
+    /// For each point of the round cross section, the length between the
+    /// two bore walls is summed with Simpson's rule. With z = r sin(t), the
+    /// cross section's width 2 sqrt(r^2 - z^2) and the bore walls' distance
+    /// from the axes, sqrt(R^2 - z^2), give a smooth integrand in t.
     pub fn passage_volume_m3(self) -> f64 {
         let r = self.passage_radius as f64;
         let bore = self.cylinder_radius as f64;

@@ -18,39 +18,49 @@ use crate::ui::input::CameraKeys;
 /// Where the camera starts, from the point it turns around, before the
 /// view's scale.
 const INITIAL_OFFSET: Vec3 = Vec3::new(8.4, 5.6, 8.4);
-/// The point the camera turns around: above the block's middle, halfway up
-/// the whole engine from the floor to the top of the flywheel, so all of it
-/// fits the first view.
+/// The point the camera turns around.
+///
+/// It is above the block's middle, halfway up the whole engine from the
+/// floor to the top of the flywheel, so all of it fits the first view.
 const ORBIT_CENTER: Vec3 = Vec3::new(0.0, 2.6, 0.0);
 
-/// The nearest and farthest distances drawn. The softened view's depth
-/// buffer has 16 bits, so the range is kept as tight as the scene allows
-/// (the camera never comes closer than `MIN_DISTANCE` times the view's
-/// scale, at least 4, to the orbit center); a far range of 10,000 with a
-/// near of 0.01 left surfaces flickering through each other.
+/// The nearest distance drawn.
+///
+/// The softened view's depth buffer has 16 bits, so the range is kept as
+/// tight as the scene allows (the camera never comes closer than
+/// `MIN_DISTANCE` times the view's scale, at least 4, to the orbit center);
+/// a far range of 10,000 with a near of 0.01 left surfaces flickering
+/// through each other.
 const NEAR: f32 = 1.0;
+/// The farthest distance drawn (see `NEAR`).
 const FAR: f32 = 400.0;
 
+/// Orbit per pixel of mouse drag, in radians.
 const ORBIT_SENSITIVITY: f32 = 0.005;
+/// How far short of straight up or down the camera stops, in radians.
 const POLE_MARGIN: f32 = 0.01;
+/// Steepest pitch, up or down.
 const MAX_PITCH: f32 = FRAC_PI_2 - POLE_MARGIN;
 
 /// Zoom per pixel of wheel scroll, as a fraction of the distance.
 const ZOOM_SENSITIVITY: f32 = 0.005;
+/// Nearest distance to the orbit center, before the view's scale.
 const MIN_DISTANCE: f32 = 4.0;
+/// Farthest distance to the orbit center, before the view's scale.
 const MAX_DISTANCE: f32 = 25.0;
 
 /// Keyboard orbit speed, in radians per second.
 const KEY_ORBIT_SPEED: f32 = 1.2;
 /// Keyboard pan speed, as a fraction of the visible height per second.
 const KEY_PAN_SPEED: f32 = 0.5;
-/// Keyboard zoom rate: the distance changes by a factor of e every this
-/// many reciprocal seconds.
+/// Keyboard zoom rate, in e-folds of the distance per second.
 const KEY_ZOOM_RATE: f32 = 0.9;
 
-/// Right-drag pans natively. In the browser a right click also opens the
-/// context menu, which swallows the button release, so the camera stayed
-/// stuck panning; there Shift+drag and Shift+WASD/arrows pan instead.
+/// Whether a right drag pans.
+///
+/// It does natively. In the browser a right click also opens the context
+/// menu, which swallows the button release, so the camera stayed stuck
+/// panning; there Shift+drag and Shift+WASD/arrows pan instead.
 const RIGHT_DRAG_PANS: bool = !cfg!(target_arch = "wasm32");
 
 /// Pointer state for one frame, read by the caller.
@@ -59,9 +69,19 @@ pub struct Pointer {
     /// False while the pointer is over the panel or a control, or a gesture
     /// that started there is still held.
     pub enabled: bool,
+    /// Whether Shift is held, which turns a left drag into a pan.
     pub shift_down: bool,
     /// Wheel scroll this frame, in pixels; positive zooms in.
     pub wheel_pixels: f32,
+}
+
+/// What a mouse drag does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Drag {
+    /// Turns the camera around the engine.
+    Orbit,
+    /// Moves the camera in its own plane.
+    Pan,
 }
 
 /// Camera that orbits the chamber while keeping its pan offset in view space.
@@ -69,17 +89,27 @@ pub struct Pointer {
 /// The orbit center stays fixed at the chamber. Panning moves the chamber in
 /// the viewport without changing the point around which the camera rotates.
 pub struct OrbitCamera {
+    /// Distance to the orbit center.
     distance: f32,
+    /// Scale of the view, which scales the distances.
     view_scale: f32,
+    /// Turn around the vertical axis, in radians.
     yaw: f32,
+    /// Angle above the horizontal, in radians.
     pitch: f32,
+    /// Pan in the camera's own plane, in world units.
     pan_offset: Vec2,
-    previous_orbit_mouse: Option<Vec2>,
-    previous_pan_mouse: Option<Vec2>,
+    /// The drag in progress and where the pointer was last frame.
+    drag: Option<(Drag, Vec2)>,
 }
 
 impl OrbitCamera {
-    /// Frames a larger or smaller chamber and preserves that view on reset.
+    /// A camera framing a chamber scaled by `view_scale`, which keeps that
+    /// framing on reset.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `view_scale` is not positive and finite.
     pub fn with_scale(view_scale: f32) -> Self {
         assert!(view_scale.is_finite() && view_scale > 0.0);
         let offset = INITIAL_OFFSET;
@@ -91,8 +121,7 @@ impl OrbitCamera {
             yaw: offset.x.atan2(offset.z),
             pitch: (offset.y / distance).asin(),
             pan_offset: Vec2::ZERO,
-            previous_orbit_mouse: None,
-            previous_pan_mouse: None,
+            drag: None,
         }
     }
 
@@ -101,35 +130,38 @@ impl OrbitCamera {
         *self = Self::with_scale(self.view_scale);
     }
 
-    /// Applies one frame of input: held camera keys over `dt` seconds, and
-    /// mouse drags and the wheel when the pointer is enabled.
+    /// Applies one frame of input.
+    ///
+    /// Held camera keys act over `dt` seconds, and mouse drags and the
+    /// wheel act when the pointer is enabled.
     pub fn update(&mut self, keys: CameraKeys, pointer: Pointer, dt: f32, view_height: f32) {
         self.apply_keys(keys, dt);
 
         // The mouse is over a control or the panel, or a gesture that
         // started there is held; drop any drag so the camera does not jump.
         if !pointer.enabled {
-            self.previous_orbit_mouse = None;
-            self.previous_pan_mouse = None;
+            self.drag = None;
             return;
         }
 
         let left_down = is_mouse_button_down(MouseButton::Left);
         let right_down = RIGHT_DRAG_PANS && is_mouse_button_down(MouseButton::Right);
-        let pan_active = right_down || (left_down && pointer.shift_down);
-        let orbit_active = left_down && !pan_active;
-        let mouse = Vec2::from(mouse_position());
-
-        if pan_active {
-            self.previous_orbit_mouse = None;
-            self.drag_pan(mouse, view_height);
-        } else if orbit_active {
-            self.previous_pan_mouse = None;
-            self.drag_orbit(mouse);
+        let drag = if right_down || (left_down && pointer.shift_down) {
+            Some(Drag::Pan)
         } else {
-            self.previous_orbit_mouse = None;
-            self.previous_pan_mouse = None;
+            left_down.then_some(Drag::Orbit)
+        };
+        let mouse = Vec2::from(mouse_position());
+        // A drag moves the camera from the second frame of the same kind of
+        // drag on.
+        if let Some((kind, previous)) = self.drag.filter(|&(kind, _)| Some(kind) == drag) {
+            let delta = mouse - previous;
+            match kind {
+                Drag::Orbit => self.orbit_by(delta),
+                Drag::Pan => self.pan_by(delta, view_height),
+            }
         }
+        self.drag = drag.map(|kind| (kind, mouse));
 
         // Zoom only when no button is held: some trackpads report scroll
         // events during drag gestures.
@@ -148,25 +180,19 @@ impl OrbitCamera {
         self.zoom_by(-keys.zoom * KEY_ZOOM_RATE * dt);
     }
 
-    fn drag_orbit(&mut self, mouse: Vec2) {
-        if let Some(previous) = self.previous_orbit_mouse {
-            let delta = mouse - previous;
-            self.yaw -= delta.x * ORBIT_SENSITIVITY;
-            self.pitch = (self.pitch - delta.y * ORBIT_SENSITIVITY).clamp(-MAX_PITCH, MAX_PITCH);
-        }
-        self.previous_orbit_mouse = Some(mouse);
+    /// Turns the camera for a mouse drag of `delta` pixels.
+    fn orbit_by(&mut self, delta: Vec2) {
+        self.yaw -= delta.x * ORBIT_SENSITIVITY;
+        self.pitch = (self.pitch - delta.y * ORBIT_SENSITIVITY).clamp(-MAX_PITCH, MAX_PITCH);
     }
 
-    /// Moves the view with the pointer, so the chamber follows the drag.
-    fn drag_pan(&mut self, mouse: Vec2, view_height: f32) {
-        if let Some(previous) = self.previous_pan_mouse {
-            let delta = mouse - previous;
-            let world_units_per_pixel = self.visible_height() / view_height.max(1.0);
-            // Stored in camera-plane coordinates rather than moving the
-            // orbit pivot; the basis rotates with the camera.
-            self.pan_offset += vec2(-delta.x, delta.y) * world_units_per_pixel;
-        }
-        self.previous_pan_mouse = Some(mouse);
+    /// Moves the view with a mouse drag of `delta` pixels in a view
+    /// `view_height` pixels high, so the chamber follows the drag.
+    fn pan_by(&mut self, delta: Vec2, view_height: f32) {
+        let world_units_per_pixel = self.visible_height() / view_height.max(1.0);
+        // Stored in camera-plane coordinates rather than moving the orbit
+        // pivot; the basis rotates with the camera.
+        self.pan_offset += vec2(-delta.x, delta.y) * world_units_per_pixel;
     }
 
     /// Scales the distance by e to the power `amount`, within the limits.
@@ -184,7 +210,7 @@ impl OrbitCamera {
         2.0 * self.distance * (self.camera().fovy / 2.0).tan()
     }
 
-    /// Returns the chamber-centered offset before applying the pan.
+    /// The camera's offset from the orbit center, before the pan.
     fn orbit_offset(&self) -> Vec3 {
         let cos_pitch = self.pitch.cos();
 

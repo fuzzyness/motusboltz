@@ -2,13 +2,13 @@
 //! fill presets.
 
 use super::*;
-use crate::graphics::assembly::flywheel_radius;
+use crate::graphics::assembly::tests::flywheel_radius;
 use crate::sim::engine::PARTICLE_RADIUS;
 use crate::sim::geometry::DEFAULT_GEOMETRY;
 use crate::sim::pistons::PowerPistons;
 use crate::sim::units::{
-    MAX_SIMULATED_MARKERS,
-    MIN_CONNECTED_MARKERS, //
+    MAX_PARTICLES,
+    MIN_PARTICLES, //
 };
 use macroquad::prelude::{
     Mat4,
@@ -30,8 +30,8 @@ const WINDOWS: [(f32, f32); 5] = [
 fn build_label_names_this_version() {
     assert!(BUILD_LABEL.starts_with(concat!("v", env!("CARGO_PKG_VERSION"), " (")));
     assert!(BUILD_LABEL.ends_with(')'));
-    assert!(crate::ui::fonts::drawable(BUILD_LABEL));
-    assert!(crate::ui::fonts::drawable(LIMITED_TEXT));
+    assert!(crate::ui::fonts::tests::drawable(BUILD_LABEL));
+    assert!(crate::ui::fonts::tests::drawable(LIMITED_TEXT));
 }
 
 /// The scene fills the window and the camera looks at its middle. The
@@ -85,12 +85,12 @@ fn fill_presets_span_the_particle_range() {
     let counts: Vec<usize> = CONCENTRATION_PRESETS
         .iter()
         .map(|&concentration| {
-            ConnectedChambers::with_initial_concentration(concentration)
+            ConnectedChambers::with_concentration(concentration)
                 .particles
                 .len()
         })
         .collect();
-    assert_eq!(counts.first(), Some(&MIN_CONNECTED_MARKERS));
-    assert_eq!(counts.last(), Some(&MAX_SIMULATED_MARKERS));
+    assert_eq!(counts.first(), Some(&MIN_PARTICLES));
+    assert_eq!(counts.last(), Some(&MAX_PARTICLES));
     assert!(counts.windows(2).all(|pair| pair[0] < pair[1]));
 }

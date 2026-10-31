@@ -1,11 +1,15 @@
 //! Slider bounds and value-quantization tests for `src/ui/slider.rs`.
+
 use super::*;
 
 #[test]
 fn hot_kelvin_slider_is_clamped_and_quantized() {
     const TRACK_X: f32 = 100.0;
     let slider = Slider::hot_temperature(MIN_HOT_KELVIN);
-    assert_eq!((slider.label, slider.unit), ("Hot side", "K"));
+    assert_eq!(
+        (slider.setting.label, slider.setting.unit),
+        ("Hot side", "K")
+    );
     assert_eq!(slider.value_text(1_200.0), "1200 K");
     assert_eq!(slider.value_at_x(0.0, TRACK_X), MIN_HOT_KELVIN);
     assert_eq!(
@@ -28,16 +32,13 @@ fn hot_kelvin_slider_is_clamped_and_quantized() {
 fn concentration_slider_matches_gas_range() {
     let mut slider = Slider::concentration(0.5);
     assert!((slider.value() - 0.5).abs() < 1e-6);
-    assert_eq!(
-        slider.value_at_x(0.0, 100.0),
-        MIN_INITIAL_CONCENTRATION_MOL_PER_L
-    );
+    assert_eq!(slider.value_at_x(0.0, 100.0), MIN_CONCENTRATION);
     assert_eq!(
         slider.value_at_x(100.0 + SLIDER_WIDTH * 2.0, 100.0),
-        MAX_INITIAL_CONCENTRATION_MOL_PER_L
+        MAX_CONCENTRATION
     );
     slider.set_value(20.0);
-    assert_eq!(slider.value(), MAX_INITIAL_CONCENTRATION_MOL_PER_L);
+    assert_eq!(slider.value(), MAX_CONCENTRATION);
 }
 
 #[test]

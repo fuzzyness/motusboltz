@@ -1,9 +1,10 @@
 //! Screen layout: the readings panel on the left, the sliders on the right,
-//! and the 3D scene behind both, filling the window. The engine and the
-//! controls placed in the scene are centered on the window, in a span kept
-//! clear of the panel and the slider column (or, when they are closed, of
-//! the tabs left at the window's edges), so closing either never moves the
-//! engine. Sizes are in logical points.
+//! and the 3D scene behind both, filling the window.
+//!
+//! The engine and the controls placed in the scene are centered on the
+//! window, in a span kept clear of the panel and the slider column (or,
+//! when they are closed, of the tabs left at the window's edges), so
+//! closing either never moves the engine. Sizes are in logical points.
 
 /// The panel's card stands this far in from the window's left, top and
 /// bottom edges.
@@ -26,8 +27,10 @@ pub fn control_left(screen_width: f32) -> f32 {
     screen_width - CONTROL_WIDTH - CONTROL_RIGHT_MARGIN
 }
 
-/// Left edge of the uncovered scene: the panel's right edge, or that of
-/// the tab a closed panel leaves. The corner readout starts here.
+/// Left edge of the uncovered scene.
+///
+/// That is the panel's right edge, or that of the tab a closed panel
+/// leaves. The corner readout starts here.
 pub fn scene_left(show_panel: bool) -> f32 {
     if show_panel {
         PANEL_WIDTH
@@ -37,9 +40,11 @@ pub fn scene_left(show_panel: bool) -> f32 {
 }
 
 /// Left edge and width of the span the engine and the centered controls
-/// use: centered on the window and inset on both sides by the wider of
-/// what covers each edge, the panel or its tab at the left and the slider
-/// column or its tab at the right.
+/// use.
+///
+/// The span is centered on the window and inset on both sides by the wider
+/// of what covers each edge, the panel or its tab at the left and the
+/// slider column or its tab at the right.
 pub fn scene_span(screen_width: f32, show_panel: bool, show_sliders: bool) -> (f32, f32) {
     let left = scene_left(show_panel);
     let right = if show_sliders {

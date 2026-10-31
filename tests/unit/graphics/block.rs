@@ -11,6 +11,7 @@ fn key(point: Vec3) -> [i64; 3] {
     [point.x, point.y, point.z].map(|c| (c * GRID).round() as i64)
 }
 
+/// The default block and its mesh.
 fn mesh() -> (BlockShape, Mesh) {
     let shape = BlockShape::new(DEFAULT_GEOMETRY);
     (shape, block_mesh(shape))
@@ -117,7 +118,7 @@ fn the_cut_faces_the_camera_from_any_side() {
 
 #[test]
 fn shaders_are_glsl_100_and_declare_their_uniforms() {
-    for source in [BLOCK_VERTEX, BLOCK_FRAGMENT] {
+    for source in [crate::graphics::LIT_VERTEX, BLOCK_FRAGMENT] {
         assert!(source.starts_with("#version 100"));
         assert!(source.is_ascii());
     }

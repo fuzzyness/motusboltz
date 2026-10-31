@@ -3,13 +3,17 @@
 use super::*;
 use macroquad::prelude::vec3;
 
+/// Facets around each round part.
 const SEGMENTS: usize = 24;
+/// Largest difference treated as equal.
 const TOLERANCE: f32 = 1e-4;
 
+/// A vertex's normal.
 fn normal(vertex: &Vertex) -> Vec3 {
     vertex.normal.truncate()
 }
 
+/// Checks that `solid`'s triangles are whole and name its vertices.
 fn indices_are_valid(solid: &Solid) {
     assert_eq!(solid.indices.len() % 3, 0);
     assert!(
@@ -98,7 +102,7 @@ fn web_outline_wraps_both_circles_and_is_convex() {
 
 #[test]
 fn shaders_are_glsl_100_and_declare_their_uniforms() {
-    for shader in [METAL_VERTEX, METAL_FRAGMENT] {
+    for shader in [crate::graphics::LIT_VERTEX, METAL_FRAGMENT] {
         assert!(shader.starts_with("#version 100\n"));
     }
     for uniform in ["uniform vec3 Eye;", "uniform vec3 Light;"] {

@@ -1,6 +1,7 @@
-//! The cylinders and the opening between them: the solid engine block (see
-//! `block.rs`), or tube outlines where its shader cannot be built. The
-//! pistons are drawn with the rest of the moving parts (see
+//! The cylinders and the opening between them.
+//!
+//! They are drawn as the solid engine block (see `block.rs`), or as tube
+//! outlines where its shader cannot be built. The pistons are drawn with the rest of the moving parts (see
 //! `assembly.rs`).
 
 use std::f32::consts::TAU;
@@ -28,19 +29,39 @@ use super::{
 };
 use crate::sim::geometry::ChamberGeometry;
 
-// Tubular outlines give the cylinder visible depth without solid walls.
-const CYLINDER_RING_SEGMENTS: usize = 96;
-const CYLINDER_VERTICAL_GUIDES: usize = 8;
-const FRAME_TUBE_SIDES: usize = 8;
-const FRAME_TUBE_RADIUS: f32 = 0.035;
-const FRAME_AMBIENT_LIGHT: f32 = 0.65;
-const FRAME_DIFFUSE_LIGHT: f32 = 0.35;
-const FRAME_LIGHT_DIRECTION: Vec3 = Vec3::new(0.4, 0.7, 0.6);
-
-/// Appends a tubular outline to a mesh, using a supplied centerline and basis.
+/// Segments around each rim of a cylinder's outline.
 ///
-/// The basis vectors describe a perpendicular cross-section at each point.
-/// The triangles face outward for both circular rims and vertical guides.
+/// Tubular outlines give the cylinder visible depth without solid walls.
+const CYLINDER_RING_SEGMENTS: usize = 96;
+/// Vertical tubes between the rims.
+const CYLINDER_VERTICAL_GUIDES: usize = 8;
+/// Sides of each tube.
+const FRAME_TUBE_SIDES: usize = 8;
+/// Radius of each tube.
+const FRAME_TUBE_RADIUS: f32 = 0.035;
+/// Light that reaches every side of a tube.
+const FRAME_AMBIENT_LIGHT: f32 = 0.65;
+/// Light that falls on the side facing the light.
+const FRAME_DIFFUSE_LIGHT: f32 = 0.35;
+/// The light, in world space.
+const FRAME_LIGHT_DIRECTION: Vec3 = Vec3::new(0.4, 0.7, 0.6);
+/// Color of the hot cylinder's outline.
+const HOT_FRAME_COLOR: Color = Color::from_rgba(241, 145, 92, 255);
+/// Color of the cold cylinder's outline.
+const COLD_FRAME_COLOR: Color = Color::from_rgba(110, 189, 255, 255);
+/// Color of the opening's outline.
+const PASSAGE_COLOR: Color = Color::from_rgba(180, 224, 209, 255);
+/// Segments around each rim of the opening's outline.
+const PASSAGE_RIM_SEGMENTS: usize = 32;
+/// Rim segments between the lines along the opening.
+const PASSAGE_LONGITUDINAL_STRIDE: usize = 4;
+
+/// Appends a tube of `sections` cross-sections in `color` to `mesh`,
+/// joining the last back to the first if `closed`.
+///
+/// `cross_section` gives each section's center and the two basis vectors of
+/// its plane. The triangles face outward for both circular rims and
+/// vertical guides.
 fn append_tube(
     mesh: &mut Mesh,
     sections: usize,
@@ -84,15 +105,24 @@ fn append_tube(
 }
 
 /// Cylinder outline made of thin shaded tubes: top and bottom rims plus
-/// vertical guides. Built once and drawn as one mesh each frame. Visual
-/// only; collisions use `ChamberGeometry`.
+/// vertical guides.
+///
+/// It is built once and drawn as one mesh each frame. Visual only;
+/// collisions use `ChamberGeometry`.
 pub struct CylinderFrame {
+    /// The tubes.
     mesh: Mesh,
 }
 
 impl CylinderFrame {
-    /// Builds two circular rims and evenly spaced vertical supports.
-    pub fn new(chamber: CylinderDimensions, color: Color) -> Self {
+    /// Builds two circular rims and evenly spaced vertical supports in
+    /// `color` around a cylinder of `chamber` whose axis is at `center_x`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the cylinder is not positive and finite, or its mesh would
+    /// not fit Macroquad's buffers.
+    pub fn new(chamber: CylinderDimensions, color: Color, center_x: f32) -> Self {
         assert!(chamber.radius.is_finite() && chamber.radius > 0.0);
         assert!(chamber.height.is_finite() && chamber.height > 0.0);
 
@@ -102,47 +132,32 @@ impl CylinderFrame {
             texture: None,
         };
         let half_height = chamber.height / 2.0;
-
-        for y in [-half_height, half_height] {
+        let (bottom, top) = (-half_height, half_height);
+        for y in [bottom, top] {
             append_tube(&mut mesh, CYLINDER_RING_SEGMENTS, true, color, |section| {
                 let angle = TAU * section as f32 / CYLINDER_RING_SEGMENTS as f32;
                 let (sin_angle, cos_angle) = angle.sin_cos();
                 let radial = vec3(cos_angle, 0.0, sin_angle);
-
                 (radial * chamber.radius + Vec3::Y * y, radial, Vec3::Y)
             });
         }
-
         for guide in 0..CYLINDER_VERTICAL_GUIDES {
             let angle = TAU * guide as f32 / CYLINDER_VERTICAL_GUIDES as f32;
             let (sin_angle, cos_angle) = angle.sin_cos();
             let radial = vec3(cos_angle, 0.0, sin_angle);
             let lateral = vec3(sin_angle, 0.0, -cos_angle);
-
             append_tube(&mut mesh, 2, false, color, |section| {
-                let y = if section == 0 {
-                    -half_height
-                } else {
-                    half_height
-                };
+                let y = [bottom, top][section];
                 (radial * chamber.radius + Vec3::Y * y, radial, lateral)
             });
         }
-
         assert!(mesh.vertices.len() <= u16::MAX as usize);
         assert!(mesh.vertices.len() < DRAW_CALL_VERTEX_CAPACITY);
         assert!(mesh.indices.len() < DRAW_CALL_INDEX_CAPACITY);
-
-        Self { mesh }
-    }
-
-    /// Places an otherwise identical frame around a horizontally offset chamber.
-    pub fn at_x(chamber: CylinderDimensions, color: Color, center_x: f32) -> Self {
-        let mut frame = Self::new(chamber, color);
-        for vertex in &mut frame.mesh.vertices {
+        for vertex in &mut mesh.vertices {
             vertex.position.x += center_x;
         }
-        frame
+        Self { mesh }
     }
 
     /// Submits the existing frame geometry without regenerating it.
@@ -151,29 +166,36 @@ impl CylinderFrame {
     }
 }
 
-const HOT_FRAME_COLOR: Color = Color::from_rgba(241, 145, 92, 255);
-const COLD_FRAME_COLOR: Color = Color::from_rgba(110, 189, 255, 255);
-const PASSAGE_COLOR: Color = Color::from_rgba(180, 224, 209, 255);
-/// Whether the solid block is ready. It is built on the first draw, since
-/// its shader needs the window; if the shader cannot be built, the outline
-/// frames are drawn instead.
+/// Whether the solid block is ready.
+///
+/// It is built on the first draw, since its shader needs the window; if
+/// the shader cannot be built, the outline frames are drawn instead.
 enum Block {
+    /// Not built yet.
     Untried,
+    /// Built.
     Ready(EngineBlock),
+    /// Its shader could not be built.
     Unavailable,
 }
 
-/// The engine block (or, failing that, both cylinder frames, orange hot and
-/// blue cold, and the outline of the opening).
+/// The engine block, or, failing that, both cylinder frames, orange hot and
+/// blue cold, and the outline of the opening.
 pub struct ConnectedChamberVisual {
+    /// The engine's shape.
     geometry: ChamberGeometry,
+    /// The solid block, once tried.
     block: Block,
+    /// The hot cylinder's outline.
     hot: CylinderFrame,
+    /// The cold cylinder's outline.
     cold: CylinderFrame,
+    /// The opening's outline.
     passage_lines: Vec<(Vec3, Vec3)>,
 }
 
 impl ConnectedChamberVisual {
+    /// The block, or its outlines, for the engine of `geometry`.
     pub fn new(geometry: ChamberGeometry) -> Self {
         let dimensions = CylinderDimensions {
             radius: geometry.cylinder_radius,
@@ -182,8 +204,8 @@ impl ConnectedChamberVisual {
         Self {
             geometry,
             block: Block::Untried,
-            hot: CylinderFrame::at_x(dimensions, HOT_FRAME_COLOR, geometry.hot_center_x()),
-            cold: CylinderFrame::at_x(dimensions, COLD_FRAME_COLOR, geometry.cold_center_x()),
+            hot: CylinderFrame::new(dimensions, HOT_FRAME_COLOR, geometry.hot_center_x()),
+            cold: CylinderFrame::new(dimensions, COLD_FRAME_COLOR, geometry.cold_center_x()),
             passage_lines: passage_wireframe(geometry),
         }
     }
@@ -209,13 +231,12 @@ impl ConnectedChamberVisual {
     }
 }
 
-/// Line segments outlining the opening, computed once: the two rims where
-/// the round tube meets each bore wall, and lines along the tube between
-/// them. The parts of the tube inside the bores are open gas, so they are
-/// not drawn.
+/// Line segments outlining the opening, computed once.
+///
+/// They are the two rims where the round tube meets each bore wall, and
+/// lines along the tube between them. The parts of the tube inside the
+/// bores are open gas, so they are not drawn.
 fn passage_wireframe(geometry: ChamberGeometry) -> Vec<(Vec3, Vec3)> {
-    const RIM_SEGMENTS: usize = 32;
-    const LONGITUDINAL_STRIDE: usize = 4;
     let radius = geometry.passage_radius;
     let center_y = geometry.passage_center_y();
     // A point of the rim on the hot (side -1) or cold (side 1) bore wall.
@@ -230,13 +251,13 @@ fn passage_wireframe(geometry: ChamberGeometry) -> Vec<(Vec3, Vec3)> {
         )
     };
     let mut lines = Vec::new();
-    for segment in 0..RIM_SEGMENTS {
-        let angle = TAU * segment as f32 / RIM_SEGMENTS as f32;
-        let next = TAU * (segment + 1) as f32 / RIM_SEGMENTS as f32;
+    for segment in 0..PASSAGE_RIM_SEGMENTS {
+        let angle = TAU * segment as f32 / PASSAGE_RIM_SEGMENTS as f32;
+        let next = TAU * (segment + 1) as f32 / PASSAGE_RIM_SEGMENTS as f32;
         for side in [-1.0, 1.0] {
             lines.push((rim(angle, side), rim(next, side)));
         }
-        if segment % LONGITUDINAL_STRIDE == 0 {
+        if segment % PASSAGE_LONGITUDINAL_STRIDE == 0 {
             lines.push((rim(angle, -1.0), rim(angle, 1.0)));
         }
     }

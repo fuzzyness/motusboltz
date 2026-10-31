@@ -1,5 +1,7 @@
-//! A faint grid on the floor under the engine, so it does not float in a
-//! void and turning the camera is easier to follow. Built once.
+//! A faint grid on the floor under the engine, built once.
+//!
+//! The grid keeps the engine from floating in a void and makes turning the
+//! camera easier to follow.
 
 use macroquad::models::{
     Mesh,
@@ -17,20 +19,25 @@ use super::{
     DRAW_CALL_VERTEX_CAPACITY, //
 };
 
-/// Half the grid's width, line spacing and line width, in model units.
+/// Half the grid's width, in model units.
 const GRID_HALF_WIDTH: f32 = 24.0;
+/// Distance between lines.
 const GRID_SPACING: f32 = 1.0;
+/// Width of a line.
 const LINE_WIDTH: f32 = 0.035;
 /// Length of the pieces each line is built from; the fade is computed at
 /// their ends, so the grid fits one draw call.
 const PIECE_LENGTH: f32 = 2.0;
 /// Just below the block's underside, so the two never fight for depth.
 const BELOW_BLOCK: f32 = 0.005;
-/// Quiet blue-gray, at most this opaque, fading to nothing at the edge.
+/// Color of the lines, a quiet blue-gray.
 const GRID_COLOR: Color = Color::from_rgba(96, 120, 150, 255);
+/// Opacity of the lines in the middle, fading to nothing at the edge.
 const GRID_OPACITY: f32 = 0.45;
 
+/// The floor grid.
 pub struct FloorGrid {
+    /// The lines, as thin quads.
     mesh: Mesh,
 }
 
@@ -67,17 +74,11 @@ impl FloorGrid {
                     };
                     let half = LINE_WIDTH / 2.0;
                     let first = vertices.len() as u16;
-                    for position in [
-                        point(start, -half),
-                        point(start, half),
-                        point(end, half),
-                        point(end, -half),
-                    ] {
-                        vertices.push(Vertex::new2(
-                            position,
-                            Vec2::ZERO,
-                            opacity(position.x, position.z),
-                        ));
+                    let corners = [(start, -half), (start, half), (end, half), (end, -half)];
+                    for (along, offset) in corners {
+                        let position = point(along, offset);
+                        let color = opacity(position.x, position.z);
+                        vertices.push(Vertex::new2(position, Vec2::ZERO, color));
                     }
                     indices.extend([first, first + 1, first + 2, first, first + 2, first + 3]);
                 }
@@ -94,13 +95,9 @@ impl FloorGrid {
         }
     }
 
+    /// Draws the grid.
     pub fn draw(&self) {
         draw_mesh(&self.mesh);
-    }
-
-    #[cfg(test)]
-    fn vertices(&self) -> impl Iterator<Item = macroquad::prelude::Vec3> + '_ {
-        self.mesh.vertices.iter().map(|vertex| vertex.position)
     }
 }
 

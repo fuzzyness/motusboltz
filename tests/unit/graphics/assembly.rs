@@ -2,14 +2,23 @@
 //! `src/graphics/assembly.rs`.
 
 use super::*;
-use crate::graphics::outline::outside_block;
+use crate::graphics::outline::tests::outside_block;
 use crate::sim::engine::PARTICLE_RADIUS;
 use crate::sim::geometry::DEFAULT_GEOMETRY;
 use macroquad::prelude::Vec2;
 
+/// The flywheel's outer radius for an engine of `geometry`, for the tests
+/// of the first view.
+pub(crate) fn flywheel_radius(geometry: ChamberGeometry) -> f32 {
+    FLYWHEEL_RADIUS * geometry.cylinder_radius
+}
+
+/// Crank angles sampled over one turn.
 const ANGLES: usize = 24;
+/// Largest difference treated as equal.
 const TOLERANCE: f32 = 1e-3;
 
+/// The block and the parts for the default engine, without a window.
 fn assembly() -> (BlockShape, Assembly) {
     let pistons = PowerPistons::new(DEFAULT_GEOMETRY, PARTICLE_RADIUS);
     let assembly = Assembly::build(

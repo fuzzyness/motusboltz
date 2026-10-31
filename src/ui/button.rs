@@ -1,6 +1,8 @@
-//! On-screen buttons in the style of the Dreamcast's own menu: glossy
-//! pastel pills, each in its own color, with a bright rim, a sheen across
-//! the top and an outlined label beside the key that does the same.
+//! On-screen buttons in the style of the Dreamcast's own menu.
+//!
+//! Each button is a glossy pastel pill in its own color, with a bright rim,
+//! a sheen across the top and an outlined label beside the key that does
+//! the same.
 
 use macroquad::prelude::{
     Color,
@@ -10,44 +12,59 @@ use macroquad::prelude::{
 use crate::ui::pen::{
     Pen,
     Weight,
+    grown,
     rounded_outline, //
 };
 
-/// Label size, and the gap between a label and its key.
+/// Text size of a label.
 pub const LABEL_SIZE: f32 = 16.0;
+/// Gap between a label and its key.
 const KEY_GAP: f32 = 8.0;
 /// Room between the text and the button's ends.
 const PADDING_X: f32 = 16.0;
 /// Width of the bright rim around the face.
 const RIM: f32 = 2.5;
-/// A button that is on glows: how far the glow reaches past the rim, and
-/// how opaque it is. Its rim also turns this far toward white.
+/// How far the glow of a button that is on reaches past the rim.
 const GLOW: f32 = 4.0;
+/// Opacity of the glow.
 const GLOW_OPACITY: f32 = 0.5;
+/// How far the rim of a button that is on turns toward white.
 const ON_RIM_WHITENING: f32 = 0.6;
-/// The sheen across the top of the face, in layers that each lighten a
-/// little more, so it fades in rather than starting at a hard edge: each
-/// layer's height as a share of the face's, and how far it stays in from
-/// the face's ends (as a share of the face's height).
+/// Layers of the sheen across the top of the face, as (thickness, inset).
+///
+/// Each layer lightens a little more, so the sheen fades in rather than
+/// starting at a hard edge. The thickness and the inset from the face's
+/// ends are shares of the face's height.
 const SHEEN_LAYERS: [(f32, f32); 3] = [(0.52, 0.22), (0.4, 0.3), (0.28, 0.4)];
+/// Color of each sheen layer.
 const SHEEN: Color = Color::new(1.0, 1.0, 1.0, 0.1);
-/// How far the face turns toward white while on and while hovered.
+/// How far the face turns toward white while on.
 const ON_LIFT: f32 = 0.08;
+/// How far the face turns toward white while hovered.
 const HOVER_LIFT: f32 = 0.12;
+/// Color of every label.
 pub const LABEL_COLOR: Color = Color::from_rgba(252, 253, 255, 255);
 /// The key is drawn in a deep shade of the face, quieter than the label.
 const KEY_SHADE: f32 = 0.42;
 
-/// A button's color. The Dreamcast's menu gave Play, File, Music and
-/// Settings one each; here each button in the bottom row has its own, and
-/// the toggles share a pearl gray like the console itself.
+/// A button's color.
+///
+/// The Dreamcast's menu gave Play, File, Music and Settings one each; here
+/// each button in the bottom row has its own, and the toggles share a pearl
+/// gray like the console itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hue {
+    /// Blue-gray, for the toggles.
     Pearl,
+    /// Red-orange.
     Coral,
+    /// Orange.
     Amber,
+    /// Green.
     Mint,
+    /// Blue.
     Cyan,
+    /// Purple.
     Orchid,
 }
 
@@ -67,11 +84,13 @@ impl Hue {
     }
 }
 
-/// How a button looks: its color, and whether it is on (Keys shown, the
-/// engine paused, Slow or Tracers on) or calls for a press (Start).
+/// How a button looks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Look {
+    /// Its color.
     pub hue: Hue,
+    /// Whether it is on (Keys shown, the engine paused, Slow or Tracers on)
+    /// or calls for a press (Start).
     pub on: bool,
 }
 
@@ -86,24 +105,20 @@ pub fn pill(pen: &Pen, rect: Rect, look: Look, hovered: bool) {
     glossy(pen, rect, [rect.h / 2.0; 4], look, hovered);
 }
 
-/// Draws a button's shape filling `rect`, with corners of `radii` (top
-/// left, top right, bottom right, bottom left): a glow if it is on, the
-/// rim, the face, and the sheen, across the top of a wide shape or down
-/// the left of a tall one.
+/// Draws a button's shape filling `rect`, with corners of `radii`.
+///
+/// The radii are for the top left, top right, bottom right and bottom left
+/// corners. The shape is a glow if it is on, the rim, the face, and the
+/// sheen, across the top of a wide shape or down the left of a tall one.
 pub fn glossy(pen: &Pen, rect: Rect, radii: [f32; 4], look: Look, hovered: bool) {
     let (face, rim) = look.hue.colors();
     if look.on {
-        let glow = Rect::new(
-            rect.x - GLOW,
-            rect.y - GLOW,
-            rect.w + 2.0 * GLOW,
-            rect.h + 2.0 * GLOW,
-        );
         let glow_color = Color {
             a: GLOW_OPACITY,
             ..rim
         };
-        shape(pen, glow, radii.map(|radius| radius + GLOW), glow_color);
+        let glow_radii = radii.map(|radius| radius + GLOW);
+        shape(pen, grown(rect, GLOW), glow_radii, glow_color);
     }
     let rim = if look.on {
         whiten(rim, ON_RIM_WHITENING)
@@ -112,12 +127,7 @@ pub fn glossy(pen: &Pen, rect: Rect, radii: [f32; 4], look: Look, hovered: bool)
     };
     shape(pen, rect, radii, rim);
     let lift = if look.on { ON_LIFT } else { 0.0 } + if hovered { HOVER_LIFT } else { 0.0 };
-    let inner = Rect::new(
-        rect.x + RIM,
-        rect.y + RIM,
-        rect.w - 2.0 * RIM,
-        rect.h - 2.0 * RIM,
-    );
+    let inner = grown(rect, -RIM);
     let inner_radii = radii.map(|radius| (radius - RIM).max(0.0));
     shape(pen, inner, inner_radii, whiten(face, lift));
     let wide = inner.w >= inner.h;
@@ -159,10 +169,12 @@ pub fn key_color(look: Look) -> Color {
     )
 }
 
-/// A button's text: what it does, and its key.
+/// A button's text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Label {
+    /// What the button does.
     pub text: &'static str,
+    /// The key that does the same.
     pub key: &'static str,
 }
 
@@ -182,11 +194,6 @@ pub fn draw(pen: &mut Pen, rect: Rect, label: Label, look: Look, hovered: bool, 
     let left = rect.x + (rect.w - total) / 2.0;
     let baseline = rect.y + (rect.h + pen.text_height("H", size)) / 2.0;
     pen.heading(label.text, left, baseline, size, LABEL_COLOR);
-    pen.text(
-        label.key,
-        left + text_width + KEY_GAP,
-        baseline,
-        size,
-        key_color(look),
-    );
+    let key_left = left + text_width + KEY_GAP;
+    pen.text(label.key, key_left, baseline, size, key_color(look));
 }

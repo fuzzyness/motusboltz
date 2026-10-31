@@ -1,6 +1,7 @@
 //! Every particle as a small glossy sphere, colored by its kinetic energy,
-//! lit from the camera and faded a little with depth. Where the shader can
-//! be built, each sphere is lit per pixel, with a bright highlight and a
+//! lit from the camera and faded a little with depth.
+//!
+//! Where the shader can be built, each sphere is lit per pixel, with a bright highlight and a
 //! rim of light, so even these few facets look round and shiny, like the
 //! balls in a PS2 demo; otherwise each vertex is shaded on the CPU.
 
@@ -11,24 +12,14 @@ use std::f32::consts::{
 
 use macroquad::models::{
     Mesh,
-    Vertex,
-    draw_mesh, //
+    Vertex, //
 };
 use macroquad::prelude::{
     Camera3D,
     Color,
-    Comparison,
     Material,
-    MaterialParams,
-    PipelineParams,
-    ShaderSource,
-    UniformDesc,
-    UniformType,
     Vec2,
     Vec3,
-    gl_use_default_material,
-    gl_use_material,
-    load_material,
     vec3, //
 };
 
@@ -36,77 +27,79 @@ use super::{
     CylinderDimensions,
     DRAW_CALL_INDEX_CAPACITY,
     DRAW_CALL_VERTEX_CAPACITY,
+    draw_lit,
+    load_lit,
     mix_color,
     shade, //
 };
-use crate::sim::engine::COLLISION_FLASH_DURATION;
+use crate::sim::engine::{
+    COLLISION_FLASH_DURATION,
+    ConnectedChambers,
+    PARTICLE_RADIUS, //
+};
 use crate::sim::gas::{
     self,
-    INITIAL_TEMPERATURE,
-    Particle, //
+    INITIAL_TEMPERATURE, //
 };
 
-// Keep each batch within Macroquad's vertex and index buffer limits.
+/// Particles in each mesh, which keeps each within Macroquad's vertex and
+/// index buffer limits.
 const PARTICLES_PER_BATCH: usize = 256;
+/// Rings of a sphere from pole to pole.
 const SPHERE_LATITUDE_SEGMENTS: usize = 4;
+/// Segments around a sphere.
 const SPHERE_LONGITUDE_SEGMENTS: usize = 6;
-// At high fill, use coarser spheres to reduce vertex work; every particle is
-// still drawn.
+/// At and above this many particles the spheres are coarser, to reduce
+/// vertex work; every particle is still drawn.
 const LOW_DETAIL_PARTICLE_THRESHOLD: usize = 1_536;
+/// Rings of a coarse sphere.
 const LOW_DETAIL_LATITUDE_SEGMENTS: usize = 3;
+/// Segments around a coarse sphere.
 const LOW_DETAIL_LONGITUDE_SEGMENTS: usize = 4;
 
-// Colors encode each particle's kinetic energy. A single particle has no
-// temperature; temperature is a property of many particles.
+/// Color of a particle with no kinetic energy.
+///
+/// Colors encode each particle's kinetic energy. A single particle has no
+/// temperature; temperature is a property of many particles.
 const COLD_COLOR: Color = Color::from_rgba(30, 120, 255, 255);
+/// Color of a particle with the mean energy at 300 K.
 const NORMAL_COLOR: Color = Color::from_rgba(255, 150, 0, 255);
+/// Color of a particle with `HOT_ENERGY_MULTIPLIER` times that energy.
 const HOT_COLOR: Color = Color::from_rgba(255, 32, 48, 255);
 
-// Mean kinetic energy per particle at 300 K: 3 kT / 2 in reduced units.
+/// Mean kinetic energy per particle at 300 K: 3 kT / 2 in reduced units.
 const NORMAL_PARTICLE_ENERGY: f32 = 1.5 * INITIAL_TEMPERATURE;
+/// Energy of the hot color, in multiples of the mean at 300 K.
 const HOT_ENERGY_MULTIPLIER: f32 = 3.0;
 
-// Camera-space light components: right, up, and toward the viewer.
+/// The light in camera space: right, up, and toward the viewer.
 const LIGHT_DIRECTION: Vec3 = Vec3::new(0.4, 0.7, 0.6);
+/// Light that reaches every side of a sphere.
 const AMBIENT_LIGHT: f32 = 0.35;
+/// Light that falls on the side facing the light.
 const DIFFUSE_LIGHT: f32 = 0.65;
+/// How far the farthest particles fade toward the background.
 const DEPTH_FADE_STRENGTH: f32 = 0.35;
 
-// With tracers on, the followed particles are drawn this much larger at
-// full brightness and shine; the rest are muted, losing most of their
-// color, much of their brightness and nearly all their shine, so the
-// followed ones and their trails stand out over any background.
+/// Size of a followed particle with tracers on, in radii.
+///
+/// The followed particles are drawn larger at full brightness and shine;
+/// the rest are muted, losing most of their color, much of their
+/// brightness and nearly all their shine, so the followed ones and their
+/// trails stand out over any background.
 const FOLLOWED_SIZE: f32 = 1.6;
+/// How far an unfollowed particle turns gray.
 const UNFOLLOWED_GRAY: f32 = 0.7;
+/// Brightness of an unfollowed particle.
 const UNFOLLOWED_BRIGHTNESS: f32 = 0.5;
+/// Shine of an unfollowed particle.
 const UNFOLLOWED_SHINE: f32 = 0.1;
 
-// Brief collision highlight; purely visual, it changes no energy.
+/// Color of the brief highlight after a collision, which is purely visual
+/// and changes no energy.
 const COLLISION_FLASH_COLOR: Color = Color::from_rgba(255, 252, 226, 255);
+/// How far a fresh collision turns a particle toward the highlight.
 const COLLISION_FLASH_STRENGTH: f32 = 0.3;
-
-const PARTICLE_VERTEX: &str = r#"#version 100
-attribute vec3 position;
-attribute vec2 texcoord;
-attribute vec4 color0;
-attribute vec4 normal;
-
-varying lowp vec4 color;
-varying lowp vec2 uv;
-varying vec3 world;
-varying vec3 surface_normal;
-
-uniform mat4 Model;
-uniform mat4 Projection;
-
-void main() {
-    vec4 placed = Model * vec4(position, 1.0);
-    world = placed.xyz;
-    surface_normal = normal.xyz;
-    color = color0 / 255.0;
-    uv = texcoord;
-    gl_Position = Projection * placed;
-}"#;
 
 /// Lit per pixel: the energy color in diffuse light, a white highlight and
 /// a rim of the same color toward the edges, both scaled by the shine in
@@ -149,14 +142,12 @@ fn kinetic_energy_color(energy: f32) -> Color {
 /// A particle's color muted for tracer mode: mostly gray and darker.
 fn muted(color: Color) -> Color {
     let gray = 0.3 * color.r + 0.59 * color.g + 0.11 * color.b;
-    shade(
-        mix_color(
-            color,
-            Color::new(gray, gray, gray, color.a),
-            UNFOLLOWED_GRAY,
-        ),
-        UNFOLLOWED_BRIGHTNESS,
-    )
+    let grayed = mix_color(
+        color,
+        Color::new(gray, gray, gray, color.a),
+        UNFOLLOWED_GRAY,
+    );
+    shade(grayed, UNFOLLOWED_BRIGHTNESS)
 }
 
 /// Places the light in camera space so orbiting does not darken every sphere.
@@ -189,11 +180,19 @@ fn collision_color(base: Color, remaining_seconds: f32) -> Color {
 /// Using the chamber's projected extent keeps the fade stable as particles
 /// move, and makes camera panning independent of particle brightness.
 struct DepthFade {
+    /// The camera's line of sight.
     forward: Vec3,
+    /// Half the cylinder's depth along the line of sight.
     half_extent: f32,
 }
 
 impl DepthFade {
+    /// The fade across a cylinder of `radius` and `height` seen by
+    /// `camera`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `radius` or `height` is not positive and finite.
     fn new(camera: &Camera3D, radius: f32, height: f32) -> Self {
         assert!(radius.is_finite() && radius > 0.0);
         assert!(height.is_finite() && height > 0.0);
@@ -210,6 +209,7 @@ impl DepthFade {
         }
     }
 
+    /// How far a particle at `position` fades toward the background.
     fn amount(&self, position: Vec3) -> f32 {
         let depth = position.dot(self.forward);
         let t = ((depth + self.half_extent) / (2.0 * self.half_extent)).clamp(0.0, 1.0);
@@ -222,16 +222,22 @@ impl DepthFade {
 
 /// Unit sphere topology and reusable lighting coefficients for all batches.
 struct SphereTemplate {
+    /// Points on the unit sphere, which are also its normals.
     positions: Vec<Vec3>,
+    /// Lambert brightness of each point for the current camera.
     brightness: Vec<f32>,
+    /// Triangles, three points each, wound outward.
     indices: Vec<u16>,
 }
 
 impl SphereTemplate {
+    /// The full-detail sphere.
     fn new() -> Self {
         Self::with_segments(SPHERE_LATITUDE_SEGMENTS, SPHERE_LONGITUDE_SEGMENTS)
     }
 
+    /// A sphere of `latitude_segments` rings and `longitude_segments`
+    /// segments around.
     fn with_segments(latitude_segments: usize, longitude_segments: usize) -> Self {
         let mut positions = Vec::new();
         let mut indices = Vec::new();
@@ -304,6 +310,8 @@ impl SphereTemplate {
         }
     }
 
+    /// Lights the points for `camera`, once per frame rather than once per
+    /// particle.
     fn update_lighting(&mut self, camera: &Camera3D) {
         let light_direction = camera_light_direction(camera);
 
@@ -320,37 +328,46 @@ impl SphereTemplate {
 /// highlight, camera-relative lighting and depth fade. Meshes are rebuilt
 /// only when the particle count changes.
 pub struct ParticleRenderer {
+    /// The sphere every particle is drawn as.
     template: SphereTemplate,
     /// The per-pixel lighting, made on the first draw (it needs a window);
     /// `Some(None)` where it cannot be built.
     shader: Option<Option<Material>>,
     /// Whether the shader lights the spheres, so the CPU does not.
     shaded: bool,
+    /// The meshes, `PARTICLES_PER_BATCH` particles each.
     batches: Vec<Mesh>,
+    /// Particles the meshes hold.
     particle_count: usize,
+    /// Whether the meshes use the coarse sphere.
     low_detail: bool,
     /// Which particles are followed this frame, by index.
     followed: Vec<bool>,
+    /// A cylinder enclosing the whole apparatus, for the depth fade.
+    extent: CylinderDimensions,
 }
 
 impl ParticleRenderer {
-    /// Creates the sphere template and checks the batch capacity limits.
-    pub fn new() -> Self {
+    /// A renderer whose depth fade spans `extent`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a batch of spheres would not fit Macroquad's buffers.
+    pub fn new(extent: CylinderDimensions) -> Self {
         let template = SphereTemplate::new();
-
+        let vertices = template.positions.len() * PARTICLES_PER_BATCH;
         assert!(
-            template.positions.len() * PARTICLES_PER_BATCH <= u16::MAX as usize,
+            vertices <= u16::MAX as usize,
             "particle batch exceeds the 16-bit vertex index limit",
         );
         assert!(
-            template.positions.len() * PARTICLES_PER_BATCH < DRAW_CALL_VERTEX_CAPACITY,
+            vertices < DRAW_CALL_VERTEX_CAPACITY,
             "particle batch exceeds Macroquad's vertex buffer capacity",
         );
         assert!(
             template.indices.len() * PARTICLES_PER_BATCH < DRAW_CALL_INDEX_CAPACITY,
             "particle batch exceeds Macroquad's index buffer capacity",
         );
-
         Self {
             template,
             shader: None,
@@ -359,35 +376,32 @@ impl ParticleRenderer {
             particle_count: 0,
             low_detail: false,
             followed: Vec::new(),
+            extent,
         }
     }
 
+    /// Rebuilds the meshes for `particle_count` particles, if that changed.
     fn resize_batches(&mut self, particle_count: usize) {
         if particle_count == self.particle_count {
             return;
         }
-
         let low_detail = particle_count >= LOW_DETAIL_PARTICLE_THRESHOLD;
         if low_detail != self.low_detail {
             self.template = if low_detail {
-                SphereTemplate::with_segments(
-                    LOW_DETAIL_LATITUDE_SEGMENTS,
-                    LOW_DETAIL_LONGITUDE_SEGMENTS,
-                )
+                let (latitude, longitude) =
+                    (LOW_DETAIL_LATITUDE_SEGMENTS, LOW_DETAIL_LONGITUDE_SEGMENTS);
+                SphereTemplate::with_segments(latitude, longitude)
             } else {
                 SphereTemplate::new()
             };
             self.low_detail = low_detail;
         }
+        let vertices_per_particle = self.template.positions.len();
         self.batches.clear();
-        let mut remaining = particle_count;
-
-        while remaining > 0 {
-            let count = remaining.min(PARTICLES_PER_BATCH);
-            let vertices_per_particle = self.template.positions.len();
+        for start in (0..particle_count).step_by(PARTICLES_PER_BATCH) {
+            let count = (particle_count - start).min(PARTICLES_PER_BATCH);
             let mut vertices = Vec::with_capacity(count * vertices_per_particle);
             let mut indices = Vec::with_capacity(count * self.template.indices.len());
-
             for particle_index in 0..count {
                 // Colors and positions are overwritten in prepare().
                 for &position in &self.template.positions {
@@ -396,158 +410,84 @@ impl ParticleRenderer {
                     vertex.normal = position.extend(0.0);
                     vertices.push(vertex);
                 }
-
                 let base = (particle_index * vertices_per_particle) as u16;
                 indices.extend(self.template.indices.iter().map(|&index| base + index));
             }
-
             self.batches.push(Mesh {
                 vertices,
                 indices,
                 texture: None,
             });
-
-            remaining -= count;
         }
-
         self.particle_count = particle_count;
     }
 
-    /// Updates vertex coordinates and colors, then submits each mesh batch.
-    /// With tracers on, `followed` lists the followed particles' indices.
-    #[allow(clippy::too_many_arguments)]
-    pub fn draw(
-        &mut self,
-        particles: &[Particle],
-        collision_flashes: &[f32],
-        followed: &[usize],
-        radius: f32,
-        camera: &Camera3D,
-        chamber: CylinderDimensions,
-        background: Color,
-    ) {
-        let shader = self.shader.get_or_insert_with(load_particle_shader);
+    /// Draws the particles of `simulation` for `camera`, the distant ones
+    /// fading toward `background`.
+    ///
+    /// With tracers on, the followed particles stand out.
+    pub fn draw(&mut self, simulation: &ConnectedChambers, camera: &Camera3D, background: Color) {
+        let shader = self
+            .shader
+            .get_or_insert_with(|| load_lit(PARTICLE_FRAGMENT, &[]));
         self.shaded = shader.is_some();
-        self.prepare(
-            particles,
-            collision_flashes,
-            followed,
-            radius,
+        self.prepare(simulation, camera, background);
+        let material = self.shader.as_ref().and_then(Option::as_ref);
+        draw_lit(
+            &self.batches,
+            material,
             camera,
-            chamber,
-            background,
+            camera_light_direction(camera),
         );
-        if let Some(Some(material)) = &self.shader {
-            material.set_uniform("Eye", camera.position);
-            material.set_uniform("Light", camera_light_direction(camera));
-            gl_use_material(material);
-        }
-        for batch in &self.batches {
-            draw_mesh(batch);
-        }
-        gl_use_default_material();
     }
 
-    /// Updates reusable CPU buffers separately from GPU submission.
-    #[allow(clippy::too_many_arguments)]
-    fn prepare(
-        &mut self,
-        particles: &[Particle],
-        collision_flashes: &[f32],
-        followed: &[usize],
-        radius: f32,
-        camera: &Camera3D,
-        chamber: CylinderDimensions,
-        background: Color,
-    ) {
-        assert_eq!(particles.len(), collision_flashes.len());
+    /// Writes the vertices for the particles of `simulation`, separately
+    /// from submitting them to the GPU.
+    fn prepare(&mut self, simulation: &ConnectedChambers, camera: &Camera3D, background: Color) {
+        let particles = &simulation.particles;
+        let flashes = simulation.collision_flashes();
         self.resize_batches(particles.len());
         self.followed.clear();
         self.followed.resize(particles.len(), false);
-        for &index in followed {
+        let tracers = simulation.tracers();
+        for index in tracers.into_iter().flat_map(|tracers| tracers.indices()) {
             self.followed[index] = true;
         }
-        let tracing = !followed.is_empty();
+        let tracing = tracers.is_some();
         self.template.update_lighting(camera);
-
-        let depth_fade = DepthFade::new(camera, chamber.radius, chamber.height);
+        let depth_fade = DepthFade::new(camera, self.extent.radius, self.extent.height);
         let mean_velocity = gas::mean_velocity(particles);
-
-        for (((batch, chunk), flash_chunk), followed_chunk) in self
-            .batches
-            .iter_mut()
-            .zip(particles.chunks(PARTICLES_PER_BATCH))
-            .zip(collision_flashes.chunks(PARTICLES_PER_BATCH))
-            .zip(self.followed.chunks(PARTICLES_PER_BATCH))
-        {
-            for (((particle, vertices), &flash), &followed) in chunk
+        let vertices_per_particle = self.template.positions.len();
+        for (index, particle) in particles.iter().enumerate() {
+            // Ignore the gas's bulk drift: only relative kinetic energy
+            // should determine its color.
+            let energy = gas::particle_kinetic_energy(particle.velocity - mean_velocity);
+            let color = collision_color(kinetic_energy_color(energy), flashes[index]);
+            let fade = || depth_fade.amount(particle.position);
+            let (color, fade, size, shine) = match (tracing, self.followed[index]) {
+                (true, true) => (color, 0.0, PARTICLE_RADIUS * FOLLOWED_SIZE, 1.0),
+                (true, false) => (muted(color), fade(), PARTICLE_RADIUS, UNFOLLOWED_SHINE),
+                (false, _) => (color, fade(), PARTICLE_RADIUS, 1.0),
+            };
+            let batch = &mut self.batches[index / PARTICLES_PER_BATCH];
+            let first = index % PARTICLES_PER_BATCH * vertices_per_particle;
+            let vertices = &mut batch.vertices[first..first + vertices_per_particle];
+            let template = self
+                .template
+                .positions
                 .iter()
-                .zip(
-                    batch
-                        .vertices
-                        .chunks_exact_mut(self.template.positions.len()),
-                )
-                .zip(flash_chunk)
-                .zip(followed_chunk)
-            {
-                // Ignore the gas's bulk drift: only relative kinetic energy
-                // should determine its color.
-                let thermal_velocity = particle.velocity - mean_velocity;
-                let energy = gas::particle_kinetic_energy(thermal_velocity);
-                let base_color = kinetic_energy_color(energy);
-                let color = collision_color(base_color, flash);
-                let (color, fade, size, shine) = match (tracing, followed) {
-                    (true, true) => (color, 0.0, radius * FOLLOWED_SIZE, 1.0),
-                    (true, false) => (
-                        muted(color),
-                        depth_fade.amount(particle.position),
-                        radius,
-                        UNFOLLOWED_SHINE,
-                    ),
-                    (false, _) => (color, depth_fade.amount(particle.position), radius, 1.0),
-                };
-
-                let shaded = self.shaded;
-                for ((vertex, &offset), &brightness) in vertices
-                    .iter_mut()
-                    .zip(&self.template.positions)
-                    .zip(&self.template.brightness)
-                {
-                    let brightness = if shaded { 1.0 } else { brightness };
-                    vertex.position = particle.position + offset * size;
-
-                    let mut lit = mix_color(shade(color, brightness), background, fade);
-                    // The shader reads alpha as shine; drawn plainly, alpha
-                    // would be transparency.
-                    lit.a = if shaded { shine } else { 1.0 };
-                    vertex.color = lit.into();
-                }
+                .zip(&self.template.brightness);
+            for (vertex, (&offset, &brightness)) in vertices.iter_mut().zip(template) {
+                let brightness = if self.shaded { 1.0 } else { brightness };
+                vertex.position = particle.position + offset * size;
+                let mut lit = mix_color(shade(color, brightness), background, fade);
+                // The shader reads alpha as shine; drawn plainly, alpha
+                // would be transparency.
+                lit.a = if self.shaded { shine } else { 1.0 };
+                vertex.color = lit.into();
             }
         }
     }
-}
-
-/// The per-pixel lighting, or `None` if its shader cannot be built.
-fn load_particle_shader() -> Option<Material> {
-    load_material(
-        ShaderSource::Glsl {
-            vertex: PARTICLE_VERTEX,
-            fragment: PARTICLE_FRAGMENT,
-        },
-        MaterialParams {
-            pipeline_params: PipelineParams {
-                depth_write: true,
-                depth_test: Comparison::LessOrEqual,
-                ..Default::default()
-            },
-            uniforms: vec![
-                UniformDesc::new("Eye", UniformType::Float3),
-                UniformDesc::new("Light", UniformType::Float3),
-            ],
-            ..Default::default()
-        },
-    )
-    .ok()
 }
 
 #[cfg(test)]

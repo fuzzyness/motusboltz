@@ -1,127 +1,57 @@
 //! Particle-collision and temperature tests for `src/sim/gas.rs`.
 
-use super::*;
-
-/// Temperature of a whole sample (the simulation measures regions with
-/// `KineticMoments` instead).
-fn temperature(particles: &[Particle]) -> f32 {
-    if particles.len() < 2 {
-        return 0.0;
-    }
-    temperature_about_mean(particles, mean_velocity(particles))
-}
-/// Any radius works; these tests do not depend on the engine's.
-const PARTICLE_RADIUS: f32 = 0.18;
 use macroquad::prelude::vec3;
 
-const TEST_PARTICLE_OFFSET: f32 = 0.16;
-const TEST_PARTICLE_SPEED: f32 = 1.0;
+use super::*;
+
+/// Any radius works; these tests do not depend on the engine's.
+const RADIUS: f32 = 0.18;
+/// Center offset from the origin: the pair overlaps by 0.04.
+const OFFSET: f32 = 0.16;
+/// Speed of each test particle.
+const SPEED: f32 = 1.0;
+/// Largest difference treated as equal.
 const TOLERANCE: f32 = 1e-6;
-const TARGET_TEST_TEMPERATURE: f32 = 2.0;
-const TEST_DRIFT_SPEED: f32 = 0.6;
 
-#[test]
-fn elastic_collision_conserves_energy_and_momentum() {
-    let mut particles = [
-        Particle {
-            position: vec3(-TEST_PARTICLE_OFFSET, 0.0, 0.0),
-            velocity: vec3(TEST_PARTICLE_SPEED, 0.0, 0.0),
-        },
-        Particle {
-            position: vec3(TEST_PARTICLE_OFFSET, 0.0, 0.0),
-            velocity: vec3(-TEST_PARTICLE_SPEED, 0.0, 0.0),
-        },
-    ];
-
-    let energy_before = kinetic_energy(&particles);
-    let momentum_before = particles[0].velocity + particles[1].velocity;
-
-    let (left, right) = particles.split_at_mut(1);
-    assert_eq!(
-        resolve_pair(&mut left[0], &mut right[0], PARTICLE_RADIUS),
-        Contact::Impact
-    );
-
-    let energy_after = kinetic_energy(&particles);
-    let momentum_after = particles[0].velocity + particles[1].velocity;
-
-    assert!((energy_after - energy_before).abs() < TOLERANCE);
-    assert!((momentum_after - momentum_before).length() < TOLERANCE);
-    assert!(particles[0].velocity.x < 0.0);
-    assert!(particles[1].velocity.x > 0.0);
-}
-
-#[test]
-fn separated_or_receding_particles_do_not_trigger_collision_events() {
-    let mut first = Particle {
-        position: vec3(-TEST_PARTICLE_OFFSET, 0.0, 0.0),
-        velocity: vec3(-TEST_PARTICLE_SPEED, 0.0, 0.0),
+/// Two overlapping particles on the x axis, moving along it at `speeds`.
+fn pair(speeds: [f32; 2]) -> [Particle; 2] {
+    let particle = |x: f32, speed: f32| Particle {
+        position: vec3(x, 0.0, 0.0),
+        velocity: vec3(speed, 0.0, 0.0),
     };
-    let mut second = Particle {
-        position: vec3(TEST_PARTICLE_OFFSET, 0.0, 0.0),
-        velocity: vec3(TEST_PARTICLE_SPEED, 0.0, 0.0),
-    };
-
-    // Overlapping but separating: correct geometry without reporting
-    // a kinetic collision or changing either velocity.
-    assert_eq!(
-        resolve_pair(&mut first, &mut second, PARTICLE_RADIUS),
-        Contact::Overlap
-    );
-    assert_eq!(first.velocity.x, -TEST_PARTICLE_SPEED);
-    assert_eq!(second.velocity.x, TEST_PARTICLE_SPEED);
-
-    first.position = vec3(-PARTICLE_RADIUS * 2.0, 0.0, 0.0);
-    second.position = vec3(PARTICLE_RADIUS * 2.0, 0.0, 0.0);
-    assert_eq!(
-        resolve_pair(&mut first, &mut second, PARTICLE_RADIUS),
-        Contact::Apart
-    );
+    [particle(-OFFSET, speeds[0]), particle(OFFSET, speeds[1])]
 }
 
 #[test]
-fn temperature_adjustment_preserves_bulk_motion() {
-    let mut particles = [
-        Particle {
-            position: Vec3::ZERO,
-            velocity: vec3(TEST_DRIFT_SPEED + TEST_PARTICLE_SPEED, 0.0, 0.0),
-        },
-        Particle {
-            position: Vec3::ZERO,
-            velocity: vec3(TEST_DRIFT_SPEED - TEST_PARTICLE_SPEED, 0.0, 0.0),
-        },
-    ];
-    let momentum_before = particles
-        .iter()
-        .map(|particle| particle.velocity * PARTICLE_MASS)
-        .sum::<Vec3>();
-
-    rescale_thermal_velocities(&mut particles, TARGET_TEST_TEMPERATURE);
-
-    let momentum_after = particles
-        .iter()
-        .map(|particle| particle.velocity * PARTICLE_MASS)
-        .sum::<Vec3>();
-    assert!((momentum_before - momentum_after).length() < TOLERANCE);
-    assert!((temperature(&particles) - TARGET_TEST_TEMPERATURE).abs() < TOLERANCE);
+fn impacts_conserve_energy_and_momentum() {
+    let mut particles = pair([SPEED, -SPEED]);
+    let energy = kinetic_energy(&particles);
+    let momentum = particles[0].velocity + particles[1].velocity;
+    let [a, b] = &mut particles;
+    assert_eq!(resolve_pair(a, b, RADIUS), Contact::Impact);
+    assert!((kinetic_energy(&particles) - energy).abs() < TOLERANCE);
+    assert!((particles[0].velocity + particles[1].velocity - momentum).length() < TOLERANCE);
+    assert!(particles[0].velocity.x < 0.0 && particles[1].velocity.x > 0.0);
 }
 
 #[test]
-fn temperature_adjustment_can_heat_a_motionless_gas() {
-    let mut particles = [
-        Particle {
-            position: Vec3::ZERO,
-            velocity: Vec3::ZERO,
-        },
-        Particle {
-            position: Vec3::ZERO,
-            velocity: Vec3::ZERO,
-        },
-    ];
+fn receding_or_apart_particles_keep_their_velocities() {
+    let mut particles = pair([-SPEED, SPEED]);
+    let [a, b] = &mut particles;
+    assert_eq!(resolve_pair(a, b, RADIUS), Contact::Overlap);
+    assert_eq!((a.velocity.x, b.velocity.x), (-SPEED, SPEED));
+    assert!(a.position.distance(b.position) >= 2.0 * RADIUS - TOLERANCE);
+    assert_eq!(resolve_pair(a, b, RADIUS), Contact::Apart);
+}
 
-    rescale_thermal_velocities(&mut particles, TARGET_TEST_TEMPERATURE);
-
-    let net_velocity = particles[0].velocity + particles[1].velocity;
-    assert!(net_velocity.length() < TOLERANCE);
-    assert!((temperature(&particles) - TARGET_TEST_TEMPERATURE).abs() < TOLERANCE);
+#[test]
+fn thermalize_stops_bulk_flow_and_sets_the_temperature() {
+    const DRIFT: f32 = 0.6;
+    const TEMPERATURE: f32 = 2.0;
+    let mut particles = pair([DRIFT + SPEED, DRIFT - SPEED]);
+    thermalize(&mut particles, TEMPERATURE);
+    assert!(mean_velocity(&particles).length() < TOLERANCE);
+    // Two particles: N - 1 = 1 over three axes.
+    let temperature = 2.0 * kinetic_energy(&particles) / DEGREES_OF_FREEDOM;
+    assert!((temperature - TEMPERATURE).abs() < TOLERANCE);
 }

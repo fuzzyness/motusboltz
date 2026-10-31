@@ -1,5 +1,7 @@
 //! Records the Git commit the program is built from, so the app can show
-//! it next to the version. Uses only the standard library.
+//! it next to the version.
+//!
+//! The script uses only the standard library.
 //!
 //! The revision is the short commit hash, with `-dirty` appended when
 //! tracked files have uncommitted changes. It is `unknown` when Git or the
@@ -8,7 +10,9 @@
 use std::path::Path;
 use std::process::Command;
 
+/// Environment variable the revision is passed to the program in.
 const REVISION_VARIABLE: &str = "MOTUSBOLTZ_REVISION";
+/// Revision recorded when Git cannot tell.
 const UNKNOWN_REVISION: &str = "unknown";
 /// Paths whose changes can alter the revision: the checked-out commit,
 /// the staged files, branch tips, and the sources.
@@ -21,6 +25,7 @@ const WATCHED_PATHS: [&str; 6] = [
     "tests",
 ];
 
+/// Prints the revision for Cargo, and the paths to watch.
 fn main() {
     // `--exclude=*` ignores tags, so the result is the hash, not a tag name.
     let revision = Command::new("git")

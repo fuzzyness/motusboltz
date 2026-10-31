@@ -1,7 +1,7 @@
 //! Tests for the cloud under the engine, `src/graphics/cloud.rs`.
 
 use super::*;
-use crate::graphics::outline::outside_block;
+use crate::graphics::outline::tests::outside_block;
 use crate::sim::geometry::DEFAULT_GEOMETRY;
 
 #[test]

@@ -3,8 +3,10 @@
 use super::*;
 use macroquad::prelude::vec3;
 
+/// Model time between tracer samples.
 const STEP: f64 = 0.001;
 
+/// A particle at `position` moving at `velocity`.
 fn particle(position: Vec3, velocity: Vec3) -> Particle {
     Particle { position, velocity }
 }

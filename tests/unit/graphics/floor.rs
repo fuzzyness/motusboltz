@@ -1,6 +1,14 @@
 //! Floor-grid tests for `src/graphics/floor.rs`.
 
 use super::*;
+use macroquad::prelude::Vec3;
+
+impl FloorGrid {
+    /// Every corner of every line piece.
+    fn vertices(&self) -> impl Iterator<Item = Vec3> + '_ {
+        self.mesh.vertices.iter().map(|vertex| vertex.position)
+    }
+}
 
 #[test]
 fn grid_is_flat_under_the_block_and_fades_to_nothing_at_its_edge() {

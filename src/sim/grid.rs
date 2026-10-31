@@ -15,14 +15,18 @@ const EMPTY_CELL: u32 = u32::MAX;
 /// Empty cells kept around the stored box, so every neighbor index is valid
 /// without coordinate or boundary checks.
 const HALO_WIDTH: usize = 1;
+/// Occupancy bits in one word of `SpatialGrid::row_bits`.
 const BITS_PER_WORD: usize = u64::BITS as usize;
 
 /// A cell holding at least one particle, with where to find its occupancy
-/// bit: its row of cells along x, and its position in that row.
+/// bit.
 #[derive(Clone, Copy)]
 struct OccupiedCell {
+    /// Index into `SpatialGrid::heads`.
     index: u32,
+    /// Its row of cells along x.
     row: u32,
+    /// Its place in that row.
     x: u32,
 }
 
@@ -39,37 +43,33 @@ pub struct SpatialGrid {
     heads: Vec<u32>,
     /// Next particle in the same cell, by particle index.
     next: Vec<u32>,
+    /// Cells holding at least one particle, in the order first filled.
     occupied_cells: Vec<OccupiedCell>,
     /// One bit per cell, set when the cell is occupied, packed by row along
     /// x with a spare word at the end of each row. Most neighbors are empty,
     /// and reading their bits a row at a time avoids testing them one by one.
     row_bits: Vec<u64>,
+    /// Words per row in `row_bits`.
     words_per_row: usize,
+    /// Side of each cell.
     cell_size: f32,
+    /// Half the side of the whole lattice cube.
     chamber_half_size: f32,
-    /// Lattice indices of the first and last stored cells along each axis.
+    /// Lattice index of the first stored cell along each axis.
     first_cell: [u32; 3],
+    /// Lattice index of the last stored cell along each axis.
     last_cell: [u32; 3],
-    /// Stored cells plus the halo on both sides, along x and y.
+    /// Stored cells plus the halo on both sides, along x.
     padded_x: usize,
+    /// Stored cells plus the halo on both sides, along y.
     padded_y: usize,
+    /// Index steps to the 13 forward neighbors of a cell.
     neighbor_offsets: [isize; 13],
+    /// Radius of every particle.
     particle_radius: f32,
 }
 
 impl SpatialGrid {
-    /// Builds a grid over the whole cube of side `chamber_size`, for tests.
-    #[cfg(test)]
-    pub fn new(chamber_size: f32, particle_radius: f32) -> Self {
-        let half = chamber_size / 2.0;
-        Self::covering(
-            chamber_size,
-            particle_radius,
-            Vec3::new(-half, -half, -half),
-            Vec3::new(half, half, half),
-        )
-    }
-
     /// Builds a grid on the lattice filling the cube of side `chamber_size`,
     /// storing only the cells that overlap the box from `lower` to `upper`,
     /// plus one cell of margin. Cell boundaries are those of the whole cube,
@@ -147,6 +147,7 @@ impl SpatialGrid {
     }
 
     /// Stored cell along `axis` for a coordinate, clamped into the box.
+    ///
     /// Truncation equals rounding down here: the conversion turns negative
     /// values (and NaN) into zero, which the clamp would give anyway.
     fn axis_cell(&self, coordinate: f32, axis: usize) -> usize {
@@ -169,11 +170,7 @@ impl SpatialGrid {
         }
     }
 
-    #[cfg(test)]
-    fn cell_index(&self, position: Vec3) -> usize {
-        self.locate(position).index as usize
-    }
-
+    /// Sorts `particles` into their cells.
     fn rebuild(&mut self, particles: &[Particle]) {
         // Flat linked lists avoid per-cell allocations; clear only occupied
         // cells. Every bit in a cleared word belongs to an occupied cell.
@@ -229,12 +226,11 @@ impl SpatialGrid {
             | three(row + plane + 1) << 10
     }
 
-    /// Resolves nearby pairs, invoking `on_contact` for every pair that
-    /// touched: `Contact::Overlap` when the pair was only pushed apart,
-    /// `Contact::Impact` when it also bounced.
+    /// Resolves nearby pairs, calling `on_contact` for every pair that
+    /// touched.
     ///
-    /// Each pair is checked once. Returns the total number of candidate
-    /// pairs checked.
+    /// Each pair is checked once. Returns the number of candidate pairs
+    /// checked.
     pub fn resolve_collisions<F>(&mut self, particles: &mut [Particle], mut on_contact: F) -> usize
     where
         F: FnMut(usize, usize, Contact),
@@ -285,9 +281,11 @@ impl SpatialGrid {
         candidate_checks
     }
 
-    /// Resolves one pair on copies, writing them back only if they
-    /// touched, which is rare. Copying avoids borrowing two elements of the
-    /// slice at once, and with it a branch on which index is lower.
+    /// Resolves one pair on copies, writing them back only if they touched,
+    /// which is rare.
+    ///
+    /// Copying avoids borrowing two elements of the slice at once, and with
+    /// it a branch on which index is lower.
     fn resolve_index_pair(
         particles: &mut [Particle],
         first: usize,

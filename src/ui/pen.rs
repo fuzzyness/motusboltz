@@ -1,6 +1,7 @@
-//! Text and shape drawing, in three modes: drawing to the screen, warming
-//! up (measuring every string a frame will draw, without drawing), and
-//! offline for tests, which records the text instead.
+//! Text and shape drawing, in three modes.
+//!
+//! A pen draws to the screen, warms up (measures every string a frame will
+//! draw, without drawing), or, in tests, records the text instead.
 //!
 //! The warm-up exists because of how Macroquad stores letters: each new
 //! letter and size is added to one font texture, which is replaced by a
@@ -44,13 +45,18 @@ const OFFLINE_CHAR_HEIGHT_EM: f32 = 0.7;
 const CORNER_SEGMENTS: usize = 6;
 /// Smallest font size text is shrunk to when fitting a width.
 const MIN_FITTED_SIZE: f32 = 9.0;
-/// Headings and button labels get a dark outline and a drop shadow, as the
-/// menus of Dreamcast games had: the outline's width as a share of the font
-/// size (but at least `MIN_OUTLINE` points), the shadow's offset down and to
-/// the right as a share of the size, and the dark navy both are drawn in.
+/// Width of the dark outline of headings and button labels, as a share of
+/// the font size.
+///
+/// Headings and button labels get an outline and a drop shadow, as the
+/// menus of Dreamcast games had.
 const OUTLINE_SHARE: f32 = 0.08;
+/// Narrowest outline, in points.
 const MIN_OUTLINE: f32 = 1.2;
+/// Offset of the drop shadow down and to the right, as a share of the font
+/// size.
 const SHADOW_SHARE: f32 = 0.12;
+/// The dark navy of the outline and the drop shadow.
 const OUTLINE_COLOR: Color = Color::new(0.04, 0.07, 0.2, 0.9);
 /// Directions the outline is stamped in around each letter.
 const OUTLINE_STEPS: usize = 8;
@@ -67,14 +73,20 @@ const MIN_MITER: f32 = 0.3;
 /// The two weights of the canvas font.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Weight {
+    /// For running text.
     Regular,
+    /// For headings, buttons and key values.
     Semibold,
 }
 
+/// What a pen does with what it is asked to draw.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
+    /// Draws to the screen.
     Draw,
+    /// Measures text only, adding its letters to the font texture.
     Warm,
+    /// Records text only, for tests without a window.
     #[cfg(test)]
     Offline,
 }
@@ -82,11 +94,12 @@ enum Mode {
 /// Draws to the screen, warms the font texture up, or (in tests without a
 /// window) only records the text it would have drawn.
 pub struct Pen {
+    /// What the pen does.
     mode: Mode,
     /// A soft shadow under light text, for text over a see-through card.
     shadow: Option<Color>,
     /// Text recorded while offline.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub texts: Vec<String>,
 }
 
@@ -95,44 +108,45 @@ fn light(color: Color) -> bool {
     (color.r + color.g + color.b) / 3.0 > OUTLINE_LIGHTNESS
 }
 
-/// The outline of a rectangle with its corners rounded by `radii` (top
-/// left, top right, bottom right, bottom left; zero leaves a corner
-/// square), in order around it clockwise on screen.
+/// `rect` grown by `by` on every side, or shrunk for a negative `by`.
+pub fn grown(rect: Rect, by: f32) -> Rect {
+    Rect::new(
+        rect.x - by,
+        rect.y - by,
+        rect.w + 2.0 * by,
+        rect.h + 2.0 * by,
+    )
+}
+
+/// The outline of `rect` with its corners rounded, in order around it
+/// clockwise on screen.
+///
+/// The radii are for the top left, top right, bottom right and bottom left
+/// corners; zero leaves a corner square.
 pub fn rounded_outline(rect: Rect, radii: [f32; 4]) -> Vec<Vec2> {
     let limit = (rect.w / 2.0).min(rect.h / 2.0).max(0.0);
-    let [top_left, top_right, bottom_right, bottom_left] = radii.map(|r| r.clamp(0.0, limit));
+    let radii = radii.map(|radius| radius.clamp(0.0, limit));
+    // Each corner, the way in from it, and the quarter turn its arc starts
+    // at, clockwise from the top left.
     let corners = [
-        (
-            vec2(rect.x + top_left, rect.y + top_left),
-            top_left,
-            2.0 * FRAC_PI_2,
-        ),
-        (
-            vec2(rect.right() - top_right, rect.y + top_right),
-            top_right,
-            3.0 * FRAC_PI_2,
-        ),
-        (
-            vec2(rect.right() - bottom_right, rect.bottom() - bottom_right),
-            bottom_right,
-            0.0,
-        ),
-        (
-            vec2(rect.x + bottom_left, rect.bottom() - bottom_left),
-            bottom_left,
-            FRAC_PI_2,
-        ),
+        (rect.point(), vec2(1.0, 1.0), 2.0),
+        (vec2(rect.right(), rect.y), vec2(-1.0, 1.0), 3.0),
+        (vec2(rect.right(), rect.bottom()), vec2(-1.0, -1.0), 0.0),
+        (vec2(rect.x, rect.bottom()), vec2(1.0, -1.0), 1.0),
     ];
     let mut outline = Vec::new();
-    for (center, radius, start) in corners {
-        arc(&mut outline, center, radius, start, start + FRAC_PI_2);
+    for ((corner, inward, quarter), radius) in corners.into_iter().zip(radii) {
+        let start = quarter * FRAC_PI_2;
+        let (center, end) = (corner + inward * radius, start + FRAC_PI_2);
+        arc(&mut outline, center, radius, start, end);
     }
     outline
 }
 
-/// Adds the points of an arc around `center` from angle `start` to `end`
-/// (radians, clockwise on screen when `end` is larger), leaving out a point
-/// that repeats the last one, as a square corner's would.
+/// Adds the points of an arc around `center` from angle `start` to `end`.
+///
+/// Angles are in radians, clockwise on screen when `end` is larger. A point
+/// that repeats the last one, as a square corner's would, is left out.
 pub fn arc(outline: &mut Vec<Vec2>, center: Vec2, radius: f32, start: f32, end: f32) {
     for step in 0..=CORNER_SEGMENTS {
         let angle = start + (end - start) * step as f32 / CORNER_SEGMENTS as f32;
@@ -155,6 +169,8 @@ fn font(weight: Weight) -> Option<&'static Font> {
     }
 }
 
+/// The whole font size nearest `size`.
+///
 /// Font sizes are whole points, so measuring and drawing always ask the
 /// font for the same letters.
 fn whole(size: f32) -> u16 {
@@ -179,37 +195,40 @@ fn glyphs(text: &str, x: f32, y: f32, size: f32, color: Color, weight: Weight, r
 }
 
 impl Pen {
-    pub fn screen() -> Self {
+    /// A pen in `mode`, with no shadow.
+    fn new(mode: Mode) -> Self {
         Self {
-            mode: Mode::Draw,
+            mode,
             shadow: None,
+            #[cfg(test)]
             texts: Vec::new(),
         }
+    }
+
+    /// A pen that draws to the screen.
+    pub fn screen() -> Self {
+        Self::new(Mode::Draw)
     }
 
     /// A pen that measures everything it is asked to write and draws
     /// nothing.
     pub fn warm() -> Self {
-        Self {
-            mode: Mode::Warm,
-            shadow: None,
-            texts: Vec::new(),
-        }
+        Self::new(Mode::Warm)
     }
 
+    /// A pen that records the text it is asked to write, for tests without
+    /// a window.
     #[cfg(test)]
     pub fn offline() -> Self {
-        Self {
-            mode: Mode::Offline,
-            shadow: None,
-            texts: Vec::new(),
-        }
+        Self::new(Mode::Offline)
     }
 
+    /// Whether the pen only measures.
     pub fn is_warming(&self) -> bool {
         self.mode == Mode::Warm
     }
 
+    /// Whether the pen draws to the screen.
     fn live(&self) -> bool {
         self.mode == Mode::Draw
     }
@@ -225,6 +244,7 @@ impl Pen {
         self.measure_weight(text, size, Weight::Regular)
     }
 
+    /// Width of `text` at font `size` in `weight`.
     pub fn measure_weight(&self, text: &str, size: f32, weight: Weight) -> f32 {
         match self.mode {
             #[cfg(test)]
@@ -244,6 +264,7 @@ impl Pen {
         }
     }
 
+    /// Draws `text` with its baseline starting at (`x`, `y`).
     pub fn text(&mut self, text: &str, x: f32, y: f32, size: f32, color: Color) {
         self.text_weight(text, x, y, size, color, Weight::Regular);
     }
@@ -253,6 +274,7 @@ impl Pen {
         self.text_weight(text, x, y, size, color, Weight::Semibold);
     }
 
+    /// Text in `weight`.
     pub fn text_weight(
         &mut self,
         text: &str,
@@ -262,17 +284,32 @@ impl Pen {
         color: Color,
         weight: Weight,
     ) {
+        self.write(text, vec2(x, y), size, color, weight, 0.0);
+    }
+
+    /// Draws, measures or records `text` with its baseline starting at
+    /// `start`, turned by `rotation` radians about that point.
+    fn write(
+        &mut self,
+        text: &str,
+        start: Vec2,
+        size: f32,
+        color: Color,
+        weight: Weight,
+        rotation: f32,
+    ) {
         match self.mode {
             Mode::Draw => {
+                let Vec2 { x, y } = start;
                 if let Some(shadow) = self.shadow.filter(|_| light(color)) {
                     let shadow = Color {
                         a: shadow.a * color.a,
                         ..shadow
                     };
                     let offset = SOFT_SHADOW_OFFSET;
-                    glyphs(text, x + offset, y + offset, size, shadow, weight, 0.0);
+                    glyphs(text, x + offset, y + offset, size, shadow, weight, rotation);
                 }
-                glyphs(text, x, y, size, color, weight, 0.0);
+                glyphs(text, x, y, size, color, weight, rotation);
             }
             Mode::Warm => {
                 self.measure_weight(text, size, weight);
@@ -297,14 +334,7 @@ impl Pen {
     /// Like `text`, turned to read upward from (`x`, `y`), the start of its
     /// baseline.
     pub fn text_upward(&mut self, text: &str, x: f32, y: f32, size: f32, color: Color) {
-        match self.mode {
-            Mode::Draw => glyphs(text, x, y, size, color, Weight::Regular, -FRAC_PI_2),
-            Mode::Warm => {
-                self.measure(text, size);
-            }
-            #[cfg(test)]
-            Mode::Offline => self.texts.push(text.to_owned()),
-        }
+        self.write(text, vec2(x, y), size, color, Weight::Regular, -FRAC_PI_2);
     }
 
     /// Heavy text turned by `rotation`, outlined and shadowed when light.
@@ -352,6 +382,8 @@ impl Pen {
         self.fitted_size_weight(text, width, size, Weight::Regular)
     }
 
+    /// The whole font size, at most `size`, at which `text` in `weight`
+    /// fits in `width`.
     pub fn fitted_size_weight(&self, text: &str, width: f32, size: f32, weight: Weight) -> f32 {
         let size = whole(size) as f32;
         let natural = self.measure_weight(text, size, weight).max(1.0);
@@ -394,9 +426,11 @@ impl Pen {
         self.text(text, right - width, y, size, color);
     }
 
-    /// Limits what is drawn after it to `rect` (in screen points), or with
-    /// `None` lifts the limit. Pixels count from the top left of the
-    /// screen, or of the image being painted, which covers the same area.
+    /// Limits what is drawn after it to `rect`, in screen points, or with
+    /// `None` lifts the limit.
+    ///
+    /// Pixels count from the top left of the screen, or of the image being
+    /// painted, which covers the same area.
     pub fn clip(&self, rect: Option<Rect>) {
         if !self.live() {
             return;
@@ -416,41 +450,47 @@ impl Pen {
         }));
     }
 
-    pub fn rect(&self, x: f32, y: f32, width: f32, height: f32, color: Color) {
+    /// Fills `rect`.
+    pub fn rect(&self, rect: Rect, color: Color) {
         if self.live() {
-            draw_rectangle(x, y, width, height, color);
+            draw_rectangle(rect.x, rect.y, rect.w, rect.h, color);
         }
     }
 
-    pub fn line(&self, x1: f32, y1: f32, x2: f32, y2: f32, thickness: f32, color: Color) {
+    /// Draws a straight line from `from` to `to`.
+    pub fn line(&self, from: Vec2, to: Vec2, thickness: f32, color: Color) {
         if self.live() {
-            draw_line(x1, y1, x2, y2, thickness, color);
+            draw_line(from.x, from.y, to.x, to.y, thickness, color);
         }
     }
 
-    pub fn circle(&self, x: f32, y: f32, radius: f32, color: Color) {
+    /// Fills a circle.
+    pub fn circle(&self, center: Vec2, radius: f32, color: Color) {
         if self.live() {
-            draw_circle(x, y, radius, color);
+            draw_circle(center.x, center.y, radius, color);
         }
     }
 
+    /// Fills a triangle.
     pub fn triangle(&self, a: Vec2, b: Vec2, c: Vec2, color: Color) {
         if self.live() {
             draw_triangle(a, b, c, color);
         }
     }
 
-    /// A filled rectangle with rounded corners of `radius`, drawn as one fan
-    /// of triangles so a translucent color blends evenly. A radius of half
-    /// the height gives a pill.
-    pub fn round_rect(&self, x: f32, y: f32, width: f32, height: f32, radius: f32, color: Color) {
-        let rect = Rect::new(x, y, width, height);
+    /// Fills `rect` with rounded corners of `radius`.
+    ///
+    /// It is drawn as one fan of triangles so a translucent color blends
+    /// evenly. A radius of half the height gives a pill.
+    pub fn round_rect(&self, rect: Rect, radius: f32, color: Color) {
         self.fan(rect.center(), &rounded_outline(rect, [radius; 4]), color);
     }
 
-    /// Fills the shape inside `outline` (its points in order around it) as
-    /// one fan of triangles from `center`, from which every point of the
-    /// outline must be in plain view. A translucent color blends evenly.
+    /// Fills the shape inside `outline`, its points in order around it, as
+    /// one fan of triangles from `center`.
+    ///
+    /// Every point of the outline must be in plain view from `center`. A
+    /// translucent color blends evenly.
     pub fn fan(&self, center: Vec2, outline: &[Vec2], color: Color) {
         if !self.live() {
             return;
@@ -461,8 +501,10 @@ impl Pen {
         }
     }
 
-    /// A band `width` wide just inside the closed `outline`, drawn as
-    /// pieces that meet edge to edge, so a translucent color stays even.
+    /// Fills a band `width` wide just inside the closed `outline`.
+    ///
+    /// It is drawn as pieces that meet edge to edge, so a translucent color
+    /// stays even.
     pub fn ring(&self, outline: &[Vec2], width: f32, color: Color) {
         if !self.live() || outline.len() < 3 {
             return;

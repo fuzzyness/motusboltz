@@ -2,6 +2,22 @@
 
 use super::*;
 
+impl Sprites {
+    /// Sprites gathered so far.
+    pub(crate) fn len(&self) -> usize {
+        self.gathered.len()
+    }
+
+    /// Each sprite's middle and color.
+    pub(crate) fn centers(&self) -> Vec<(Vec3, Color)> {
+        self.gathered
+            .iter()
+            .map(|sprite| (sprite.center, sprite.color))
+            .collect()
+    }
+}
+
+/// Numbers drawn from the hash.
 const SAMPLES: u32 = 10_000;
 
 #[test]
@@ -61,7 +77,7 @@ fn finish_draws_floor_sprites_first_then_far_to_near() {
     assert_eq!(sprites.len(), 5, "a clear sprite is left out");
     sprites.finish(facing.forward);
 
-    let mesh = sprites.mesh();
+    let mesh = &sprites.mesh;
     assert_eq!(mesh.vertices.len(), 5 * VERTICES_PER_SPRITE);
     assert_eq!(mesh.indices.len(), 5 * INDICES_PER_SPRITE);
     let centers: Vec<Vec3> = mesh
@@ -86,8 +102,8 @@ fn a_full_batch_stays_within_one_draw_call() {
     }
     assert_eq!(sprites.len(), MAX_SPRITES);
     sprites.finish(facing.forward);
-    assert!(sprites.mesh().vertices.len() <= DRAW_CALL_VERTEX_CAPACITY);
-    assert!(sprites.mesh().indices.len() <= DRAW_CALL_INDEX_CAPACITY);
+    assert!(sprites.mesh.vertices.len() <= DRAW_CALL_VERTEX_CAPACITY);
+    assert!(sprites.mesh.indices.len() <= DRAW_CALL_INDEX_CAPACITY);
 }
 
 #[test]

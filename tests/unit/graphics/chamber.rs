@@ -3,18 +3,15 @@
 use super::*;
 use macroquad::prelude::ORANGE;
 
-const CHAMBER_HEIGHT: f32 = 4.0;
-const CHAMBER_RADIUS: f32 = 2.0;
+/// The test cylinder.
+const CHAMBER: CylinderDimensions = CylinderDimensions {
+    radius: 2.0,
+    height: 4.0,
+};
 
 #[test]
 fn cylinder_frame_is_one_valid_mesh() {
-    let frame = CylinderFrame::new(
-        CylinderDimensions {
-            radius: CHAMBER_RADIUS,
-            height: CHAMBER_HEIGHT,
-        },
-        ORANGE,
-    );
+    let frame = CylinderFrame::new(CHAMBER, ORANGE, 0.0);
     let expected_vertices =
         (2 * CYLINDER_RING_SEGMENTS + 2 * CYLINDER_VERTICAL_GUIDES) * FRAME_TUBE_SIDES;
     let expected_indices =

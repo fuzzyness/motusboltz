@@ -1,13 +1,27 @@
 //! Tests for the line around each half of the block, `src/graphics/outline.rs`.
 
 use super::*;
+
+/// How far `point`, seen from above, is outside the block whose bores are
+/// `offset` from its middle and whose rounded ends have radius `outer`;
+/// negative inside.
+///
+/// It is for the tests of everything placed around the block.
+pub(crate) fn outside_block(offset: f32, outer: f32, point: Vec2) -> f32 {
+    let nearest = vec2(point.x.clamp(-offset, offset), 0.0);
+    point.distance(nearest) - outer
+}
 use crate::graphics::block::BlockShape;
 use crate::sim::geometry::DEFAULT_GEOMETRY;
 
+/// Points sampled along each outline.
 const SAMPLES: usize = 400;
+/// How far the straight runs reach toward the middle.
 const REACH: f32 = 0.85;
+/// Distance of the outlines out from the block.
 const GAP: f32 = 0.3;
 
+/// The default block and an outline around each half.
 fn outlines() -> (BlockShape, [HalfOutline; 2]) {
     let shape = BlockShape::new(DEFAULT_GEOMETRY);
     let outline = |half| HalfOutline::new(half, shape.offset, shape.outer + GAP, REACH);

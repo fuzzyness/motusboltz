@@ -2,6 +2,16 @@
 
 use super::*;
 
+/// Every character the canvas may draw besides printable ASCII, all present
+/// in both font files.
+const SYMBOLS: &str = "Δ→←↑↓≈−·×≥≤…—°²³";
+
+/// Whether `text` uses only characters the canvas fonts have.
+pub(crate) fn drawable(text: &str) -> bool {
+    text.chars()
+        .all(|c| (' '..='~').contains(&c) || SYMBOLS.contains(c))
+}
+
 /// Character map of a TrueType font: every code point with a glyph. Reads
 /// the format 4 subtable of the `cmap` table, which covers the Basic
 /// Multilingual Plane.

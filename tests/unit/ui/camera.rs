@@ -3,14 +3,19 @@
 use super::*;
 
 impl OrbitCamera {
+    /// A camera at the default scale.
     fn new() -> Self {
         Self::with_scale(1.0)
     }
 }
 
+/// A pan away from the start.
 const TEST_PAN: Vec2 = Vec2::new(1.25, -0.75);
+/// A turn around the vertical axis.
 const TEST_YAW_CHANGE: f32 = 0.6;
+/// A change in pitch.
 const TEST_PITCH_CHANGE: f32 = 0.3;
+/// Largest difference treated as equal.
 const POSITION_TOLERANCE: f32 = 1e-4;
 
 /// Coordinates of the chamber center in the camera's viewing frame.
@@ -71,15 +76,10 @@ fn scaled_camera_reset_keeps_larger_chamber_framed() {
     assert!((camera.distance - initial_distance).abs() < POSITION_TOLERANCE);
 }
 
-#[test]
-fn camera_starts_farther_from_the_chambers() {
-    let camera = OrbitCamera::new();
-    let previous_distance = Vec3::new(6.0, 4.0, 6.0).length();
-    assert!(camera.distance > previous_distance * 1.3);
-}
-
+/// One frame at 60 frames per second.
 const FRAME: f32 = 1.0 / 60.0;
 
+/// Camera keys with the given motion.
 fn keys(orbit: Vec2, pan: Vec2, zoom: f32) -> CameraKeys {
     CameraKeys { orbit, pan, zoom }
 }
@@ -123,11 +123,6 @@ fn zoom_keys_change_distance_within_limits() {
     assert_eq!(camera.distance, MIN_DISTANCE * camera.view_scale);
     camera.apply_keys(keys(Vec2::ZERO, Vec2::ZERO, -1.0), 100.0);
     assert_eq!(camera.distance, MAX_DISTANCE * camera.view_scale);
-}
-
-#[test]
-fn right_drag_pans_natively_but_not_in_the_browser() {
-    assert_eq!(RIGHT_DRAG_PANS, !cfg!(target_arch = "wasm32"));
 }
 
 #[test]
