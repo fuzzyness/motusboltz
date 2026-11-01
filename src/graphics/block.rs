@@ -41,7 +41,7 @@ use crate::sim::geometry::ChamberGeometry;
 /// Steel around each bore beyond its radius.
 pub const WALL_THICKNESS: f32 = 0.3;
 /// Steel under the floors.
-const BASE_THICKNESS: f32 = 0.3;
+pub const BASE_THICKNESS: f32 = 0.3;
 /// Columns around each bore away from the opening, before the opening's
 /// own columns and the block's corners are added.
 const AROUND_SEGMENTS: usize = 96;
@@ -288,7 +288,7 @@ fn interior(color: Color) -> Color {
 
 /// The horizontal direction from the block's middle toward the camera; the
 /// window is cut on that side. Straight above or below, it faces the front.
-fn cut_normal(eye: Vec3) -> Vec3 {
+pub(super) fn cut_normal(eye: Vec3) -> Vec3 {
     let flat = vec3(eye.x, 0.0, eye.z);
     if flat.length_squared() > f32::EPSILON {
         flat.normalize()

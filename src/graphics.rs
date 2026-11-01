@@ -11,6 +11,7 @@ pub mod chamber;
 pub mod cloud;
 pub mod fire;
 pub mod floor;
+pub mod heat_sparks;
 pub mod ice;
 pub mod levels;
 pub mod outline;
@@ -59,6 +60,7 @@ use chamber::ConnectedChamberVisual;
 use cloud::CloudFloor;
 use fire::Fire;
 use floor::FloorGrid;
+use heat_sparks::HeatSparks;
 use ice::Ice;
 use levels::ReservoirLevels;
 use particles::{
@@ -212,6 +214,8 @@ pub struct Scene {
     fire: Fire,
     /// The ice.
     ice: Ice,
+    /// Twinkles where heat crosses the walls.
+    heat_sparks: HeatSparks,
     /// `None` where the sprite shader cannot be built: the burner and ice
     /// still show, without flames or mist.
     sprite_materials: Option<SpriteMaterials>,
@@ -243,6 +247,7 @@ impl Scene {
             trails: TrailRenderer::new(),
             fire: Fire::new(shape),
             ice: Ice::new(shape),
+            heat_sparks: HeatSparks::new(geometry),
             sprite_materials: SpriteMaterials::load(),
             backdrop: Backdrop::new(geometry),
             cloud: CloudFloor::new(shape),
@@ -313,6 +318,7 @@ impl Scene {
         self.fire.build(self.levels.heat, seconds, facing);
         self.ice.load_shader();
         self.ice.build(self.levels.cold, seconds, light, facing);
+        self.heat_sparks.build(simulation, camera, seconds);
         self.chamber.draw(camera);
         self.assembly.draw(simulation.power_pistons(), camera);
         self.fire.draw_burner();
@@ -331,9 +337,14 @@ impl Scene {
         }
         // Light and haze last: they are tested against everything solid
         // but hide nothing.
+        // The sparks stay out of the way of the followed particles while
+        // the tracers are on.
         if let Some(materials) = &self.sprite_materials {
             self.fire.draw(materials);
             self.ice.draw(materials);
+            if simulation.tracers().is_none() {
+                self.heat_sparks.draw(materials);
+            }
         }
     }
 }

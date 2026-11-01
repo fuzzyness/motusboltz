@@ -285,9 +285,11 @@ fn thermal_reservoirs_exchange_energy_at_both_cylinder_walls() {
 fn cold_sink_alone_drives_heat_from_hot_to_cold() {
     const COUNT: usize = 256;
     const SECONDS: f32 = 20.0;
+    // The cold wall where the figures above were measured.
+    const COLD_KELVIN: f32 = 100.0;
     let mut simulation = ConnectedChambers::seeded(COUNT);
     simulation.set_hot_kelvin(MIN_HOT_KELVIN);
-    simulation.set_cold_kelvin(MIN_COLD_KELVIN);
+    simulation.set_cold_kelvin(COLD_KELVIN);
     simulation.pin_pistons();
     for _ in 0..(SECONDS / FIXED_DT) as usize {
         simulation.step(FIXED_DT);

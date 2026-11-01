@@ -1,14 +1,17 @@
 //! The main loop.
 //!
 //! Each frame reads the input, steps the simulation, updates the panel and
-//! camera, and draws the background, then the scene with the panel on the
-//! left and the sliders on the right, and the buttons over the scene. Under
-//! the toggles at the scene's top left go the frame rate (in the Advanced
-//! view) and the warning when physics time is dropped.
+//! camera, and draws the background, then the scene with its labels, the
+//! panel on the left and the sliders on the right with the demo's banner
+//! under them, and the buttons over the scene. Under the toggles at the
+//! scene's top left go the frame rate (in the Advanced view) and the
+//! warning when physics time is dropped.
 
 use macroquad::miniquad::date;
 use macroquad::prelude::{
+    Camera,
     Color,
+    Mat4,
     MouseButton,
     Rect,
     Vec2,
@@ -53,10 +56,15 @@ use crate::ui::controls::{
     SceneArea,
     TOGGLES_BOTTOM, //
 };
+use crate::ui::demos::{
+    self,
+    Scenario, //
+};
 use crate::ui::drawer::{
     self,
     Edge, //
 };
+use crate::ui::energy_strip;
 use crate::ui::fonts;
 use crate::ui::frame_stats::{
     FrameStats,
@@ -79,6 +87,7 @@ use crate::ui::panel::{
     PanelPointer, //
 };
 use crate::ui::pen::Pen;
+use crate::ui::scene_labels;
 use crate::ui::shortcuts;
 use crate::ui::start_prompt::StartPrompt;
 
@@ -139,7 +148,7 @@ const FOLLOWED_PARTICLES: usize = 5;
 const CAMERA_FRAMING_MARGIN: f32 = 1.42;
 
 /// The first view, framing a chamber of `geometry`.
-fn initial_camera(geometry: ChamberGeometry) -> OrbitCamera {
+pub fn initial_camera(geometry: ChamberGeometry) -> OrbitCamera {
     let scale = geometry.cylinder_radius / ChamberGeometry::scaled(1.0).cylinder_radius;
     OrbitCamera::with_scale(CAMERA_FRAMING_MARGIN * scale)
 }
@@ -151,10 +160,13 @@ fn clock_seed() -> u64 {
     (date::now() * SEED_TICKS_PER_SECOND) as u64
 }
 
+/// The demo set up at launch.
+const FIRST_DEMO: Scenario = Scenario::HeatEngine;
+
 /// Runs the application.
 ///
-/// It starts with a default fill at 300 K, both reservoirs at 300 K and
-/// the flywheel at rest until the first Start.
+/// It starts with a default fill at 300 K, the walls set for the first
+/// demo and the flywheel at rest until the first Start.
 pub async fn run() {
     srand(clock_seed());
     let mut app = App::new();
@@ -177,6 +189,13 @@ struct App {
     tracers: bool,
     /// The keys list shows.
     show_keys: bool,
+    /// The labels on the scene show.
+    show_labels: bool,
+    /// The Demos menu is open.
+    show_demos: bool,
+    /// The demo set up last, until a slider or a new fill changes its
+    /// settings.
+    demo: Option<Scenario>,
     /// The sky with a cloud to stand on, or the dark grid.
     scenery: Scenery,
     /// When Start shows.
@@ -205,7 +224,10 @@ impl App {
     /// The app at launch, with the fonts loaded.
     fn new() -> Self {
         fonts::load();
-        let simulation = ConnectedChambers::with_concentration(DEFAULT_CONCENTRATION);
+        let mut simulation = ConnectedChambers::with_concentration(DEFAULT_CONCENTRATION);
+        let (hot_kelvin, cold_kelvin) = FIRST_DEMO.kelvin();
+        simulation.set_hot_kelvin(hot_kelvin);
+        simulation.set_cold_kelvin(cold_kelvin);
         Self {
             panel: EnginePanel::new(),
             panel_layer: CachedLayer::new(),
@@ -223,6 +245,9 @@ impl App {
             slow: false,
             tracers: false,
             show_keys: false,
+            show_labels: true,
+            show_demos: false,
+            demo: Some(FIRST_DEMO),
             scenery: Scenery::default(),
             start_prompt: StartPrompt::new(),
             frame_stats: FrameStats::new(),
@@ -255,8 +280,13 @@ impl App {
             tracers: self.tracers,
             panel: self.show_panel,
             keys: self.show_keys,
+            labels: self.show_labels,
+            demos: self.show_demos,
+            demo: self.demo,
             start: self.start_prompt.shown(),
-            no_gap: self.simulation.hot_kelvin() <= self.simulation.cold_kelvin(),
+            // A demo's banner says what to expect instead of the tip.
+            no_gap: self.simulation.hot_kelvin() <= self.simulation.cold_kelvin()
+                && self.demo.is_none(),
             sky: self.scenery == Scenery::Sky,
             sliders: self.show_sliders,
             hidden: self.hide_all,
@@ -329,7 +359,20 @@ impl App {
         self.show_panel ^= chose(keys.panel, Action::TogglePanel);
         self.show_sliders ^= chose(keys.sliders, Action::ToggleSliders);
         self.hide_all ^= chose(keys.hide_all, Action::ToggleAll);
-        self.show_keys ^= chose(keys.keys, Action::ToggleKeys);
+        self.show_labels ^= chose(keys.labels, Action::ToggleLabels);
+        // The keys list and the Demos menu drop into the same place, so
+        // opening one closes the other.
+        if chose(keys.keys, Action::ToggleKeys) {
+            self.show_keys = !self.show_keys;
+            self.show_demos &= !self.show_keys;
+        }
+        if chose(keys.demos, Action::ToggleDemos) {
+            self.show_demos = !self.show_demos;
+            self.show_keys &= !self.show_demos;
+        }
+        if let Some(Action::Demo(scenario)) = events.action {
+            self.set_up(scenario);
+        }
         if chose(keys.scenery, Action::ToggleScenery) {
             self.scenery = self.scenery.toggled();
         }
@@ -341,6 +384,12 @@ impl App {
         }
         if keys.camera_reset {
             self.camera.reset();
+        }
+        // A new fill or temperature ends the demo, whose banner would no
+        // longer be true.
+        let changed = [events.concentration, events.hot_kelvin, events.cold_kelvin];
+        if keys.fill_preset.is_some() || changed.iter().any(Option::is_some) {
+            self.demo = None;
         }
         if let Some(preset) = keys.fill_preset {
             let concentration = CONCENTRATION_PRESETS[preset];
@@ -356,6 +405,19 @@ impl App {
         if let Some(kelvin) = events.cold_kelvin {
             self.simulation.set_cold_kelvin(kelvin);
         }
+    }
+
+    /// Sets up `scenario`: its temperatures on the walls and the sliders,
+    /// and fresh gas with the flywheel at rest, waiting for Start.
+    fn set_up(&mut self, scenario: Scenario) {
+        let (hot_kelvin, cold_kelvin) = scenario.kelvin();
+        self.simulation.set_hot_kelvin(hot_kelvin);
+        self.simulation.set_cold_kelvin(cold_kelvin);
+        self.simulation.reset();
+        self.controls.set_kelvin(hot_kelvin, cold_kelvin);
+        self.paused = false;
+        self.show_demos = false;
+        self.demo = Some(scenario);
     }
 
     /// Steps the simulation by this frame's time and updates what follows
@@ -389,14 +451,34 @@ impl App {
 
         // Measure every string first, then draw (see `Pen` for why).
         let panel_stale = self.panel_shown() && self.panel.needs_paint(self.status(), area.height);
-        self.draw_overlay(&mut Pen::warm(), area, panel_stale);
-        self.draw_overlay(&mut Pen::screen(), area, panel_stale);
+        let view = camera.matrix();
+        self.draw_overlay(&mut Pen::warm(), area, view, panel_stale);
+        self.draw_overlay(&mut Pen::screen(), area, view, panel_stale);
     }
 
-    /// Everything over the scene: the panel, the corner readout, the build
-    /// label, the controls and the keys list.
-    fn draw_overlay(&mut self, pen: &mut Pen, area: SceneArea, panel_stale: bool) {
+    /// Everything over the scene, seen through `view`: the labels, the
+    /// panel, the controls, the energy strip, the build label, the demo's
+    /// banner, the keys list and the corner readout.
+    fn draw_overlay(&mut self, pen: &mut Pen, area: SceneArea, view: Mat4, panel_stale: bool) {
         let status = self.status();
+        let start = self.start_prompt.shown();
+        // The demo's banner and the energy strip stack under the sliders'
+        // card. The labels keep clear of both and give way to the Demos
+        // menu while it is open.
+        let shown = !self.hide_all;
+        let width = area.window_width;
+        let banner = self
+            .demo
+            .filter(|_| shown)
+            .map(|demo| demos::banner(pen, width, demo, start));
+        let column_top = banner.unwrap_or(controls::slider_column(width)).bottom() + MARGIN;
+        let panel = self.panel_shown();
+        let strip =
+            energy_strip::place(pen, area, &self.simulation, column_top, panel).filter(|_| shown);
+        if self.show_labels && !self.show_demos && shown {
+            let cards: Vec<Rect> = banner.into_iter().chain(strip).collect();
+            scene_labels::draw(pen, &self.simulation, view, area, &cards);
+        }
         if self.panel_shown() {
             let panel_area = Rect::new(0.0, 0.0, PANEL_WIDTH, area.height);
             drawer::draw_card(pen, controls::panel_card(area.height), Edge::Left, true);
@@ -415,6 +497,9 @@ impl App {
         if self.hide_all {
             return;
         }
+        if let Some(card) = strip {
+            energy_strip::draw(pen, card, &self.simulation);
+        }
         // The build label sits left of Hide all, level with its text.
         let corner = controls::corner_button(pen, area);
         let label_right = corner.x - BUILD_LABEL_GAP;
@@ -425,9 +510,15 @@ impl App {
             backing(pen, label_right - width, label_y, width, size);
         }
         pen.text_right(BUILD_LABEL, label_right, label_y, size, BUILD_LABEL_COLOR);
-        // The keys list drops down under the toggles; the corner readout
-        // goes under the list while it is open.
+        if let Some(demo) = self.demo {
+            demos::draw_banner(pen, width, demo, start);
+        }
+        // The keys list or the Demos menu drops down under the toggles,
+        // and the corner readout goes under it.
         let mut corner_top = CORNER_TOP_Y;
+        if self.show_demos {
+            corner_top = controls::demo_menu_bottom() + CORNER_LINE_HEIGHT;
+        }
         if self.show_keys {
             let list_top = TOGGLES_BOTTOM + MARGIN / 2.0;
             let middle = controls::toggles_middle(area);

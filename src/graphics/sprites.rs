@@ -167,6 +167,9 @@ pub struct SpriteMaterials {
     pub flame: Material,
     /// Adds light, shaped as a twinkle: sparks and sparkles.
     pub sparkle: Material,
+    /// Like `sparkle`, drawn over everything, for heat sparks at the far
+    /// wall of a bore, where the gas in front would hide them.
+    pub overlay: Material,
 }
 
 impl SpriteMaterials {
@@ -177,24 +180,29 @@ impl SpriteMaterials {
     pub fn load() -> Option<Self> {
         let alpha = BlendFactor::Value(BlendValue::SourceAlpha);
         let behind = BlendFactor::OneMinusValue(BlendValue::SourceAlpha);
-        let material = |source: BlendFactor, behind: BlendFactor, fragment| {
-            load_material(
-                ShaderSource::Glsl {
-                    vertex: SPRITE_VERTEX,
-                    fragment,
-                },
-                MaterialParams {
-                    pipeline_params: sprite_pipeline(source, behind),
-                    ..Default::default()
-                },
-            )
-            .ok()
+        let load = |pipeline_params, fragment| {
+            let source = ShaderSource::Glsl {
+                vertex: SPRITE_VERTEX,
+                fragment,
+            };
+            let params = MaterialParams {
+                pipeline_params,
+                ..Default::default()
+            };
+            load_material(source, params).ok()
+        };
+        let material = |source, behind, fragment| load(sprite_pipeline(source, behind), fragment);
+        let overlay = PipelineParams {
+            depth_test: Comparison::Always,
+            depth_write: false,
+            ..sprite_pipeline(alpha, BlendFactor::One)
         };
         Some(Self {
             glow: material(alpha, BlendFactor::One, SPRITE_FRAGMENT)?,
             haze: material(alpha, behind, SPRITE_FRAGMENT)?,
             flame: material(BlendFactor::One, behind, FLAME_FRAGMENT)?,
             sparkle: material(alpha, BlendFactor::One, SPARKLE_FRAGMENT)?,
+            overlay: load(overlay, SPARKLE_FRAGMENT)?,
         })
     }
 }

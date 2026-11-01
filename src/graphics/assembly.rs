@@ -466,6 +466,11 @@ impl Assembly {
     }
 }
 
+/// The flywheel's outer radius for an engine of `geometry`.
+pub fn flywheel_radius(geometry: ChamberGeometry) -> f32 {
+    FLYWHEEL_RADIUS * geometry.cylinder_radius
+}
+
 /// The x of the hot (left) or cold (right) cylinder's axis.
 fn side_x(layout: Layout, hot: bool) -> f32 {
     if hot { -layout.offset } else { layout.offset }
@@ -734,4 +739,4 @@ fn rod(solid: &mut Solid, layout: Layout, length: f32) {
 
 #[cfg(test)]
 #[path = "../../tests/unit/graphics/assembly.rs"]
-pub(crate) mod tests;
+mod tests;

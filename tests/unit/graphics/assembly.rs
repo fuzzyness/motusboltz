@@ -7,12 +7,6 @@ use crate::sim::engine::PARTICLE_RADIUS;
 use crate::sim::geometry::DEFAULT_GEOMETRY;
 use macroquad::prelude::Vec2;
 
-/// The flywheel's outer radius for an engine of `geometry`, for the tests
-/// of the first view.
-pub(crate) fn flywheel_radius(geometry: ChamberGeometry) -> f32 {
-    FLYWHEEL_RADIUS * geometry.cylinder_radius
-}
-
 /// Crank angles sampled over one turn.
 const ANGLES: usize = 24;
 /// Largest difference treated as equal.

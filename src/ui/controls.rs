@@ -1,8 +1,10 @@
 //! The on-screen controls.
 //!
-//! They are the Keys and scenery toggles centered at the top; a row of
-//! Reset, Start or Pause, Slow and Tracers centered along the bottom, where Start takes Pause's place whenever pressing it would help
-//! (Space does whichever is shown); the hot, cold and helium sliders on a
+//! They are the Demos, Labels, Keys and scenery toggles centered at the
+//! top, with the Demos menu dropping under them while it is open; a row of
+//! Reset, Start or Pause, Slow and Tracers centered along the bottom, where
+//! Start takes Pause's place whenever pressing it would help (Space does
+//! whichever is shown); the hot, cold and helium sliders on a
 //! card at the right; a hump on that card and on the panel's that closes
 //! each, leaving a tab at the window's edge that opens it again (see
 //! `drawer`); and Hide all, tucked in the bottom-right corner, which hides
@@ -24,6 +26,10 @@ use crate::ui::button::{
     LABEL_SIZE,
     Label,
     Look, //
+};
+use crate::ui::demos::{
+    SCENARIOS,
+    Scenario, //
 };
 use crate::ui::drawer::{
     self,
@@ -64,6 +70,8 @@ const CORNER_LABEL_SIZE: f32 = 14.0;
 const MIN_ROW_LABEL_SIZE: f32 = 12.0;
 /// How far the sliders' card reaches past the sliders.
 const CARD_PAD: f32 = 16.0;
+/// Gap above each item of the Demos menu.
+const MENU_GAP: f32 = 8.0;
 /// The tip over the row when Start is offered with the sides at one
 /// temperature.
 const NO_GAP_TIP: &str = "Tip: drag Hot side up first, or the flywheel will run down.";
@@ -89,6 +97,10 @@ pub enum Action {
     TogglePanel,
     /// Show or hide the sliders.
     ToggleSliders,
+    /// Open or close the Demos menu.
+    ToggleDemos,
+    /// Show or hide the labels on the scene.
+    ToggleLabels,
     /// Show or hide the keys list.
     ToggleKeys,
     /// Switch between the sky and the grid scenery.
@@ -105,10 +117,17 @@ pub enum Action {
     ToggleTracers,
     /// Start the engine.
     Start,
+    /// Set up a demo.
+    Demo(Scenario),
 }
 
 /// The toggles at the top.
-const TOGGLES: [Action; 2] = [Action::ToggleKeys, Action::ToggleScenery];
+const TOGGLES: [Action; 4] = [
+    Action::ToggleDemos,
+    Action::ToggleLabels,
+    Action::ToggleKeys,
+    Action::ToggleScenery,
+];
 /// Start and Pause take turns in one place in the bottom row.
 const SHARED: [Action; 2] = [Action::Start, Action::TogglePause];
 
@@ -139,6 +158,12 @@ pub struct ButtonStates {
     pub panel: bool,
     /// The keys list is shown.
     pub keys: bool,
+    /// The labels are shown.
+    pub labels: bool,
+    /// The Demos menu is open.
+    pub demos: bool,
+    /// The demo set up last, while its settings stand.
+    pub demo: Option<Scenario>,
     /// Whether Start is offered, in Pause's place (see `StartPrompt`).
     pub start: bool,
     /// Both sides are at the same temperature, so a tip shows over Start.
@@ -159,6 +184,9 @@ impl ButtonStates {
         tracers: true,
         panel: true,
         keys: true,
+        labels: true,
+        demos: true,
+        demo: Some(Scenario::HeatEngine),
         start: true,
         no_gap: true,
         sky: true,
@@ -175,6 +203,8 @@ impl Action {
             Self::ToggleSliders => ("Sliders", "C"),
             Self::ToggleAll if states.hidden => ("Show all", "U"),
             Self::ToggleAll => ("Hide all", "U"),
+            Self::ToggleDemos => ("Demos", "M"),
+            Self::ToggleLabels => ("Labels", "N"),
             Self::ToggleKeys => ("Keys", "H"),
             Self::ToggleScenery if states.sky => ("Grid view", "V"),
             Self::ToggleScenery => ("Sky view", "V"),
@@ -184,6 +214,7 @@ impl Action {
             Self::ToggleSlow => ("Slow", "L"),
             Self::ToggleTracers => ("Tracers", "F"),
             Self::Start => ("Start", "Space"),
+            Self::Demo(scenario) => (scenario.title(), scenario.temperatures()),
         };
         Label { text, key }
     }
@@ -197,7 +228,10 @@ impl Action {
         let (hue, on) = match self {
             Self::TogglePanel | Self::ToggleSliders | Self::ToggleScenery => (Hue::Pearl, false),
             Self::ToggleAll => (Hue::Pearl, states.hidden),
+            Self::ToggleDemos => (Hue::Pearl, states.demos),
+            Self::ToggleLabels => (Hue::Pearl, states.labels),
             Self::ToggleKeys => (Hue::Pearl, states.keys),
+            Self::Demo(scenario) => (Hue::Pearl, states.demo == Some(scenario)),
             Self::ResetGas => (Hue::Coral, false),
             Self::Start => (Hue::Amber, true),
             Self::TogglePause => (Hue::Mint, states.paused),
@@ -288,10 +322,15 @@ pub fn slider_column(width: f32) -> Rect {
     Rect::new(left, top - CARD_PAD, size.0, size.1)
 }
 
+/// Top of the bottom row in a window `height` points tall.
+pub fn row_top(height: f32) -> f32 {
+    height - ROW_BOTTOM_MARGIN - ROW_HEIGHT
+}
+
 /// Hide all, in the bottom-right corner of `area`.
 pub fn corner_button(pen: &Pen, area: SceneArea) -> Rect {
     let width = widest(pen, Action::ToggleAll, CORNER_LABEL_SIZE);
-    let middle = area.height - ROW_BOTTOM_MARGIN - ROW_HEIGHT / 2.0;
+    let middle = row_top(area.height) + ROW_HEIGHT / 2.0;
     let (left, top) = (
         area.window_width - MARGIN - width,
         middle - CORNER_HEIGHT / 2.0,
@@ -362,9 +401,37 @@ pub fn place_buttons(pen: &Pen, area: SceneArea, states: ButtonStates) -> Vec<Pl
     let room = area.width - 2.0 * MARGIN;
     let (_, natural) = row_widths(pen, &row, LABEL_SIZE);
     let size = (LABEL_SIZE * (room / natural).min(1.0)).max(MIN_ROW_LABEL_SIZE);
-    let row_top = area.height - ROW_BOTTOM_MARGIN - ROW_HEIGHT;
+    let row_top = row_top(area.height);
     centered(&row, row_top, ROW_HEIGHT, size);
+    if states.demos {
+        placed.extend(demo_menu(pen, area, states));
+    }
     placed
+}
+
+/// The Demos menu for `states`, a column of pills dropping from the Demos
+/// toggle, the first of the toggles, in `area`.
+fn demo_menu(pen: &Pen, area: SceneArea, states: ButtonStates) -> impl Iterator<Item = Placed> {
+    let (_, toggles) = row_widths(pen, &TOGGLES, TOGGLE_LABEL_SIZE);
+    let width = SCENARIOS
+        .iter()
+        .map(|&scenario| widest(pen, Action::Demo(scenario), TOGGLE_LABEL_SIZE))
+        .fold(0.0, f32::max);
+    let toggles_left = area.left + (area.width - toggles) / 2.0;
+    let left = toggles_left.min(area.right() - MARGIN - width);
+    SCENARIOS
+        .into_iter()
+        .enumerate()
+        .map(move |(index, scenario)| {
+            let top = TOGGLES_BOTTOM + MENU_GAP + index as f32 * (TOGGLE_HEIGHT + MENU_GAP);
+            let rect = Rect::new(left, top, width, TOGGLE_HEIGHT);
+            Action::Demo(scenario).placed(states, rect, TOGGLE_LABEL_SIZE, Shape::Pill)
+        })
+}
+
+/// Bottom of the Demos menu while it is open.
+pub fn demo_menu_bottom() -> f32 {
+    TOGGLES_BOTTOM + SCENARIOS.len() as f32 * (MENU_GAP + TOGGLE_HEIGHT)
 }
 
 /// Width that fits the action's label in every state.
@@ -475,6 +542,12 @@ impl Controls {
     /// Moves the helium slider to a fill chosen another way (keys 1 to 5).
     pub fn set_concentration(&mut self, concentration: f32) {
         self.concentration.set_value(concentration);
+    }
+
+    /// Moves the temperature sliders to walls set another way (a demo).
+    pub fn set_kelvin(&mut self, hot_kelvin: f32, cold_kelvin: f32) {
+        self.hot.set_value(hot_kelvin);
+        self.cold.set_value(cold_kelvin);
     }
 
     /// Whether the camera should ignore the mouse this frame.

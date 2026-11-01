@@ -4,7 +4,7 @@
 //! In the style of a Dreamcast game, the heap is glossy blue blocks and
 //! crystal shards that catch the light, frosted and edged in white, with
 //! sparkles twinkling on them. All follow the Cold side setting: at 300 K
-//! there is none; down to 100 K the heap grows block by block and the mist
+//! there is none; down to 77 K the heap grows block by block and the mist
 //! thickens. Like the mist off dry ice, most of it is heavier than the air
 //! around it, so it sinks and spreads over the floor; a few wisps rise.
 //! Drawing only: the physics knows nothing of it, and the ice stands for
@@ -186,12 +186,12 @@ void main() {
     gl_FragColor = vec4(lit, 1.0) * texture2D(Texture, uv);
 }"#;
 
-/// Reach of the frost on the floor around the cold half at 100 K, in
+/// Reach of the frost on the floor around the cold half at 77 K, in
 /// heap radii from its axis.
 const FROST_REACH: f32 = 1.7;
 /// Color of the frost.
 const FROST_COLOR: Color = Color::from_rgba(205, 230, 255, 255);
-/// Opacity of the frost at 100 K.
+/// Opacity of the frost at 77 K.
 const FROST_OPACITY: f32 = 0.3;
 /// Height of the frost above the floor, clear of the floor grid.
 const ABOVE_FLOOR: f32 = 0.012;
@@ -210,7 +210,7 @@ const PUFF_SIZE_NEW: f32 = 0.14;
 const PUFF_SIZE_OLD: f32 = 0.55;
 /// Most opacity of a puff at the first sign of cold.
 const PUFF_OPACITY_LOW: f32 = 0.08;
-/// Most opacity of a puff at 100 K.
+/// Most opacity of a puff at 77 K.
 const PUFF_OPACITY_HIGH: f32 = 0.2;
 /// Share of the puffs that rise.
 const RISING_SHARE: f32 = 0.25;
@@ -247,7 +247,7 @@ const SALT_DEPTH: u32 = 18;
 /// Salt for which block a sparkle sits on.
 const SALT_SPARKLE: u32 = 19;
 
-/// How cold the ice is, from 0 (none, at 300 K) to 1 (at 100 K).
+/// How cold the ice is, from 0 (none, at 300 K) to 1 (at 77 K).
 pub fn cold_level(cold_kelvin: f32) -> f32 {
     ((MAX_COLD_KELVIN - cold_kelvin) / (MAX_COLD_KELVIN - MIN_COLD_KELVIN)).clamp(0.0, 1.0)
 }

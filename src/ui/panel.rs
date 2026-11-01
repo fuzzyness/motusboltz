@@ -14,7 +14,7 @@
 
 mod advanced;
 mod plot;
-mod readout;
+pub mod readout;
 mod simple;
 
 use macroquad::prelude::{
@@ -117,9 +117,9 @@ const COMFORTABLE_PLOT_SIDE: f32 = 200.0;
 /// The soft shadow under the panel's light text.
 const TEXT_SHADOW: Color = Color::new(0.02, 0.04, 0.1, 0.85);
 /// Running text.
-const TEXT: Color = Color::from_rgba(215, 226, 238, 255);
+pub const TEXT: Color = Color::from_rgba(215, 226, 238, 255);
 /// Labels and notes.
-const QUIET: Color = Color::from_rgba(176, 190, 208, 255);
+pub const QUIET: Color = Color::from_rgba(176, 190, 208, 255);
 /// Section headings.
 const SECTION: Color = Color::from_rgba(150, 172, 198, 255);
 /// The laws.
@@ -129,13 +129,13 @@ const WARNING: Color = Color::from_rgba(255, 130, 110, 255);
 /// Results as expected.
 const GOOD: Color = Color::from_rgba(140, 220, 150, 255);
 /// The empty part of a bar, and the plot's background.
-const TRACK: Color = Color::new(0.7, 0.8, 0.95, 0.14);
+pub const TRACK: Color = Color::new(0.7, 0.8, 0.95, 0.14);
 /// Heat in, and the hot side.
-const HOT_COLOR: Color = Color::from_rgba(255, 160, 90, 255);
+pub const HOT_COLOR: Color = Color::from_rgba(255, 160, 90, 255);
 /// Heat out, and the cold side.
-const COLD_COLOR: Color = Color::from_rgba(95, 190, 255, 255);
+pub const COLD_COLOR: Color = Color::from_rgba(95, 190, 255, 255);
 /// Work, and the flywheel.
-const WORK_COLOR: Color = Color::from_rgba(255, 218, 110, 255);
+pub const WORK_COLOR: Color = Color::from_rgba(255, 218, 110, 255);
 /// Tint of neutral tiles.
 const PEARL: Color = Color::from_rgba(186, 200, 222, 255);
 /// The scrollbar's track.

@@ -103,16 +103,11 @@ const HEAD_LENGTH: f32 = 9.0;
 const HEAD_OVERHANG: f32 = 5.0;
 /// Gap between the widest heat arrow's head and its labels.
 const ARROW_LABEL_GAP: f32 = 14.0;
-/// From a heat arrow's middle up to its name's baseline.
+/// From a heat arrow's middle up to its name's baseline; the work's
+/// labels, under the flywheel, use the heat out's lines.
 const ARROW_NAME_RISE: f32 = 2.0;
 /// From a heat arrow's middle down to its value's baseline.
 const ARROW_VALUE_DROP: f32 = 14.0;
-/// Inset of the work arrow's labels from its ends.
-const WORK_LABEL_INSET: f32 = 6.0;
-/// From the work arrow's middle up to its name's baseline.
-const WORK_NAME_RISE: f32 = 10.0;
-/// From the work arrow's middle down to its value's baseline.
-const WORK_VALUE_DROP: f32 = 24.0;
 
 /// Radius of a law's numbered badge.
 const BADGE_RADIUS: f32 = 11.0;
@@ -375,34 +370,30 @@ fn draw_diagram(pen: &mut Pen, readout: &Readout, top: f32) -> f32 {
         );
     }
 
-    // Work, across to the flywheel, labeled above and below the arrow.
+    // Work, across to the flywheel, labeled under the flywheel's box, in
+    // line with the heat out, so no width of arrow can cover it.
     let work_left = LEFT + BOX_WIDTH;
-    let work_length = flywheel_left - work_left;
     let middle = gas_top + BOX_HEIGHT / 2.0;
-    right_arrow(
-        pen,
-        work_left,
-        middle,
-        work_length,
-        width_for(work),
-        WORK_COLOR,
-    );
-    let label_left = work_left + WORK_LABEL_INSET;
-    let room = work_length - 2.0 * WORK_LABEL_INSET;
-    pen.fitted(
-        "Work, W",
-        label_left,
-        middle - WORK_NAME_RISE,
-        room,
+    let length = flywheel_left - work_left;
+    right_arrow(pen, work_left, middle, length, width_for(work), WORK_COLOR);
+    let label_middle = gas_top + BOX_HEIGHT + ARROW_LENGTH / 2.0;
+    let centered = |width: f32| flywheel_left + (FLYWHEEL_WIDTH - width) / 2.0;
+    let name = "Work, W";
+    let name_x = centered(pen.measure(name, SMALL_SIZE));
+    pen.text(
+        name,
+        name_x,
+        label_middle - ARROW_NAME_RISE,
         SMALL_SIZE,
         QUIET,
     );
     let work = joules(work);
-    let size = pen.fitted_size_weight(&work, room, BODY_SIZE, Weight::Semibold);
+    let size = pen.fitted_size_weight(&work, FLYWHEEL_WIDTH, BODY_SIZE, Weight::Semibold);
+    let value_x = centered(pen.measure_weight(&work, size, Weight::Semibold));
     pen.strong(
         &work,
-        label_left,
-        middle + WORK_VALUE_DROP,
+        value_x,
+        label_middle + ARROW_VALUE_DROP,
         size,
         WORK_COLOR,
     );

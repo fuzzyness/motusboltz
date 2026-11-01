@@ -17,8 +17,9 @@ use crate::sim::units::KELVIN_PER_UNIT;
 pub const MIN_HOT_KELVIN: f32 = KELVIN_PER_UNIT as f32;
 /// Highest hot-reservoir temperature.
 pub const MAX_HOT_KELVIN: f32 = 1_200.0;
-/// Lowest cold-reservoir temperature.
-pub const MIN_COLD_KELVIN: f32 = 100.0;
+/// Lowest cold-reservoir temperature: liquid nitrogen, the coldest bath a
+/// school lab is likely to have.
+pub const MIN_COLD_KELVIN: f32 = 77.0;
 /// Highest cold-reservoir temperature.
 pub const MAX_COLD_KELVIN: f32 = KELVIN_PER_UNIT as f32;
 /// Chance that a cylinder-wall impact exchanges heat with its reservoir.
@@ -147,19 +148,22 @@ impl ThermalReservoirs {
     /// with a flux-weighted Maxwellian normal speed and Gaussian tangential
     /// components, and its change in energy is booked as heat, and that
     /// heat over the temperature as entropy.
+    ///
+    /// Returns the heat the impact gave the gas, or `None` if it exchanged
+    /// none.
     pub fn reflect(
         &mut self,
         particle: &mut Particle,
         outward_normal: Vec3,
         side: Option<ReservoirSide>,
-    ) {
+    ) -> Option<f32> {
         if particle.velocity.dot(outward_normal) <= 0.0 {
-            return;
+            return None;
         }
         let side = side.filter(|_| self.random.gen_range(0.0_f32, 1.0) < self.accommodation);
         let Some(side) = side else {
             particle.velocity = mirrored(particle.velocity, outward_normal);
-            return;
+            return None;
         };
         let kelvin = match side {
             ReservoirSide::Hot => self.hot_kelvin,
@@ -178,9 +182,10 @@ impl ThermalReservoirs {
         particle.velocity = -outward_normal * sample_normal_speed(temperature, &self.random)
             + tangent * u
             + bitangent * v;
-        let heat = (particle_kinetic_energy(particle.velocity) - before) as f64;
-        *self.heat.side_mut(side) += heat;
-        *self.entropy.side_mut(side) += heat / temperature as f64;
+        let heat = particle_kinetic_energy(particle.velocity) - before;
+        *self.heat.side_mut(side) += heat as f64;
+        *self.entropy.side_mut(side) += heat as f64 / temperature as f64;
+        Some(heat)
     }
 }
 

@@ -98,7 +98,7 @@ fn shortcuts_list_the_bindings_in_ascii_without_the_hidden_kick() {
     }
     let listed: Vec<&str> = SHORTCUTS.iter().map(|&(keys, _)| keys).collect();
     for keys in [
-        "Space", "L", "F", "T", "1 to 5", "I", "G", "C", "U", "H", "R",
+        "Space", "L", "F", "T", "1 to 5", "M", "N", "I", "G", "C", "U", "H", "R",
     ] {
         assert!(listed.contains(&keys), "{keys} missing from the list");
     }

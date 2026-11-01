@@ -6,8 +6,10 @@
 pub mod button;
 pub mod camera;
 pub mod controls;
+pub mod demos;
 pub mod draw_target;
 pub mod drawer;
+pub mod energy_strip;
 pub mod fonts;
 pub mod frame_stats;
 pub mod input;
@@ -15,6 +17,7 @@ pub mod layer;
 pub mod layout;
 pub mod panel;
 pub mod pen;
+pub mod scene_labels;
 pub mod shortcuts;
 pub mod slider;
 pub mod start_prompt;

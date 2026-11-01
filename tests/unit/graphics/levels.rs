@@ -1,6 +1,10 @@
 //! Tests for easing the reservoir effects, `src/graphics/levels.rs`.
 
 use super::*;
+use crate::sim::reservoir::{
+    MAX_HOT_KELVIN,
+    MIN_COLD_KELVIN, //
+};
 
 /// One frame at 60 frames per second.
 const FRAME: f64 = 1.0 / 60.0;
@@ -8,7 +12,7 @@ const FRAME: f64 = 1.0 / 60.0;
 #[test]
 fn starts_at_the_settings_then_eases_toward_new_ones() {
     let mut levels = ReservoirLevels::default();
-    levels.follow(1_200.0, 100.0, 5.0);
+    levels.follow(MAX_HOT_KELVIN, MIN_COLD_KELVIN, 5.0);
     assert_eq!((levels.heat, levels.cold), (1.0, 1.0), "no fade at launch");
 
     // Both sliders back to 300 K: the effects shrink smoothly.

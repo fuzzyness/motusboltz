@@ -2,7 +2,7 @@
 //! fill presets.
 
 use super::*;
-use crate::graphics::assembly::tests::flywheel_radius;
+use crate::graphics::assembly::flywheel_radius;
 use crate::sim::engine::PARTICLE_RADIUS;
 use crate::sim::geometry::DEFAULT_GEOMETRY;
 use crate::sim::pistons::PowerPistons;

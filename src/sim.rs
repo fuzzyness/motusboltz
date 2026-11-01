@@ -10,5 +10,6 @@ pub mod geometry;
 pub mod grid;
 pub mod pistons;
 pub mod reservoir;
+pub mod sparks;
 pub mod tracers;
 pub mod units;

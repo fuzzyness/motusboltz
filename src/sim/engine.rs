@@ -40,6 +40,7 @@ use crate::sim::reservoir::{
     ReservoirSide,
     ThermalReservoirs, //
 };
+use crate::sim::sparks::HeatSparks;
 use crate::sim::tracers::Tracers;
 use crate::sim::units::{
     GasMeasurements,
@@ -141,6 +142,8 @@ pub struct ConnectedChambers {
     cycle: CycleMonitor,
     /// The particles being followed, if tracers are on.
     tracers: Option<Tracers>,
+    /// Recent heat exchanges at the walls, for drawing.
+    sparks: HeatSparks,
 }
 
 impl ConnectedChambers {
@@ -227,6 +230,7 @@ impl ConnectedChambers {
             thermal: ThermalReservoirs::with_seed(random.gen_range(0, u64::MAX)),
             units: HeliumCalibration::new(volume_m3),
             tracers: None,
+            sparks: HeatSparks::new(),
         }
     }
 
@@ -437,6 +441,11 @@ impl ConnectedChambers {
         self.tracers.as_ref()
     }
 
+    /// Recent heat exchanges at the walls.
+    pub fn heat_sparks(&self) -> &HeatSparks {
+        &self.sparks
+    }
+
     /// Model time left on each particle's collision highlight.
     pub fn collision_flashes(&self) -> &[f32] {
         &self.flashes
@@ -514,6 +523,7 @@ impl ConnectedChambers {
             hot_top: hot.face_y,
             cold_top: cold.face_y,
         };
+        self.sparks.advance(dt as f64);
         for particle in &mut self.particles {
             particle.position += particle.velocity * dt;
             let (center_x, piston, side) = if particle.position.x < 0.0 {
@@ -523,7 +533,9 @@ impl ConnectedChambers {
             };
             let work = walls.bounce_piston(particle, center_x, piston, side, &mut self.pistons);
             self.piston_work_by_gas += work as f64;
-            walls.constrain(particle, &mut self.thermal, true);
+            if let Some(heat) = walls.constrain(particle, &mut self.thermal, true) {
+                self.sparks.record(particle.position, heat);
+            }
         }
 
         for remaining in &mut self.flashes {
@@ -634,21 +646,28 @@ impl Walls {
     /// heat if that wall is thermal. After particle collisions, which only
     /// nudge positions, `reflect` is false so the nudge does not count as
     /// another wall impact.
-    fn constrain(self, particle: &mut Particle, thermal: &mut ThermalReservoirs, reflect: bool) {
-        if self.geometry.contains(
-            particle.position,
-            PARTICLE_RADIUS,
-            self.hot_top,
-            self.cold_top,
-        ) {
-            return;
+    ///
+    /// Returns the heat the wall gave the gas, if it exchanged any.
+    fn constrain(
+        self,
+        particle: &mut Particle,
+        thermal: &mut ThermalReservoirs,
+        reflect: bool,
+    ) -> Option<f32> {
+        let (hot_top, cold_top) = (self.hot_top, self.cold_top);
+        if self
+            .geometry
+            .contains(particle.position, PARTICLE_RADIUS, hot_top, cold_top)
+        {
+            return None;
         }
         let (nearest, reservoir) = self.nearest_inside(particle.position);
         let displacement = particle.position - nearest;
         particle.position = nearest;
-        if reflect && displacement.length_squared() > f32::EPSILON {
-            thermal.reflect(particle, displacement.normalize(), reservoir);
+        if !reflect || displacement.length_squared() <= f32::EPSILON {
+            return None;
         }
+        thermal.reflect(particle, displacement.normalize(), reservoir)
     }
 
     /// Bounces a particle that has reached the face of `piston` on `side`,

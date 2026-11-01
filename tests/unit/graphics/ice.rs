@@ -31,9 +31,10 @@ fn build(ice: &mut Ice, cold: f32, seconds: f64) {
 fn cold_level_runs_from_none_at_room_temperature_to_full_at_the_bottom() {
     assert_eq!(cold_level(MAX_COLD_KELVIN), 0.0);
     assert_eq!(cold_level(MIN_COLD_KELVIN), 1.0);
-    assert!((cold_level(200.0) - 0.5).abs() < 1e-6);
+    let middle = (MAX_COLD_KELVIN + MIN_COLD_KELVIN) / 2.0;
+    assert!((cold_level(middle) - 0.5).abs() < 1e-6);
     assert_eq!(cold_level(400.0), 0.0);
-    assert_eq!(cold_level(50.0), 1.0);
+    assert_eq!(cold_level(MIN_COLD_KELVIN - 20.0), 1.0);
 }
 
 #[test]

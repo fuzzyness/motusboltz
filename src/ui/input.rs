@@ -32,6 +32,10 @@ const SCENERY_KEY: KeyCode = KeyCode::V;
 const SLIDERS_KEY: KeyCode = KeyCode::C;
 /// Hides or shows everything around the scene.
 const HIDE_ALL_KEY: KeyCode = KeyCode::U;
+/// Opens or closes the Demos menu.
+const DEMOS_KEY: KeyCode = KeyCode::M;
+/// Shows or hides the labels on the scene.
+const LABELS_KEY: KeyCode = KeyCode::N;
 /// Gives the flywheel an additive kick, which can overdrive the engine.
 ///
 /// It is left out of the help text on purpose; it exists for testing.
@@ -73,12 +77,14 @@ const ZOOM_OUT_KEYS: [KeyCode; 2] = [KeyCode::Minus, KeyCode::KpSubtract];
 /// Every key binding the Keys list shows, as (keys, what they do).
 ///
 /// The hidden kick is left out.
-pub const SHORTCUTS: [(&str, &str); 15] = [
+pub const SHORTCUTS: [(&str, &str); 17] = [
     ("Space", "Start, pause or resume"),
     ("L", "Slow motion"),
     ("F", "Follow particles (tracers)"),
     ("T", "Reset with fresh gas"),
     ("1 to 5", "Less or more helium"),
+    ("M", "Demos: ready-made settings"),
+    ("N", "Show or hide the labels"),
     ("I", "Simple or advanced readings"),
     ("G", "Show or hide the panel"),
     ("C", "Show or hide the sliders"),
@@ -132,6 +138,10 @@ pub struct KeyCommands {
     pub sliders: bool,
     /// Hide or show everything.
     pub hide_all: bool,
+    /// Open or close the Demos menu.
+    pub demos: bool,
+    /// Show or hide the labels.
+    pub labels: bool,
     /// Kick the flywheel.
     pub kick: bool,
     /// Index of the fill preset chosen with keys 1 to 5.
@@ -158,6 +168,8 @@ impl KeyCommands {
             scenery: pressed(SCENERY_KEY),
             sliders: pressed(SLIDERS_KEY),
             hide_all: pressed(HIDE_ALL_KEY),
+            demos: pressed(DEMOS_KEY),
+            labels: pressed(LABELS_KEY),
             kick: pressed(KICK_KEY),
             fill_preset: FILL_KEYS.into_iter().position(&pressed),
         }
