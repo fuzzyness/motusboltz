@@ -82,6 +82,7 @@ use crate::ui::layout::{
     scene_left,
     scene_span, //
 };
+use crate::ui::motion;
 use crate::ui::panel::{
     EnginePanel,
     PanelPointer, //
@@ -108,8 +109,10 @@ const BUILD_LABEL: &str = concat!(
 const BUILD_LABEL_FONT_SIZE: f32 = 14.0;
 /// Color of the build label.
 const BUILD_LABEL_COLOR: Color = Color::from_rgba(120, 140, 160, 255);
-/// First baseline of the corner readout, under the toggles.
-const CORNER_TOP_Y: f32 = TOGGLES_BOTTOM + 24.0;
+/// Gap between the cards and lines stacked above Hide all.
+const STACK_GAP: f32 = 10.0;
+/// Room under the readout's last baseline for its shade.
+const READOUT_DESCENT: f32 = 6.0;
 /// Text size of the corner readout.
 const CORNER_FONT_SIZE: f32 = 16.0;
 /// Distance between the corner readout's baselines.
@@ -144,6 +147,13 @@ const SLOW_MOTION_FACTOR: f32 = 0.25;
 /// How many particles tracers follow: enough to catch both cylinders and the
 /// opening, few enough to follow by eye.
 const FOLLOWED_PARTICLES: usize = 5;
+/// Longest frame time the animations step over, so a stalled frame does
+/// not skip one.
+const MAX_ANIMATION_DT: f32 = 0.1;
+/// Seconds the labels take to grow out of their dots or shrink into them.
+const LABELS_SECONDS: f32 = 0.3;
+/// Seconds a demo's banner takes to fade its words in.
+const BANNER_FADE_SECONDS: f32 = 0.6;
 /// Extra zoom-out so the cylinders, crank and flywheel all fit the first view.
 const CAMERA_FRAMING_MARGIN: f32 = 1.42;
 
@@ -196,6 +206,10 @@ struct App {
     /// The demo set up last, until a slider or a new fill changes its
     /// settings.
     demo: Option<Scenario>,
+    /// Seconds since the demo was set up, which fade its banner in.
+    demo_age: f32,
+    /// How far the labels have grown out of their dots, from 0 to 1.
+    labels_grown: f32,
     /// The sky with a cloud to stand on, or the dark grid.
     scenery: Scenery,
     /// When Start shows.
@@ -248,6 +262,8 @@ impl App {
             show_labels: true,
             show_demos: false,
             demo: Some(FIRST_DEMO),
+            demo_age: 0.0,
+            labels_grown: 1.0,
             scenery: Scenery::default(),
             start_prompt: StartPrompt::new(),
             frame_stats: FrameStats::new(),
@@ -309,9 +325,10 @@ impl App {
     fn frame(&mut self) {
         let keys = KeyCommands::read();
         let wheel = wheel_pixels();
+        let dt = get_frame_time().min(MAX_ANIMATION_DT);
         let events = self
             .controls
-            .update(self.scene_area(), self.button_states());
+            .update(self.scene_area(), self.button_states(), dt);
         let panel_blocks = self.panel_shown()
             && self.panel.handle_pointer(PanelPointer {
                 position: Vec2::from(mouse_position()),
@@ -320,6 +337,7 @@ impl App {
                 down: is_mouse_button_down(MouseButton::Left),
             });
         self.apply(keys, events);
+        self.animate(dt);
         self.step();
         self.camera.update(
             CameraKeys::read(),
@@ -336,6 +354,28 @@ impl App {
 
     /// Carries out the keys pressed and the controls used this frame.
     fn apply(&mut self, keys: KeyCommands, events: ControlEvents) {
+        // Keys press their buttons as a click would.
+        let start_or_pause = if self.start_prompt.shown() {
+            Action::Start
+        } else {
+            Action::TogglePause
+        };
+        let keyed = [
+            (keys.reset_gas, Action::ResetGas),
+            (keys.go, start_or_pause),
+            (keys.tracers, Action::ToggleTracers),
+            (keys.slow, Action::ToggleSlow),
+            (keys.keys, Action::ToggleKeys),
+            (keys.demos, Action::ToggleDemos),
+            (keys.labels, Action::ToggleLabels),
+            (keys.scenery, Action::ToggleScenery),
+            (keys.hide_all, Action::ToggleAll),
+        ];
+        for (pressed, action) in keyed {
+            if pressed {
+                self.controls.press(action);
+            }
+        }
         let chose = |key: bool, action: Action| key || events.action == Some(action);
         if chose(keys.reset_gas, Action::ResetGas) {
             self.simulation.reset();
@@ -418,6 +458,15 @@ impl App {
         self.paused = false;
         self.show_demos = false;
         self.demo = Some(scenario);
+        self.demo_age = 0.0;
+    }
+
+    /// Moves the overlays' animations on by `dt` seconds of wall time: the
+    /// labels grow or shrink, and the demo's banner fades in.
+    fn animate(&mut self, dt: f32) {
+        let labels = self.show_labels && !self.show_demos;
+        self.labels_grown = motion::advance(self.labels_grown, labels, dt, LABELS_SECONDS);
+        self.demo_age += dt;
     }
 
     /// Steps the simulation by this frame's time and updates what follows
@@ -462,22 +511,36 @@ impl App {
     fn draw_overlay(&mut self, pen: &mut Pen, area: SceneArea, view: Mat4, panel_stale: bool) {
         let status = self.status();
         let start = self.start_prompt.shown();
-        // The demo's banner and the energy strip stack under the sliders'
-        // card. The labels keep clear of both and give way to the Demos
-        // menu while it is open.
+        // Above Hide all, in the column under the sliders' card, stand the
+        // frame-rate readout, then the energy strip, then the demo's
+        // banner. A strip with no room there under the banner goes to the
+        // scene (see `energy_strip`). The labels keep clear of all of it
+        // and give way to the Demos menu while it is open.
         let shown = !self.hide_all;
         let width = area.window_width;
-        let banner = self
-            .demo
-            .filter(|_| shown)
-            .map(|demo| demos::banner(pen, width, demo, start));
-        let column_top = banner.unwrap_or(controls::slider_column(width)).bottom() + MARGIN;
+        let column = controls::slider_column(width);
+        let ceiling = column.bottom() + MARGIN;
+        let readout = if shown { self.readout() } else { Vec::new() };
+        let readout_bottom = controls::corner_button(pen, area).y - STACK_GAP;
+        let mut floor = readout_bottom;
+        if !readout.is_empty() {
+            floor -= readout.len() as f32 * CORNER_LINE_HEIGHT + STACK_GAP;
+        }
+        let demo = self.demo.filter(|_| shown);
+        let banner_room = demo.map_or(0.0, |demo| {
+            demos::banner(pen, width, demo, start, floor).h + STACK_GAP
+        });
         let panel = self.panel_shown();
         let strip =
-            energy_strip::place(pen, area, &self.simulation, column_top, panel).filter(|_| shown);
-        if self.show_labels && !self.show_demos && shown {
+            energy_strip::place(area, &self.simulation, floor, ceiling + banner_room, panel)
+                .filter(|_| shown);
+        let in_column = strip.filter(|card| card.x == column.x);
+        let banner_bottom = in_column.map_or(floor, |card| card.y - STACK_GAP);
+        let banner = demo.map(|demo| demos::banner(pen, width, demo, start, banner_bottom));
+        if self.labels_grown > 0.0 && shown {
             let cards: Vec<Rect> = banner.into_iter().chain(strip).collect();
-            scene_labels::draw(pen, &self.simulation, view, area, &cards);
+            let grown = motion::smooth(self.labels_grown);
+            scene_labels::draw(pen, &self.simulation, view, area, &cards, grown);
         }
         if self.panel_shown() {
             let panel_area = Rect::new(0.0, 0.0, PANEL_WIDTH, area.height);
@@ -511,14 +574,11 @@ impl App {
         }
         pen.text_right(BUILD_LABEL, label_right, label_y, size, BUILD_LABEL_COLOR);
         if let Some(demo) = self.demo {
-            demos::draw_banner(pen, width, demo, start);
+            let fade = motion::smooth(self.demo_age / BANNER_FADE_SECONDS);
+            demos::draw_banner(pen, width, demo, start, fade, banner_bottom);
         }
-        // The keys list or the Demos menu drops down under the toggles,
-        // and the corner readout goes under it.
-        let mut corner_top = CORNER_TOP_Y;
-        if self.show_demos {
-            corner_top = controls::demo_menu_bottom() + CORNER_LINE_HEIGHT;
-        }
+        self.draw_readout(pen, &readout, column, readout_bottom);
+        // The keys list drops down under the toggles.
         if self.show_keys {
             let list_top = TOGGLES_BOTTOM + MARGIN / 2.0;
             let middle = controls::toggles_middle(area);
@@ -526,15 +586,13 @@ impl App {
                 area.width - 2.0 * MARGIN,
                 area.height - TOGGLES_BOTTOM - SHORTCUTS_BOTTOM_ROOM,
             );
-            let (_, height) = shortcuts::draw(pen, middle, list_top, room.0, room.1);
-            corner_top = list_top + height + CORNER_LINE_HEIGHT;
+            shortcuts::draw(pen, middle, list_top, room.0, room.1);
         }
-        self.draw_corner(pen, area, corner_top);
     }
 
-    /// Draws the frame rate and physics time in the Advanced view, and the
-    /// warning while it is held, at the scene's left from `top` down.
-    fn draw_corner(&self, pen: &mut Pen, area: SceneArea, top: f32) {
+    /// The readout's lines: the frame rate and physics time in the Advanced
+    /// view, and the warning while it is held, each with its color.
+    fn readout(&self) -> Vec<(String, Color)> {
         let stats = self
             .panel
             .advanced()
@@ -545,15 +603,21 @@ impl App {
             .frame_stats
             .limited(get_time())
             .then(|| (LIMITED_TEXT.to_owned(), WARNING_COLOR));
-        let mut y = top;
-        let (left, room) = (area.edge + MARGIN, area.right() - area.edge - 2.0 * MARGIN);
-        for (text, color) in stats.into_iter().chain(warning) {
+        stats.into_iter().chain(warning).collect()
+    }
+
+    /// Draws the readout's `lines` right-aligned in `column`, the last
+    /// one's lowest point on `bottom`.
+    fn draw_readout(&self, pen: &mut Pen, lines: &[(String, Color)], column: Rect, bottom: f32) {
+        let count = lines.len() as f32;
+        let mut y = bottom - (count - 1.0) * CORNER_LINE_HEIGHT - READOUT_DESCENT;
+        for (text, color) in lines {
+            let size = pen.fitted_size(text, column.w, CORNER_FONT_SIZE);
             if self.scenery == Scenery::Sky {
-                let size = pen.fitted_size(&text, room, CORNER_FONT_SIZE);
-                let width = pen.measure(&text, size);
-                backing(pen, left, y, width, size);
+                let width = pen.measure(text, size);
+                backing(pen, column.right() - width, y, width, size);
             }
-            pen.fitted(&text, left, y, room, CORNER_FONT_SIZE, color);
+            pen.text_right(text, column.right(), y, size, *color);
             y += CORNER_LINE_HEIGHT;
         }
     }

@@ -7,7 +7,7 @@
 //! Each part has its own color, as in the panel: orange for heat at the hot
 //! side, yellow for work, blue for heat at the cold side and gray for the
 //! gas's own energy. The strip shows once a turn is done, in the column
-//! under the sliders' card, out of the engine's way. In a window too short
+//! under the sliders' card, just above Hide all, out of the engine's way. In a window too short
 //! for it there, it goes to the scene's bottom-left corner while the panel
 //! is closed, and is left out while the panel's own first law is open.
 
@@ -24,7 +24,6 @@ use crate::ui::controls::{
     BACKING_RADIUS,
     MARGIN,
     SceneArea,
-    corner_button,
     row_top,
     slider_column, //
 };
@@ -121,13 +120,13 @@ fn totals(terms: &[Term; 4]) -> (f64, f64) {
     (incoming, outgoing)
 }
 
-/// The strip's card in `area`: in the column under the sliders' card from
-/// `column_top` down, if it ends above Hide all at `corner_top`; or else in
-/// the scene's bottom-left corner, unless the `panel` is open.
-fn card(area: SceneArea, column_top: f32, corner_top: f32, panel: bool) -> Option<Rect> {
+/// The strip's card in `area`: in the column under the sliders' card,
+/// standing on `bottom`, if its top stays below `ceiling`; or else in the
+/// scene's bottom-left corner, unless the `panel` is open.
+fn card(area: SceneArea, bottom: f32, ceiling: f32, panel: bool) -> Option<Rect> {
     let column = slider_column(area.window_width);
-    if column_top + HEIGHT <= corner_top - MARGIN {
-        Some(Rect::new(column.x, column_top, column.w, HEIGHT))
+    if bottom - HEIGHT >= ceiling {
+        Some(Rect::new(column.x, bottom - HEIGHT, column.w, HEIGHT))
     } else if panel {
         None
     } else {
@@ -161,18 +160,17 @@ fn bar(pen: &Pen, terms: &[Term; 4], incoming: bool, rect: Rect, total: f64) {
 }
 
 /// Where the strip goes in `area` once `engine` has done a turn, with the
-/// column under the sliders' card free from `column_top` down and the
-/// `panel` open or closed, if anywhere.
+/// column under the sliders' card free between `ceiling` and `bottom` and
+/// the `panel` open or closed, if anywhere.
 pub fn place(
-    pen: &Pen,
     area: SceneArea,
     engine: &ConnectedChambers,
-    column_top: f32,
+    bottom: f32,
+    ceiling: f32,
     panel: bool,
 ) -> Option<Rect> {
-    let corner_top = corner_button(pen, area).y;
     engine.cycle().recent()?;
-    card(area, column_top, corner_top, panel)
+    card(area, bottom, ceiling, panel)
 }
 
 /// Draws the strip for `engine` in `card` (see `place`).

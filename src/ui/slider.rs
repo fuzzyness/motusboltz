@@ -23,18 +23,36 @@ use crate::sim::units::{
     MAX_CONCENTRATION,
     MIN_CONCENTRATION, //
 };
+use crate::ui::button::whiten;
 use crate::ui::layout::{
     CONTROL_PADDING_X,
     CONTROL_WIDTH,
     control_left, //
 };
+use crate::ui::motion::{
+    approach,
+    faded, //
+};
 use crate::ui::pen::{
     Pen,
-    Weight, //
+    Weight,
+    grown, //
 };
 
 /// Length of a track.
 const SLIDER_WIDTH: f32 = CONTROL_WIDTH;
+/// Thickness of the filled part of a lit track.
+const LIT_TRACK_HEIGHT: f32 = 11.0;
+/// How much a lit track's color moves toward white.
+const LIT_WHITENING: f32 = 0.3;
+/// How far the halo of a lit track reaches past it.
+const HALO: f32 = 4.0;
+/// Opacity of the halo of a lit track.
+const HALO_OPACITY: f32 = 0.35;
+/// How much a lit handle grows, in points.
+const LIT_HANDLE_GROWTH: f32 = 2.0;
+/// Seconds for the glow to close all but 1/e of its way.
+const GLOW_SECONDS: f32 = 0.07;
 /// Thickness of a track.
 const SLIDER_TRACK_HEIGHT: f32 = 6.0;
 /// Radius of the handle.
@@ -153,6 +171,9 @@ pub struct Slider {
     value: f32,
     /// Whether a drag that started on the track is held.
     dragging: bool,
+    /// How lit the slider is, from 0 at rest to 1 under the pointer or
+    /// while dragged.
+    glow: f32,
 }
 
 impl Slider {
@@ -177,6 +198,7 @@ impl Slider {
             setting,
             value: setting.min,
             dragging: false,
+            glow: 0.0,
         };
         slider.set_value(value);
         slider
@@ -250,6 +272,15 @@ impl Slider {
         }
     }
 
+    /// Moves the glow on by `dt` seconds: up while the slider is `shown`
+    /// and dragged or under the pointer, down otherwise.
+    pub fn animate(&mut self, shown: bool, dt: f32) {
+        let hit = SLIDER_HIT_HALF_HEIGHT;
+        let lit = shown && (self.dragging || self.pointer_within(SLIDER_HIT_MARGIN_X, hit, hit));
+        let target = if lit { 1.0 } else { 0.0 };
+        self.glow = approach(self.glow, target, dt, GLOW_SECONDS);
+    }
+
     /// Whether the camera should ignore the mouse, while dragging or with
     /// the pointer over this slider.
     pub fn blocks_camera(&self) -> bool {
@@ -288,20 +319,20 @@ impl Slider {
             VALUE_COLOR,
         );
         let (top, thickness) = (y - SLIDER_TRACK_HEIGHT / 2.0, SLIDER_TRACK_HEIGHT);
-        let radius = thickness / 2.0;
         let track = Rect::new(x, top, SLIDER_WIDTH, thickness);
-        pen.round_rect(track, radius, TRACK_COLOR);
-        pen.round_rect(
-            Rect {
-                w: handle_x - x,
-                ..track
-            },
-            radius,
-            color,
-        );
+        pen.round_rect(track, thickness / 2.0, TRACK_COLOR);
+        // Lit, the filled part thickens and brightens inside a soft halo.
+        let glow = self.glow;
+        let lit = whiten(color, LIT_WHITENING * glow);
+        let fill_thickness = thickness + (LIT_TRACK_HEIGHT - thickness) * glow;
+        let fill = Rect::new(x, y - fill_thickness / 2.0, handle_x - x, fill_thickness);
+        let halo = grown(fill, HALO * glow);
+        pen.round_rect(halo, halo.h / 2.0, faded(color, HALO_OPACITY * glow));
+        pen.round_rect(fill, fill_thickness / 2.0, lit);
         let handle = vec2(handle_x, y);
-        pen.circle(handle, SLIDER_HANDLE_RADIUS, color);
-        pen.circle(handle, SLIDER_HANDLE_RADIUS - HANDLE_RING, WHITE);
+        let radius = SLIDER_HANDLE_RADIUS + LIT_HANDLE_GROWTH * glow;
+        pen.circle(handle, radius, lit);
+        pen.circle(handle, radius - HANDLE_RING, WHITE);
         let range_y = y + RANGE_OFFSET_Y;
         let (low, high) = (self.value_text(min), self.value_text(max));
         pen.text(&low, x, range_y, RANGE_SIZE, RANGE_TEXT_COLOR);

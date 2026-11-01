@@ -10,7 +10,7 @@ use crate::sim::reservoir::{
 use crate::ui::controls::{
     SceneArea,
     corner_button,
-    row_top, //
+    slider_column, //
 };
 use crate::ui::fonts::tests::drawable;
 use crate::ui::layout::scene_span;
@@ -55,8 +55,9 @@ fn a_number_keeps_its_unit_on_its_line() {
     }
 }
 
-/// The banner, with its prompt, clears the scene's span, Hide all and the
-/// bottom row in the smallest window.
+/// The banner, with its prompt, standing just above Hide all, fits beside
+/// the scene's span and under the sliders' card, even in the smallest
+/// window.
 #[test]
 fn the_banner_fits_beside_the_scene_above_the_bottom_row() {
     for (width, height) in [(1440.0, 900.0), (1280.0, 580.0)] {
@@ -68,14 +69,13 @@ fn the_banner_fits_beside_the_scene_above_the_bottom_row() {
             window_width: width,
             height,
         };
-        let corner = corner_button(&Pen::offline(), area);
+        let bottom = corner_button(&Pen::offline(), area).y;
         for scenario in SCENARIOS {
             let mut pen = Pen::offline();
-            draw_banner(&mut pen, width, scenario, true);
-            let lines = lines(&pen, scenario, text_width(width), true);
-            let card = card(width, lines.len());
+            draw_banner(&mut pen, width, scenario, true, 1.0, bottom);
+            let card = banner(&pen, width, scenario, true, bottom);
             assert!(card.x >= area.right() && card.right() <= width);
-            assert!(card.bottom() < row_top(height).min(corner.y));
+            assert!(card.y > slider_column(width).bottom() && card.bottom() <= bottom);
             assert!(pen.texts.iter().any(|text| text == PROMPT));
             assert!(pen.texts.iter().any(|text| text == scenario.temperatures()));
             assert!(pen.texts.iter().all(|text| drawable(text)));

@@ -2,13 +2,15 @@
 //!
 //! Each button is a glossy pastel pill in its own color, with a bright rim,
 //! a sheen across the top and an outlined label beside the key that does
-//! the same.
+//! the same. A press sinks a button and springs it back, like the click of
+//! a pen: a toggle that is on stays partway down until it is pressed again.
 
 use macroquad::prelude::{
     Color,
     Rect, //
 };
 
+use crate::ui::motion::smooth;
 use crate::ui::pen::{
     Pen,
     Weight,
@@ -46,6 +48,18 @@ const HOVER_LIFT: f32 = 0.12;
 pub const LABEL_COLOR: Color = Color::from_rgba(252, 253, 255, 255);
 /// The key is drawn in a deep shade of the face, quieter than the label.
 const KEY_SHADE: f32 = 0.42;
+/// How far a full press drops a button, in points.
+const PRESS_DROP: f32 = 2.5;
+/// How much a full press narrows a button on every side, in points.
+const PRESS_INSET: f32 = 1.5;
+/// Seconds a press takes to sink to its deepest.
+const PRESS_IN_SECONDS: f32 = 0.06;
+/// Seconds a press then takes to spring back to rest.
+const PRESS_OUT_SECONDS: f32 = 0.2;
+/// Seconds a whole press lasts.
+pub const PRESS_SECONDS: f32 = PRESS_IN_SECONDS + PRESS_OUT_SECONDS;
+/// Depth a toggle rests at while it is on, as a share of a full press.
+pub const LATCH_DEPTH: f32 = 0.45;
 
 /// A button's color.
 ///
@@ -95,7 +109,7 @@ pub struct Look {
 }
 
 /// `color` moved toward white by `share`, keeping its opacity.
-fn whiten(color: Color, share: f32) -> Color {
+pub fn whiten(color: Color, share: f32) -> Color {
     let toward = |channel: f32| channel + (1.0 - channel) * share;
     Color::new(toward(color.r), toward(color.g), toward(color.b), color.a)
 }
@@ -178,6 +192,26 @@ pub struct Label {
     pub key: &'static str,
 }
 
+/// Depth of a button `age` seconds into a press, from rest at `from` down
+/// to a full press, then back up to rest at `to`; depths run from 0 (up)
+/// to 1 (fully down).
+pub fn press_depth(age: f32, from: f32, to: f32) -> f32 {
+    if age < PRESS_IN_SECONDS {
+        from + (1.0 - from) * smooth(age / PRESS_IN_SECONDS)
+    } else {
+        1.0 + (to - 1.0) * smooth((age - PRESS_IN_SECONDS) / PRESS_OUT_SECONDS)
+    }
+}
+
+/// `rect` of a button pressed to `depth`: lower and a little narrower.
+pub fn sunk(rect: Rect, depth: f32) -> Rect {
+    let pressed = grown(rect, -PRESS_INSET * depth);
+    Rect {
+        y: pressed.y + PRESS_DROP * depth,
+        ..pressed
+    }
+}
+
 /// Width a button needs for `label` at `size`.
 pub fn width(pen: &Pen, label: Label, size: f32) -> f32 {
     pen.measure_weight(label.text, size, Weight::Semibold)
@@ -197,3 +231,7 @@ pub fn draw(pen: &mut Pen, rect: Rect, label: Label, look: Look, hovered: bool, 
     let key_left = left + text_width + KEY_GAP;
     pen.text(label.key, key_left, baseline, size, key_color(look));
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/ui/button.rs"]
+mod tests;

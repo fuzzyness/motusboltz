@@ -29,6 +29,10 @@ use crate::ui::controls::{
     TOGGLES_BOTTOM,
     row_top, //
 };
+use crate::ui::motion::{
+    faded,
+    smooth, //
+};
 use crate::ui::panel::{
     QUIET,
     TEXT, //
@@ -59,6 +63,9 @@ const LINE: f32 = 15.0;
 const EDGE_ROOM: f32 = 8.0;
 /// Shortest step on screen that still gives a leader its own direction.
 const MIN_STEP: f32 = 1.0;
+/// How far a tag has grown before its words start to show, as a share of
+/// its full size.
+const WORDS_FROM: f32 = 0.6;
 /// Least room kept between two tags.
 const TAG_GAP: f32 = 6.0;
 
@@ -199,31 +206,59 @@ pub fn place(
         .collect()
 }
 
+/// `rect` of a tag `grown` out of its `dot`, from 0 (a point on the dot) to
+/// 1 (full size in its place).
+pub fn grown_from(dot: Vec2, rect: Rect, grown: f32) -> Rect {
+    let center = dot.lerp(rect.center(), grown);
+    let size = rect.size() * grown;
+    Rect::new(
+        center.x - size.x / 2.0,
+        center.y - size.y / 2.0,
+        size.x,
+        size.y,
+    )
+}
+
 /// Draws the tags of `engine` seen through `matrix` in `area`, clear of
-/// `cards`.
+/// `cards`, each `grown` out of its dot from 0 (gone) to 1 (full size).
+///
+/// A tag shrinks toward its dot along its leader; its words fade out
+/// first, so they never spill out of a shrinking tag.
 pub fn draw(
     pen: &mut Pen,
     engine: &ConnectedChambers,
     matrix: Mat4,
     area: SceneArea,
     cards: &[Rect],
+    grown: f32,
 ) {
     let tags = tags(engine);
+    let words = smooth((grown - WORDS_FROM) / (1.0 - WORDS_FROM));
     for (tag, placed) in tags.iter().zip(place(pen, &tags, matrix, area, cards)) {
         let Some((dot, rect)) = placed else {
             continue;
         };
+        let rect = grown_from(dot, rect, grown);
         let end = vec2(
             dot.x.clamp(rect.x, rect.right()),
             dot.y.clamp(rect.y, rect.bottom()),
         );
-        pen.line(dot, end, LEADER_WIDTH, LEADER_COLOR);
-        pen.circle(dot, DOT_RADIUS, LEADER_COLOR);
-        pen.round_rect(rect, BACKING_RADIUS, BACKING);
+        pen.line(dot, end, LEADER_WIDTH, faded(LEADER_COLOR, grown));
+        pen.circle(dot, DOT_RADIUS, faded(LEADER_COLOR, grown));
+        pen.round_rect(rect, BACKING_RADIUS * grown, faded(BACKING, grown));
+        if words <= 0.0 {
+            continue;
+        }
         let left = rect.x + PADDING;
         let name_y = rect.y + PADDING + pen.text_height("H", NAME_SIZE);
-        pen.strong(tag.name, left, name_y, NAME_SIZE, TEXT);
-        pen.text(tag.role, left, name_y + LINE, ROLE_SIZE, QUIET);
+        pen.strong(tag.name, left, name_y, NAME_SIZE, faded(TEXT, words));
+        pen.text(
+            tag.role,
+            left,
+            name_y + LINE,
+            ROLE_SIZE,
+            faded(QUIET, words),
+        );
     }
 }
 

@@ -1,9 +1,10 @@
-//! Demos: four ready-made settings, each showing one idea about heat
+//! Demos: five ready-made settings, each showing one idea about heat
 //! engines, and the banner that says what to watch.
 //!
 //! Choosing a demo sets both walls, refills the gas and leaves the flywheel
 //! at rest, so every demo starts the same way: with Start. The banner sits
-//! under the sliders' card, where the engine leaves open sky.
+//! in the column under the sliders' card, above Hide all, where the engine
+//! leaves open sky.
 
 use macroquad::prelude::{
     Color,
@@ -17,9 +18,9 @@ use crate::sim::reservoir::{
 use crate::ui::controls::{
     BACKING,
     BACKING_RADIUS,
-    MARGIN,
     slider_column, //
 };
+use crate::ui::motion::faded;
 use crate::ui::panel::{
     QUIET,
     TEXT, //
@@ -192,42 +193,56 @@ fn lines(pen: &Pen, scenario: Scenario, width: f32, start: bool) -> Vec<(String,
 
 /// Width of the banner's lines in a window `width` points wide.
 fn text_width(width: f32) -> f32 {
-    card(width, 0).w - 2.0 * PADDING
+    slider_column(width).w - 2.0 * PADDING
 }
 
 /// The banner's card for `count` lines of text under the title, in a
-/// window `width` points wide: under the sliders' card, as wide.
+/// window `width` points wide, standing on `bottom`: in the column under
+/// the sliders' card, as wide.
 ///
-/// It keeps its place while the sliders are closed, clear of their tab.
-pub fn card(width: f32, count: usize) -> Rect {
+/// It keeps its place while the sliders are closed.
+pub fn card(width: f32, count: usize, bottom: f32) -> Rect {
     let column = slider_column(width);
     let height = 2.0 * PADDING + TITLE_GAP + LINE * count as f32 + TEXT_SIZE;
-    Rect::new(column.x, column.bottom() + MARGIN, column.w, height)
+    Rect::new(column.x, bottom - height, column.w, height)
 }
 
-/// The banner's card for `scenario` in a window `width` points wide, with
-/// the prompt while `start` is offered.
-pub fn banner(pen: &Pen, width: f32, scenario: Scenario, start: bool) -> Rect {
-    card(width, lines(pen, scenario, text_width(width), start).len())
+/// The banner's card for `scenario` in a window `width` points wide,
+/// standing on `bottom`, with the prompt while `start` is offered.
+pub fn banner(pen: &Pen, width: f32, scenario: Scenario, start: bool, bottom: f32) -> Rect {
+    card(
+        width,
+        lines(pen, scenario, text_width(width), start).len(),
+        bottom,
+    )
 }
 
 /// Draws the banner for `scenario` in a window `width` points wide, ending
-/// with the prompt while `start` is offered.
-pub fn draw_banner(pen: &mut Pen, width: f32, scenario: Scenario, start: bool) {
+/// with the prompt while `start` is offered, its words faded in to `fade`,
+/// standing on `bottom`.
+pub fn draw_banner(
+    pen: &mut Pen,
+    width: f32,
+    scenario: Scenario,
+    start: bool,
+    fade: f32,
+    bottom: f32,
+) {
     let room = text_width(width);
     let lines = lines(pen, scenario, room, start);
-    let card = card(width, lines.len());
+    let card = card(width, lines.len(), bottom);
     pen.round_rect(card, BACKING_RADIUS, BACKING);
     let (left, right) = (card.x + PADDING, card.right() - PADDING);
     let mut y = card.y + PADDING + pen.text_height("H", TEXT_SIZE);
-    pen.strong(scenario.title(), left, y, TEXT_SIZE, TEXT);
+    pen.strong(scenario.title(), left, y, TEXT_SIZE, faded(TEXT, fade));
     if title_fits(pen, scenario, room) {
-        pen.text_right(scenario.temperatures(), right, y, TEXT_SIZE, QUIET);
+        let temperatures = scenario.temperatures();
+        pen.text_right(temperatures, right, y, TEXT_SIZE, faded(QUIET, fade));
     }
     y += TITLE_GAP;
     for (line, color) in &lines {
         y += LINE;
-        pen.text(line, left, y, TEXT_SIZE, *color);
+        pen.text(line, left, y, TEXT_SIZE, faded(*color, fade));
     }
 }
 

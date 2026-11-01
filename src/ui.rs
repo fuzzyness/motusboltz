@@ -15,6 +15,7 @@ pub mod frame_stats;
 pub mod input;
 pub mod layer;
 pub mod layout;
+pub mod motion;
 pub mod panel;
 pub mod pen;
 pub mod scene_labels;

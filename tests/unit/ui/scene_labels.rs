@@ -82,3 +82,15 @@ fn the_tags_stay_in_the_scene_apart() {
         }
     }
 }
+
+#[test]
+fn a_tag_grows_out_of_its_dot() {
+    let dot = vec2(10.0, 10.0);
+    let rect = Rect::new(100.0, 50.0, 80.0, 30.0);
+    let gone = grown_from(dot, rect, 0.0);
+    assert_eq!((gone.x, gone.y, gone.w, gone.h), (10.0, 10.0, 0.0, 0.0));
+    assert_eq!(grown_from(dot, rect, 1.0), rect);
+    let half = grown_from(dot, rect, 0.5);
+    assert_eq!(half.center(), dot.lerp(rect.center(), 0.5));
+    assert_eq!(half.w, 40.0);
+}

@@ -24,8 +24,10 @@ use crate::ui::button::{
     self,
     Hue,
     LABEL_SIZE,
+    LATCH_DEPTH,
     Label,
-    Look, //
+    Look,
+    PRESS_SECONDS, //
 };
 use crate::ui::demos::{
     SCENARIOS,
@@ -241,6 +243,32 @@ impl Action {
         Look { hue, on }
     }
 
+    /// Whether the button stays partway down while it is on, as a pen's
+    /// button does: the toggles that switch something on, and the chosen
+    /// demo.
+    fn latches(self) -> bool {
+        matches!(
+            self,
+            Self::ToggleDemos
+                | Self::ToggleAll
+                | Self::ToggleLabels
+                | Self::ToggleKeys
+                | Self::TogglePause
+                | Self::ToggleSlow
+                | Self::ToggleTracers
+                | Self::Demo(_)
+        )
+    }
+
+    /// Depth the button rests at for `look`, from 0 (up) to 1 (fully down).
+    fn rest_depth(self, look: Look) -> f32 {
+        if self.latches() && look.on {
+            LATCH_DEPTH
+        } else {
+            0.0
+        }
+    }
+
     /// The button for this action in `rect`, with labels at `size`.
     fn placed(self, states: ButtonStates, rect: Rect, size: f32, shape: Shape) -> Placed {
         Placed {
@@ -429,11 +457,6 @@ fn demo_menu(pen: &Pen, area: SceneArea, states: ButtonStates) -> impl Iterator<
         })
 }
 
-/// Bottom of the Demos menu while it is open.
-pub fn demo_menu_bottom() -> f32 {
-    TOGGLES_BOTTOM + SCENARIOS.len() as f32 * (MENU_GAP + TOGGLE_HEIGHT)
-}
-
 /// Width that fits the action's label in every state.
 ///
 /// In the shared place, the width fits both Start's and Pause's, so a
@@ -489,6 +512,9 @@ pub struct Controls {
     button_gesture: bool,
     /// The sliders were shown at the last update, so they can be dragged.
     sliders_shown: bool,
+    /// The buttons pressed within the last `PRESS_SECONDS`, each with the
+    /// seconds since.
+    presses: Vec<(Action, f32)>,
 }
 
 impl Controls {
@@ -501,12 +527,45 @@ impl Controls {
             hovered: None,
             button_gesture: false,
             sliders_shown: true,
+            presses: Vec::new(),
         }
     }
 
+    /// Starts the press of `action`'s button, clicked or chosen with its
+    /// key.
+    pub fn press(&mut self, action: Action) {
+        self.presses.retain(|&(pressed, _)| pressed != action);
+        self.presses.push((action, 0.0));
+    }
+
+    /// How far down `placed` is drawn: its rest for its look, or partway
+    /// through a press from its rest before to its rest after.
+    fn depth(&self, placed: &Placed) -> f32 {
+        let after = placed.action.rest_depth(placed.look);
+        let Some(&(_, age)) = self
+            .presses
+            .iter()
+            .find(|&&(action, _)| action == placed.action)
+        else {
+            return after;
+        };
+        // A latching toggle flipped with the press; a one-shot button rests
+        // up on both sides.
+        let before = if placed.action.latches() {
+            LATCH_DEPTH - after
+        } else {
+            after
+        };
+        button::press_depth(age, before, after)
+    }
+
     /// Reads the mouse for the buttons shown for `states` in `area`, and
-    /// for the sliders.
-    pub fn update(&mut self, area: SceneArea, states: ButtonStates) -> ControlEvents {
+    /// for the sliders, and moves their animations on by `dt` seconds.
+    pub fn update(&mut self, area: SceneArea, states: ButtonStates, dt: f32) -> ControlEvents {
+        for (_, age) in &mut self.presses {
+            *age += dt;
+        }
+        self.presses.retain(|&(_, age)| age < PRESS_SECONDS);
         let pointer = Vec2::from(mouse_position());
         self.hovered = place_buttons(&Pen::screen(), area, states)
             .into_iter()
@@ -519,9 +578,15 @@ impl Controls {
             self.button_gesture = false;
         }
         self.button_gesture |= action.is_some();
+        if let Some(action) = action {
+            self.press(action);
+        }
 
         let sliders = states.sliders && !states.hidden;
         self.sliders_shown = sliders;
+        for slider in [&mut self.hot, &mut self.cold, &mut self.concentration] {
+            slider.animate(sliders, dt);
+        }
         let (hot, cold, concentration) = if sliders {
             (
                 self.hot.update(),
@@ -579,7 +644,8 @@ impl Controls {
             let label = placed.label;
             match placed.shape {
                 Shape::Pill => {
-                    button::draw(pen, placed.rect, label, placed.look, hovered, placed.size);
+                    let rect = button::sunk(placed.rect, self.depth(&placed));
+                    button::draw(pen, rect, label, placed.look, hovered, placed.size);
                 }
                 Shape::Hump(edge) => {
                     drawer::draw_hump_mark(pen, placed.rect, edge, label.key, hovered);

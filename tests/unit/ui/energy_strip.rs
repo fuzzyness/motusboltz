@@ -3,7 +3,10 @@
 use super::*;
 use crate::sim::geometry::DEFAULT_GEOMETRY;
 use crate::sim::units::DEFAULT_PARTICLES;
-use crate::ui::controls::TOGGLES_BOTTOM;
+use crate::ui::controls::{
+    TOGGLES_BOTTOM,
+    corner_button, //
+};
 use crate::ui::fonts::tests::drawable;
 use crate::ui::layout::{
     scene_left,
@@ -38,8 +41,8 @@ fn area(width: f32, height: f32, panel: bool) -> SceneArea {
     }
 }
 
-/// The strip goes in the column under the sliders' card when it ends
-/// above Hide all there, as in a tall window. Otherwise it goes in the
+/// The strip stands above Hide all in the column under the sliders' card
+/// when it fits there, as in a tall window. Otherwise it goes in the
 /// scene's bottom-left corner, above the bottom row and the tip, while the
 /// panel is closed, and nowhere while it is open.
 #[test]
@@ -49,14 +52,14 @@ fn the_strip_stays_out_of_the_engines_way() {
             let area = area(width, height, panel);
             let corner = corner_button(&Pen::offline(), area).y;
             let column = slider_column(width);
-            // Under the sliders' card alone, and under a long banner.
-            for column_top in [column.bottom() + MARGIN, corner - MARGIN] {
-                let Some(card) = card(area, column_top, corner, panel) else {
-                    assert!(panel && column_top > column.bottom() + MARGIN);
+            // Below the sliders' card alone, and below a long banner.
+            for ceiling in [column.bottom() + MARGIN, corner - MARGIN] {
+                let Some(card) = card(area, corner, ceiling, panel) else {
+                    assert!(panel && ceiling > column.bottom() + MARGIN);
                     continue;
                 };
                 if card.x == column.x {
-                    assert!(card.y >= column_top && card.bottom() < corner);
+                    assert!(card.y >= ceiling && card.bottom() <= corner);
                 } else {
                     assert!(!panel && card.x >= area.edge && card.y > TOGGLES_BOTTOM);
                     assert!(card.bottom() < row_top(height));
