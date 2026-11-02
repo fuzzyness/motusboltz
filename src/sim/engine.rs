@@ -36,6 +36,7 @@ use crate::sim::pistons::{
     PowerPistons,
     starting_energy, //
 };
+use crate::sim::regenerator::Regenerator;
 use crate::sim::reservoir::{
     PerReservoir,
     ReservoirSide,
@@ -46,6 +47,7 @@ use crate::sim::tracers::Tracers;
 use crate::sim::units::{
     GasMeasurements,
     HeliumCalibration,
+    KELVIN_PER_UNIT,
     KineticMoments,
     MAX_CONCENTRATION,
     MAX_PARTICLES,
@@ -113,8 +115,10 @@ pub struct ChamberMeasurements {
 /// opening through the wall between them, thermal cylinder walls, and
 /// pistons coupled to the flywheel.
 ///
-/// The pistons and the opening are insulated; only the cylinders' sides and
-/// floors exchange heat.
+/// The pistons and the opening's wall are insulated; only the cylinders'
+/// sides and floors exchange heat with the reservoirs, and the regenerator's
+/// screens, when they are in the opening, trade heat with the gas passing
+/// through.
 pub struct ConnectedChambers {
     /// The gas.
     pub particles: Vec<Particle>,
@@ -135,6 +139,8 @@ pub struct ConnectedChambers {
     accumulator: f32,
     /// Hot and cold walls.
     thermal: ThermalReservoirs,
+    /// Screens that can be put in the opening.
+    regenerator: Regenerator,
     /// Conversions to SI units.
     units: HeliumCalibration,
     /// Gas kinetic energy at the fill.
@@ -215,6 +221,8 @@ impl ConnectedChambers {
         let particles = regions.concat();
 
         let (lower, upper) = geometry.gas_bounds();
+        let thermal_seed = random.gen_range(0, u64::MAX);
+        let regenerator_seed = random.gen_range(0, u64::MAX);
         let start = CycleTotals {
             gas_energy: gas_energy(&particles),
             ..CycleTotals::default()
@@ -230,7 +238,13 @@ impl ConnectedChambers {
             pistons,
             piston_work_by_gas: 0.0,
             accumulator: 0.0,
-            thermal: ThermalReservoirs::with_seed(random.gen_range(0, u64::MAX)),
+            thermal: ThermalReservoirs::with_seed(thermal_seed),
+            regenerator: Regenerator::new(
+                geometry,
+                count,
+                INITIAL_TEMPERATURE as f64,
+                regenerator_seed,
+            ),
             units: HeliumCalibration::new(volume_m3),
             tracers: None,
             sparks: HeatSparks::new(),
@@ -239,15 +253,20 @@ impl ConnectedChambers {
     }
 
     /// Rebuilds the simulation with `count` particles and a fresh random
-    /// seed, keeping the reservoir temperatures.
+    /// seed, keeping the reservoir temperatures and whether the regenerator
+    /// is in.
     ///
-    /// The shaft starts at rest, and heat, work, starter work and the
-    /// per-turn records start over.
+    /// The shaft starts at rest, the regenerator's screens start between the
+    /// wall temperatures, and heat, work, starter work and the per-turn
+    /// records start over.
     fn refill(&mut self, count: usize) {
         let (hot_kelvin, cold_kelvin) = (self.hot_kelvin(), self.cold_kelvin());
+        let regenerating = self.regenerator.is_enabled();
         *self = Self::with_geometry_seed(count, self.geometry, gen_range(0, u64::MAX));
         self.thermal.set_hot_kelvin(hot_kelvin);
         self.thermal.set_cold_kelvin(cold_kelvin);
+        let (hot, cold) = self.reservoir_temperatures();
+        self.regenerator.set_enabled(regenerating, hot, cold);
     }
 
     /// Refills with the same amount of helium at 300 K.
@@ -296,6 +315,31 @@ impl ConnectedChambers {
         self.thermal.set_cold_kelvin(kelvin);
     }
 
+    /// Puts the regenerator's screens in the opening or takes them out.
+    ///
+    /// Screens put in start in a straight line between the hot and cold
+    /// wall temperatures (see `Regenerator::set_enabled`). A change
+    /// discards the per-turn history, as a temperature change does.
+    pub fn set_regenerator(&mut self, enabled: bool) {
+        if enabled == self.regenerator.is_enabled() {
+            return;
+        }
+        self.cycle.mark_settings_changed();
+        let (hot, cold) = self.reservoir_temperatures();
+        self.regenerator.set_enabled(enabled, hot, cold);
+    }
+
+    /// The hot and cold wall temperatures in reduced units.
+    fn reservoir_temperatures(&self) -> (f64, f64) {
+        let reduced = |kelvin: f32| kelvin as f64 / KELVIN_PER_UNIT;
+        (reduced(self.hot_kelvin()), reduced(self.cold_kelvin()))
+    }
+
+    /// The regenerator's screens, in the opening or not.
+    pub fn regenerator(&self) -> &Regenerator {
+        &self.regenerator
+    }
+
     /// The hot wall temperature.
     pub fn hot_kelvin(&self) -> f32 {
         self.thermal.hot_kelvin()
@@ -317,9 +361,13 @@ impl ConnectedChambers {
     }
 
     /// Gas first-law residual, ideally zero: the change in gas energy, minus
-    /// wall heat into the gas, plus work done by the gas on the pistons.
+    /// heat into the gas from the walls and the regenerator, plus work done
+    /// by the gas on the pistons.
     pub fn energy_balance_error(&self) -> f64 {
-        self.kinetic_energy() as f64 - self.initial_energy as f64 - self.heat().total()
+        self.kinetic_energy() as f64
+            - self.initial_energy as f64
+            - self.heat().total()
+            - self.regenerator.heat()
             + self.piston_work_by_gas
     }
 
@@ -533,7 +581,9 @@ impl ConnectedChambers {
         };
         self.sparks.advance(dt as f64);
         for particle in &mut self.particles {
+            let previous_x = particle.position.x;
             particle.position += particle.velocity * dt;
+            self.regenerator.pass(particle, previous_x);
             let (center_x, piston, side) = if particle.position.x < 0.0 {
                 (self.geometry.hot_center_x(), hot, PistonSide::Hot)
             } else {
@@ -589,11 +639,16 @@ impl ConnectedChambers {
             gauge.record(impulse, substep.dt);
         }
         let kelvin = (self.thermal.hot_kelvin(), self.thermal.cold_kelvin());
-        let (thermal, particles, gas_work) =
-            (&self.thermal, &self.particles, self.piston_work_by_gas);
+        let (thermal, regenerator, particles, gas_work) = (
+            &self.thermal,
+            &self.regenerator,
+            &self.particles,
+            self.piston_work_by_gas,
+        );
         self.cycle.record(substep, kelvin, || CycleTotals {
             hot_heat: thermal.heat().hot,
             cold_heat: thermal.heat().cold,
+            regenerator_heat: regenerator.heat(),
             hot_entropy: thermal.entropy().hot,
             cold_entropy: thermal.entropy().cold,
             gas_work,

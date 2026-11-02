@@ -52,3 +52,38 @@ fn cold_slider_reaches_both_temperature_limits() {
     );
     assert_eq!(slider.value(), crate::sim::units::KELVIN_PER_UNIT as f32);
 }
+
+/// The switch starts with its knob where it is, and set from elsewhere it
+/// changes at once while the knob is left to slide over.
+#[test]
+fn the_switch_turns_at_once_and_its_knob_follows() {
+    let switch = Switch::regenerator(false);
+    assert!(!switch.is_on());
+    assert_eq!(switch.slide, 0.0);
+    let mut switch = Switch::regenerator(true);
+    assert_eq!(switch.slide, 1.0);
+    switch.set_on(false);
+    assert!(!switch.is_on());
+    assert_eq!(switch.slide, 1.0, "the knob slides over when animated");
+}
+
+/// The switch's row sits under the helium slider and ends the column.
+#[test]
+fn the_switch_row_ends_the_column_under_the_helium_slider() {
+    let (top, bottom) = column_span();
+    assert_eq!(top, HOT_Y - AREA_ABOVE);
+    const { assert!(SWITCH_Y - SWITCH_HIT_HALF_HEIGHT >= CONCENTRATION_Y + AREA_BELOW) };
+    assert_eq!(bottom, SWITCH_Y + SWITCH_HIT_HALF_HEIGHT);
+}
+
+#[test]
+fn mixing_runs_from_one_color_to_the_other() {
+    const TOLERANCE: f32 = 1e-6;
+    let same = |a: Color, b: Color| {
+        [a.r - b.r, a.g - b.g, a.b - b.b, a.a - b.a]
+            .iter()
+            .all(|difference| difference.abs() < TOLERANCE)
+    };
+    assert!(same(mixed(TRACK_COLOR, SWITCH_COLOR, 0.0), TRACK_COLOR));
+    assert!(same(mixed(TRACK_COLOR, SWITCH_COLOR, 1.0), SWITCH_COLOR));
+}

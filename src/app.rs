@@ -362,6 +362,7 @@ impl App {
             width,
             window_width: screen_width(),
             height: screen_height().max(1.0),
+            sliders: self.show_sliders && !self.hide_all,
         }
     }
 
@@ -508,10 +509,22 @@ impl App {
         if keys.camera_reset {
             self.camera.reset();
         }
-        // A new fill or temperature ends the demo, whose banner would no
-        // longer be true.
+        // E flips the switch as a click would.
+        let regenerator = events.regenerator.or_else(|| {
+            keys.regenerator
+                .then(|| !self.simulation.regenerator().is_enabled())
+        });
+        if let Some(on) = regenerator {
+            self.simulation.set_regenerator(on);
+            self.controls.set_regenerator(on);
+        }
+        // A new fill, temperature or regenerator ends the demo, whose banner
+        // would no longer be true.
         let changed = [events.concentration, events.hot_kelvin, events.cold_kelvin];
-        if keys.fill_preset.is_some() || changed.iter().any(Option::is_some) {
+        if keys.fill_preset.is_some()
+            || changed.iter().any(Option::is_some)
+            || regenerator.is_some()
+        {
             self.demo = None;
         }
         if let Some(preset) = keys.fill_preset {
@@ -531,13 +544,16 @@ impl App {
     }
 
     /// Sets up `scenario`: its temperatures on the walls and the sliders,
-    /// and fresh gas with the flywheel at rest, waiting for Start.
+    /// its regenerator in or out, and fresh gas with the flywheel at rest,
+    /// waiting for Start.
     fn set_up(&mut self, scenario: Scenario) {
         let (hot_kelvin, cold_kelvin) = scenario.kelvin();
         self.simulation.set_hot_kelvin(hot_kelvin);
         self.simulation.set_cold_kelvin(cold_kelvin);
+        self.simulation.set_regenerator(scenario.regenerator());
         self.simulation.reset();
         self.controls.set_kelvin(hot_kelvin, cold_kelvin);
+        self.controls.set_regenerator(scenario.regenerator());
         self.paused = false;
         self.show_demos = false;
         self.demo = Some(scenario);

@@ -1,5 +1,6 @@
 //! Horizontal sliders for the hot and cold reservoir temperatures and the
-//! helium concentration.
+//! helium concentration, and the switch under them that puts the
+//! regenerator in the opening.
 
 use macroquad::prelude::{
     Color,
@@ -30,8 +31,10 @@ use crate::ui::layout::{
     control_left, //
 };
 use crate::ui::motion::{
+    advance,
     approach,
-    faded, //
+    faded,
+    smooth, //
 };
 use crate::ui::pen::{
     Pen,
@@ -85,6 +88,30 @@ const SLIDER_SPACING: f32 = 90.0;
 const COLD_Y: f32 = HOT_Y + SLIDER_SPACING;
 /// Middle of the helium track.
 const CONCENTRATION_Y: f32 = COLD_Y + SLIDER_SPACING;
+/// From the helium track's middle to the middle of the switch's row, which
+/// has no line above it, so it sits closer than the next slider would.
+const SWITCH_SPACING: f32 = 64.0;
+/// Middle of the regenerator switch's row.
+const SWITCH_Y: f32 = CONCENTRATION_Y + SWITCH_SPACING;
+/// Width of the switch's track.
+const SWITCH_WIDTH: f32 = 46.0;
+/// Height of the switch's track.
+const SWITCH_HEIGHT: f32 = 26.0;
+/// Gap between the knob and the edge of the switch's track.
+const KNOB_INSET: f32 = 3.0;
+/// Seconds the knob takes to slide across.
+const SWITCH_SECONDS: f32 = 0.18;
+/// How far above and below the row's middle a press flips the switch; the
+/// row ends there.
+const SWITCH_HIT_HALF_HEIGHT: f32 = 18.0;
+/// Name beside the switch.
+const SWITCH_LABEL: &str = "Regenerator";
+/// The switch's key, after its name, as the buttons show theirs.
+const SWITCH_KEY: &str = "E";
+/// Gap between the name and the key.
+const SWITCH_KEY_GAP: f32 = 8.0;
+/// Color of the switch's track while on: brass, like the mesh's wire.
+const SWITCH_COLOR: Color = Color::from_rgba(226, 188, 122, 255);
 /// Color of the empty part of a track.
 const TRACK_COLOR: Color = Color::new(0.27, 0.33, 0.40, 0.9);
 /// Color of the value.
@@ -128,10 +155,10 @@ const CONCENTRATION: Setting = Setting {
     y: CONCENTRATION_Y,
 };
 
-/// The top of the first slider's label and the bottom of the last one's
-/// range, in screen points.
+/// The top of the first slider's label and the bottom of the switch's
+/// note, in screen points.
 pub fn column_span() -> (f32, f32) {
-    (HOT_Y - AREA_ABOVE, CONCENTRATION_Y + AREA_BELOW)
+    (HOT_Y - AREA_ABOVE, SWITCH_Y + SWITCH_HIT_HALF_HEIGHT)
 }
 
 /// What a slider sets and where it sits.
@@ -338,6 +365,120 @@ impl Slider {
         pen.text(&low, x, range_y, RANGE_SIZE, RANGE_TEXT_COLOR);
         pen.text_right(&high, right, range_y, RANGE_SIZE, RANGE_TEXT_COLOR);
     }
+}
+
+/// The on-off switch for the regenerator, in a row under the helium slider,
+/// flipped with a click anywhere on the row.
+pub struct Switch {
+    /// Whether it is on.
+    on: bool,
+    /// How far the knob has slid toward on, from 0 to 1.
+    slide: f32,
+    /// How lit the switch is, from 0 at rest to 1 under the pointer.
+    glow: f32,
+}
+
+impl Switch {
+    /// The regenerator's switch, on if `on`, with its knob already there.
+    pub fn regenerator(on: bool) -> Self {
+        Self {
+            on,
+            slide: if on { 1.0 } else { 0.0 },
+            glow: 0.0,
+        }
+    }
+
+    /// Whether it is on.
+    pub fn is_on(&self) -> bool {
+        self.on
+    }
+
+    /// Turns it on or off from elsewhere (a key or a demo); the knob slides
+    /// over.
+    pub fn set_on(&mut self, on: bool) {
+        self.on = on;
+    }
+
+    /// Whether the pointer is over the row, within `margin` of its ends and
+    /// between `above` and `below` its middle.
+    fn pointer_within(&self, margin: f32, above: f32, below: f32) -> bool {
+        let (x, y) = mouse_position();
+        let left = control_left(screen_width());
+        (left - margin..=left + CONTROL_WIDTH + margin).contains(&x)
+            && (SWITCH_Y - above..=SWITCH_Y + below).contains(&y)
+    }
+
+    /// Whether the pointer is where a press flips the switch.
+    fn under_pointer(&self) -> bool {
+        let hit = SWITCH_HIT_HALF_HEIGHT;
+        self.pointer_within(SLIDER_HIT_MARGIN_X, hit, hit)
+    }
+
+    /// Handles mouse input; returns whether a click flipped the switch.
+    pub fn update(&mut self) -> bool {
+        let flipped = is_mouse_button_pressed(MouseButton::Left) && self.under_pointer();
+        self.on ^= flipped;
+        flipped
+    }
+
+    /// Moves the knob and the glow on by `dt` seconds: the knob toward
+    /// where the switch is, the glow up while it is `shown` and under the
+    /// pointer.
+    pub fn animate(&mut self, shown: bool, dt: f32) {
+        self.slide = advance(self.slide, self.on, dt, SWITCH_SECONDS);
+        let target = if shown && self.under_pointer() {
+            1.0
+        } else {
+            0.0
+        };
+        self.glow = approach(self.glow, target, dt, GLOW_SECONDS);
+    }
+
+    /// Whether the camera should ignore the mouse, with the pointer over
+    /// the row.
+    pub fn blocks_camera(&self) -> bool {
+        let hit = SWITCH_HIT_HALF_HEIGHT;
+        self.pointer_within(CONTROL_PADDING_X, hit, hit)
+    }
+
+    /// Draws the name with its key, and the switch, on the row.
+    pub fn draw(&self, pen: &mut Pen) {
+        let x = control_left(screen_width());
+        let right = x + SLIDER_WIDTH;
+        let y = SWITCH_Y;
+        let label_y = y + pen.text_height(SWITCH_LABEL, LABEL_SIZE) / 2.0;
+        pen.heading(SWITCH_LABEL, x, label_y, LABEL_SIZE, LABEL_COLOR);
+        let key_x = x + pen.measure_weight(SWITCH_LABEL, LABEL_SIZE, Weight::Semibold);
+        let key_x = key_x + SWITCH_KEY_GAP;
+        pen.text(SWITCH_KEY, key_x, label_y, RANGE_SIZE, RANGE_TEXT_COLOR);
+        let track = Rect::new(
+            right - SWITCH_WIDTH,
+            y - SWITCH_HEIGHT / 2.0,
+            SWITCH_WIDTH,
+            SWITCH_HEIGHT,
+        );
+        // Lit, it brightens inside a soft halo, as a slider does.
+        let (on, glow) = (smooth(self.slide), self.glow);
+        let color = whiten(mixed(TRACK_COLOR, SWITCH_COLOR, on), LIT_WHITENING * glow);
+        let halo = grown(track, HALO * glow);
+        pen.round_rect(halo, halo.h / 2.0, faded(SWITCH_COLOR, HALO_OPACITY * glow));
+        pen.round_rect(track, track.h / 2.0, color);
+        let radius = track.h / 2.0 - KNOB_INSET;
+        let travel = track.w - track.h;
+        let knob = vec2(track.x + track.h / 2.0 + travel * on, y);
+        pen.circle(knob, radius, WHITE);
+    }
+}
+
+/// `from` moved toward `to` by `share`, channel by channel.
+fn mixed(from: Color, to: Color, share: f32) -> Color {
+    let toward = |a: f32, b: f32| a + (b - a) * share;
+    Color::new(
+        toward(from.r, to.r),
+        toward(from.g, to.g),
+        toward(from.b, to.b),
+        toward(from.a, to.a),
+    )
 }
 
 #[cfg(test)]

@@ -103,6 +103,8 @@ pub struct Now {
     pub heat_from_hot: f64,
     /// Heat from the cold wall.
     pub heat_from_cold: f64,
+    /// Heat from the regenerator's screens, while they are in the opening.
+    pub heat_from_regenerator: Option<f64>,
     /// Work the gas did on the pistons.
     pub gas_work: f64,
     /// Gas first-law residual.
@@ -128,8 +130,11 @@ pub struct Turn {
     pub cold_heat: f64,
     /// Work the gas did.
     pub work: f64,
-    /// Change in the gas's own energy, dU.
+    /// Change in the engine's own energy, dU: the gas's, and the
+    /// regenerator's screens' while they are in.
     pub stored: f64,
+    /// The regenerator was in the opening over the turns.
+    pub regenerator: bool,
     /// Hot-wall setting over the turns.
     pub hot_kelvin: f32,
     /// Cold-wall setting over the turns.
@@ -140,9 +145,10 @@ pub struct Turn {
     pub carnot: f64,
     /// Entropy change of the surroundings (both walls), in J/K.
     pub entropy: f64,
-    /// The gas ended the turns with nearly the energy it started with, so
-    /// its own entropy change is negligible and `entropy` is also the
-    /// change of the universe.
+    /// The gas, and the screens while they are in, ended the turns with
+    /// nearly the energy they started with, so the engine's own entropy
+    /// change is negligible and `entropy` is also the change of the
+    /// universe.
     pub settled: bool,
     /// Q hot + Q cold - W - dU, ideally zero.
     pub residual: f64,
@@ -193,6 +199,10 @@ fn now(engine: &ConnectedChambers) -> Now {
         friction: joules(pistons.drag_loss() - pistons.load_work()),
         heat_from_hot: joules(heat.hot),
         heat_from_cold: joules(heat.cold),
+        heat_from_regenerator: engine
+            .regenerator()
+            .is_enabled()
+            .then(|| joules(engine.regenerator().heat())),
         gas_work: joules(engine.piston_work_by_gas()),
         gas_error: joules(engine.energy_balance_error()),
         shaft_error: joules(engine.mechanical_balance_error()),
@@ -209,7 +219,10 @@ pub fn turn(engine: &ConnectedChambers, recent: TurnSummary) -> Turn {
         hot_heat: joules(per_turn.change.hot_heat),
         cold_heat: joules(per_turn.change.cold_heat),
         work: joules(per_turn.change.gas_work),
-        stored: joules(per_turn.change.gas_energy),
+        stored: joules(per_turn.engine_energy_change()),
+        // A change of the regenerator starts the turns over, so it stood
+        // as it is now throughout.
+        regenerator: engine.regenerator().is_enabled(),
         hot_kelvin: per_turn.hot_kelvin,
         cold_kelvin: per_turn.cold_kelvin,
         efficiency: per_turn

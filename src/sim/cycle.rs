@@ -37,6 +37,9 @@ pub struct CycleTotals {
     pub hot_heat: f64,
     /// Heat into the gas from the cold reservoir.
     pub cold_heat: f64,
+    /// Heat into the gas from the regenerator's screens; negative when they
+    /// stored heat.
+    pub regenerator_heat: f64,
     /// Heat from the hot reservoir over its temperature.
     pub hot_entropy: f64,
     /// Heat from the cold reservoir over its temperature.
@@ -53,6 +56,7 @@ impl CycleTotals {
         Self {
             hot_heat: combine(self.hot_heat, other.hot_heat),
             cold_heat: combine(self.cold_heat, other.cold_heat),
+            regenerator_heat: combine(self.regenerator_heat, other.regenerator_heat),
             hot_entropy: combine(self.hot_entropy, other.hot_entropy),
             cold_entropy: combine(self.cold_entropy, other.cold_entropy),
             gas_work: combine(self.gas_work, other.gas_work),
@@ -89,10 +93,11 @@ impl TurnSummary {
         }
     }
 
-    /// First-law residual, ideally zero: Q hot + Q cold - W - dU.
+    /// First-law residual, ideally zero: Q hot + Q cold - W - dU, where dU
+    /// is the engine's (see `engine_energy_change`).
     pub fn first_law_residual(self) -> f64 {
         let change = self.change;
-        change.hot_heat + change.cold_heat - change.gas_work - change.gas_energy
+        change.hot_heat + change.cold_heat - change.gas_work - self.engine_energy_change()
     }
 
     /// Work out over heat in from the hot wall, or `None` when the hot wall
@@ -107,18 +112,31 @@ impl TurnSummary {
     }
 
     /// Entropy change of both reservoirs, -(Qh/Th + Qc/Tc).
+    ///
+    /// The regenerator's screens are part of the engine, like the gas, not
+    /// of its surroundings.
     pub fn surroundings_entropy_change(self) -> f64 {
         -(self.change.hot_entropy + self.change.cold_entropy)
     }
 
-    /// Whether the gas ended the turns with nearly the energy it started
-    /// with.
+    /// The change in the engine's own energy: the gas's, and the
+    /// regenerator's screens', which lose what they give the gas.
+    pub fn engine_energy_change(self) -> f64 {
+        self.change.gas_energy - self.change.regenerator_heat
+    }
+
+    /// Whether the gas and the regenerator's screens each ended the turns
+    /// with nearly the energy they started with.
     ///
-    /// Only then is the gas's own entropy change negligible, so the
+    /// Only then is the engine's own entropy change negligible, so the
     /// surroundings' change is the change of the universe.
     pub fn is_settled(self) -> bool {
-        let throughput = (self.change.hot_heat.abs() + self.change.cold_heat.abs()) / 2.0;
-        throughput > 0.0 && self.change.gas_energy.abs() <= SETTLED_FRACTION * throughput
+        let change = self.change;
+        let throughput = (change.hot_heat.abs() + change.cold_heat.abs()) / 2.0;
+        let limit = SETTLED_FRACTION * throughput;
+        throughput > 0.0
+            && change.gas_energy.abs() <= limit
+            && change.regenerator_heat.abs() <= limit
     }
 }
 

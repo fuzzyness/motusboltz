@@ -336,6 +336,45 @@ fn reservoir_settings_survive_refill_and_heat_resets() {
 }
 
 #[test]
+fn the_regenerator_starts_out_and_refills_keep_it_in_between_the_walls() {
+    let mut simulation = ConnectedChambers::seeded(TEST_COUNT);
+    assert!(!simulation.regenerator().is_enabled());
+    simulation.set_hot_kelvin(MAX_HOT_KELVIN);
+    simulation.set_regenerator(true);
+    simulation.reset();
+    let regenerator = simulation.regenerator();
+    assert!(regenerator.is_enabled());
+    assert_eq!(regenerator.heat(), 0.0);
+    let kelvin: Vec<f32> = regenerator.screens().map(|screen| screen.kelvin).collect();
+    assert_eq!(kelvin.first(), Some(&MAX_HOT_KELVIN));
+    assert_eq!(kelvin.last(), Some(&MAX_COLD_KELVIN));
+}
+
+/// Gas crossing hot screens takes heat from them, and the gas's ledger
+/// counts it with the wall heat.
+#[test]
+fn gas_through_the_regenerator_keeps_the_first_law_balanced() {
+    const RELATIVE_TOLERANCE: f32 = 2e-3;
+    let mut simulation = insulated(TEST_COUNT);
+    simulation.set_hot_kelvin(MAX_HOT_KELVIN);
+    simulation.set_regenerator(true);
+    let initial_energy = simulation.kinetic_energy();
+    for _ in 0..TRANSFER_TEST_STEPS {
+        simulation.update(FIXED_DT);
+    }
+    assert_eq!(simulation.heat().total(), 0.0, "the walls are insulated");
+    assert!(
+        simulation.regenerator().heat() > 0.0,
+        "screens above 300 K warm 300 K gas"
+    );
+    assert!(simulation.kinetic_energy() > initial_energy);
+    assert!(
+        simulation.energy_balance_error().abs()
+            < (RELATIVE_TOLERANCE * simulation.kinetic_energy()) as f64
+    );
+}
+
+#[test]
 fn opening_and_upper_caps_are_adiabatic() {
     const WALL_SPEED: f32 = 2.0;
     let mut simulation = ConnectedChambers::seeded(2);
@@ -809,14 +848,26 @@ struct CycleOutcome {
     shaft_residual: f64,
 }
 
-/// Default fill, one Start press, cold reservoir at 300 K. Energy is sampled at
-/// completed revolutions because compression and back-pressure work make
-/// arbitrary crank phases incomparable.
+/// Default fill, one Start press, cold reservoir at 300 K, regenerator out.
+/// Energy is sampled at completed revolutions because compression and
+/// back-pressure work make arbitrary crank phases incomparable.
 fn started_run(seed: u64, hot_kelvin: f32, dt: f32, duration: f32) -> CycleOutcome {
+    started_run_with(seed, hot_kelvin, dt, duration, false)
+}
+
+/// `started_run` with the regenerator in if `regenerator` is true.
+fn started_run_with(
+    seed: u64,
+    hot_kelvin: f32,
+    dt: f32,
+    duration: f32,
+    regenerator: bool,
+) -> CycleOutcome {
     let mut simulation =
         ConnectedChambers::with_geometry_seed(DEFAULT_PARTICLES, DEFAULT_GEOMETRY, seed);
     simulation.set_hot_kelvin(hot_kelvin);
     simulation.set_cold_kelvin(MAX_COLD_KELVIN);
+    simulation.set_regenerator(regenerator);
     assert!(simulation.start_engine());
     let starter_energy = simulation.pistons.starter_work();
     let mut completed_turns = 0;
@@ -1259,4 +1310,58 @@ fn tracers_follow_both_sides_without_changing_the_physics() {
     }
     followed.reset();
     assert!(followed.tracers().is_none());
+}
+
+/// Hot-wall heat and gas work per turn over the last `turns` recorded turns
+/// of `outcome`.
+fn late_heat_and_work(outcome: &CycleOutcome, turns: usize) -> (f64, f64) {
+    let late = &outcome.turns[outcome.turns.len().saturating_sub(turns)..];
+    let count = late.len().max(1) as f64;
+    let sum = |quantity: fn(&TurnSummary) -> f64| {
+        late.iter().map(|turn| quantity(&turn.summary)).sum::<f64>() / count
+    };
+    (
+        sum(|summary| summary.change.hot_heat),
+        sum(|summary| summary.change.gas_work),
+    )
+}
+
+/// With the regenerator in, the hot wall gives far less heat each turn for
+/// about the same work, so the efficiency rises; every turn still balances,
+/// and settled turns still raise the entropy of the surroundings.
+/// Run with `cargo test --release regenerator_raises -- --ignored --nocapture`.
+#[test]
+#[ignore = "long particle-driven cycle regression; run in release mode"]
+fn regenerator_raises_efficiency_within_the_laws() {
+    /// Seeds compared.
+    const SEEDS: [u64; 2] = [42, 7];
+    /// Late turns averaged, after the screens have settled.
+    const LATE_TURNS: usize = 6;
+    /// Most hot-wall heat per turn with the regenerator, as a share of the
+    /// heat without it (measured: 0.18 for both seeds).
+    const HEAT_RATIO: f64 = 0.3;
+    /// Least efficiency with the regenerator, as a multiple of the
+    /// efficiency without it (measured: 5.8 and 6.3).
+    const EFFICIENCY_GAIN: f64 = 3.0;
+    for seed in SEEDS {
+        let open = started_run_with(seed, MAX_HOT_KELVIN, FIXED_DT, ROTATION_DURATION, false);
+        let screened = started_run_with(seed, MAX_HOT_KELVIN, FIXED_DT, ROTATION_DURATION, true);
+        check_started_run(seed, MAX_HOT_KELVIN, FIXED_DT, &screened);
+        let (open_heat, open_work) = late_heat_and_work(&open, LATE_TURNS);
+        let (screened_heat, screened_work) = late_heat_and_work(&screened, LATE_TURNS);
+        let (open_efficiency, screened_efficiency) =
+            (open_work / open_heat, screened_work / screened_heat);
+        println!(
+            "seed={seed}: heat per turn {open_heat:.0} -> {screened_heat:.0} ({:.2}), work {open_work:.1} -> {screened_work:.1}, efficiency {:.4} -> {:.4} ({:.2}x)",
+            screened_heat / open_heat,
+            open_efficiency,
+            screened_efficiency,
+            screened_efficiency / open_efficiency
+        );
+        assert!(screened_heat < HEAT_RATIO * open_heat, "seed {seed}");
+        assert!(
+            screened_efficiency > EFFICIENCY_GAIN * open_efficiency,
+            "seed {seed}"
+        );
+    }
 }

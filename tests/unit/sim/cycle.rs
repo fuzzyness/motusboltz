@@ -17,6 +17,7 @@ const STEP_FRACTION: f64 = 1.5 / STEPS_PER_TURN as f64;
 const PER_TURN: CycleTotals = CycleTotals {
     hot_heat: 100.0,
     cold_heat: -80.0,
+    regenerator_heat: 0.0,
     hot_entropy: 25.0,
     cold_entropy: -80.0,
     gas_work: 15.0,
@@ -32,6 +33,7 @@ impl TurnSummary {
             change: CycleTotals {
                 hot_heat: TURNS * 9_000.0,
                 cold_heat: TURNS * -8_600.0,
+                regenerator_heat: 0.0,
                 hot_entropy: TURNS * 9_000.0 / 4.0,
                 cold_entropy: TURNS * -8_600.0,
                 gas_work: TURNS * 300.0,
@@ -248,4 +250,34 @@ fn summary_laws_and_limits() {
         ..PER_TURN
     });
     assert!(no_heat.efficiency().is_none());
+}
+
+/// Heat the regenerator's screens give the gas comes out of the engine's
+/// own energy, so the ledger still balances; screens still storing heat
+/// keep the turns from counting as settled.
+#[test]
+fn regenerator_heat_counts_as_the_engines_own_energy() {
+    const STORED: f64 = 20.0;
+    let turn = |change: CycleTotals| TurnSummary {
+        turns: 1,
+        change,
+        duration: 1.0,
+        hot_kelvin: KELVIN.0,
+        cold_kelvin: KELVIN.1,
+    };
+    let giving = turn(CycleTotals {
+        regenerator_heat: STORED,
+        gas_energy: PER_TURN.gas_energy + STORED,
+        ..PER_TURN
+    });
+    assert!(giving.first_law_residual().abs() < TOLERANCE);
+    assert!((giving.engine_energy_change() - PER_TURN.gas_energy).abs() < TOLERANCE);
+    // The screens store heat the hot wall gave: the gas ends as it began.
+    let storing = turn(CycleTotals {
+        hot_heat: PER_TURN.hot_heat + STORED,
+        regenerator_heat: -STORED,
+        ..PER_TURN
+    });
+    assert!(storing.first_law_residual().abs() < TOLERANCE);
+    assert!(!storing.is_settled());
 }

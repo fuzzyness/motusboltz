@@ -27,7 +27,8 @@ use crate::ui::controls::{
     BACKING_RADIUS,
     SceneArea,
     TOGGLES_BOTTOM,
-    row_top, //
+    row_top,
+    slider_column, //
 };
 use crate::ui::motion::{
     faded,
@@ -97,6 +98,12 @@ pub fn tags(engine: &ConnectedChambers) -> [Tag; 5] {
         -geometry.cylinder_height / 4.0,
     );
     let under_opening = vec3(0.0, -geometry.passage_radius - BASE_THICKNESS, outer);
+    // With the regenerator in, the opening's tag names its screens.
+    let opening = if engine.regenerator().is_enabled() {
+        ("Regenerator", "stores heat, gives it back")
+    } else {
+        ("Opening", "insulated: no heat")
+    };
     [
         Tag {
             name: "Helium gas",
@@ -123,8 +130,8 @@ pub fn tags(engine: &ConnectedChambers) -> [Tag; 5] {
             outward: -Vec3::X * WALL_THICKNESS,
         },
         Tag {
-            name: "Opening",
-            role: "insulated: no heat",
+            name: opening.0,
+            role: opening.1,
             anchor: vec3(0.0, geometry.passage_center_y(), 0.0),
             outward: under_opening,
         },
@@ -165,9 +172,14 @@ fn clear_of(mut rect: Rect, taken: &[Rect], top: f32) -> Option<Rect> {
 /// `cards`: its dot and its box, or `None` for a part behind the camera or
 /// a tag with no room left.
 ///
-/// The boxes stay between the panel and the scene's span's right, and
-/// between the toggles and the bottom row. A box in the way of one of
-/// `cards` or of an earlier tag moves up past it.
+/// The boxes stay between the panel and the window's right edge, left of
+/// the slider column's card where they are level with it, and between the
+/// toggles and the bottom row. A box in the way of one of `cards` or of an
+/// earlier tag moves up past it.
+///
+/// The right side is not held to the centered span, whose inset mirrors
+/// the panel's width, or the tag of a part on the right would be pushed
+/// in over the engine.
 pub fn place(
     pen: &Pen,
     tags: &[Tag],
@@ -196,8 +208,17 @@ pub fn place(
             let half = vec2(width, height) / 2.0;
             let center = edge + direction * (LEADER + half.dot(direction.abs()));
             let low = vec2(area.edge + EDGE_ROOM, TOGGLES_BOTTOM + EDGE_ROOM) + half;
-            let high = vec2(area.right(), floor) - half - EDGE_ROOM;
+            let high = vec2(area.window_width, floor) - half - EDGE_ROOM;
             let center = center.clamp(low, high.max(low));
+            // Level with the slider column's card, stay left of it.
+            let column = slider_column(area.window_width);
+            let level = center.y - half.y < column.bottom() + EDGE_ROOM;
+            let right = column.x - EDGE_ROOM - half.x;
+            let center = if area.sliders && level && center.x > right {
+                vec2(right.max(low.x), center.y)
+            } else {
+                center
+            };
             let rect = Rect::new(center.x - half.x, center.y - half.y, width, height);
             let rect = clear_of(rect, &taken, low.y - half.y)?;
             taken.push(rect);

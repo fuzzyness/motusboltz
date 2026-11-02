@@ -62,6 +62,8 @@ const FLYWHEEL_HEADING: &str = "FLYWHEEL";
 const TOTALS_HEADING: &str = "SINCE THE GAS WAS FILLED";
 /// The first law, per turn.
 const LEDGER_EQUATION: &str = "Q hot + Q cold = W + ΔU";
+/// Under the first law while the regenerator is in.
+const REGENERATOR_NOTE: &str = "ΔU counts the regenerator's screens with the gas";
 /// The entropy change of the surroundings, per turn.
 const ENTROPY_EQUATION: &str = "ΔS surr = −Q hot / T hot − Q cold / T cold";
 
@@ -197,6 +199,10 @@ fn draw_turn(pen: &mut Pen, readout: &Readout, top: f32) -> f32 {
     let heat = signed_sum(&[turn.hot_heat, turn.cold_heat]);
     let ledger = format!("{heat} = {} J", signed_sum(&[turn.work, turn.stored]));
     line(pen, &ledger, y, BODY_SIZE, TEXT);
+    if turn.regenerator {
+        y += SMALL_LINE;
+        line(pen, REGENERATOR_NOTE, y, SMALL_SIZE, QUIET);
+    }
     if turn.residual.abs() > LEDGER_TOLERANCE_JOULES {
         y += SMALL_LINE;
         let text = format!("Unexpected: off by {} J", signed_number(turn.residual, 2));
@@ -225,10 +231,11 @@ fn draw_turn(pen: &mut Pen, readout: &Readout, top: f32) -> f32 {
     line(pen, &entropy, y, BODY_SIZE, color);
     y += SMALL_LINE;
     let stored = signed_number(turn.stored, 0);
+    let what = if turn.regenerator { "engine" } else { "gas" };
     let note = if turn.settled {
         format!("ΔU {stored} J is small, so ΔS universe ≈ ΔS surr")
     } else {
-        format!("Gas still settling (ΔU {stored} J): ΔS gas not counted")
+        format!("The {what} is still settling (ΔU {stored} J): ΔS {what} not counted")
     };
     line(pen, &note, y, SMALL_SIZE, QUIET);
     y
@@ -240,12 +247,16 @@ pub fn draw_totals(pen: &mut Pen, readout: &Readout, top: f32) -> f32 {
     let now = &readout.now;
     let mut y = section(pen, TOTALS_HEADING, top);
     let joules = |energy: f64| format!("{} J", amount(energy));
+    let regenerator = now
+        .heat_from_regenerator
+        .map(|heat| ("Heat in from the regenerator", joules(heat)));
     let rows = [
-        ("Heat in at the hot side", joules(now.heat_from_hot)),
-        ("Heat in at the cold side", joules(now.heat_from_cold)),
-        ("Work done by the gas", joules(now.gas_work)),
+        Some(("Heat in at the hot side", joules(now.heat_from_hot))),
+        Some(("Heat in at the cold side", joules(now.heat_from_cold))),
+        regenerator,
+        Some(("Work done by the gas", joules(now.gas_work))),
     ];
-    for (label, value) in rows {
+    for (label, value) in rows.into_iter().flatten() {
         y += ROW;
         row(pen, label, &value, y, TEXT);
     }

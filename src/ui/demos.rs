@@ -1,8 +1,9 @@
-//! Demos: five ready-made settings, each showing one idea about heat
+//! Demos: six ready-made settings, each showing one idea about heat
 //! engines, and the banner that says what to watch.
 //!
-//! Choosing a demo sets both walls, refills the gas and leaves the flywheel
-//! at rest, so every demo starts the same way: with Start. The banner sits
+//! Choosing a demo sets both walls, puts the regenerator in or takes it
+//! out, refills the gas and leaves the flywheel at rest, so every demo
+//! starts the same way: with Start. The banner sits
 //! in the column under the sliders' card, above Hide all, where the engine
 //! leaves open sky.
 
@@ -55,6 +56,8 @@ pub enum Scenario {
     NoDifference,
     /// A wide gap: the engine at its best.
     HeatEngine,
+    /// The same gap with the regenerator in the opening.
+    Regenerator,
     /// A room-temperature hot side and a very cold one.
     ColdSink,
     /// A gap too small to beat friction.
@@ -64,9 +67,10 @@ pub enum Scenario {
 }
 
 /// The demos, in the menu's order.
-pub const SCENARIOS: [Scenario; 5] = [
+pub const SCENARIOS: [Scenario; 6] = [
     Scenario::NoDifference,
     Scenario::HeatEngine,
+    Scenario::Regenerator,
     Scenario::LargestDifference,
     Scenario::ColdSink,
     Scenario::SmallGap,
@@ -77,11 +81,16 @@ impl Scenario {
     pub fn kelvin(self) -> (f32, f32) {
         match self {
             Self::NoDifference => (300.0, 300.0),
-            Self::HeatEngine => (1_200.0, 300.0),
+            Self::HeatEngine | Self::Regenerator => (1_200.0, 300.0),
             Self::ColdSink => (300.0, 100.0),
             Self::SmallGap => (400.0, 300.0),
             Self::LargestDifference => (MAX_HOT_KELVIN, MIN_COLD_KELVIN),
         }
+    }
+
+    /// Whether the demo puts the regenerator in the opening.
+    pub fn regenerator(self) -> bool {
+        self == Self::Regenerator
     }
 
     /// The demo's name.
@@ -89,6 +98,7 @@ impl Scenario {
         match self {
             Self::NoDifference => "No temperature difference",
             Self::HeatEngine => "Heat engine",
+            Self::Regenerator => "Regenerator",
             Self::ColdSink => "Cold side only",
             Self::SmallGap => "Small gap",
             Self::LargestDifference => "Largest difference",
@@ -99,7 +109,7 @@ impl Scenario {
     pub fn temperatures(self) -> &'static str {
         match self {
             Self::NoDifference => "300 / 300 K",
-            Self::HeatEngine => "1200 / 300 K",
+            Self::HeatEngine | Self::Regenerator => "1200 / 300 K",
             Self::ColdSink => "300 / 100 K",
             Self::SmallGap => "400 / 300 K",
             Self::LargestDifference => "1200 / 77 K",
@@ -111,15 +121,20 @@ impl Scenario {
         match self {
             Self::NoDifference => {
                 "Both walls are at 300\u{a0}K, so nothing runs the engine. \
-                 The flywheel does work on the gas instead, the gas gives it \
-                 to the walls as heat, and the flywheel stops after several \
-                 minutes."
+                 The flywheel's work turns into heat at the walls, and it \
+                 stops after several minutes."
             }
             Self::HeatEngine => {
                 "Heat flows in at the hot wall (orange sparks) and out at the \
                  cold wall (blue sparks). The small part that comes in but \
                  does not go out becomes the work that keeps the flywheel \
                  turning."
+            }
+            Self::Regenerator => {
+                "Heat engine with wire screens in the opening. Gas heading \
+                 to the cold side leaves heat in them; gas heading back takes \
+                 it, so the same work needs less heat. Compare the efficiency \
+                 with Heat engine."
             }
             Self::ColdSink => {
                 "The hot side is only room temperature, but the cold side is \
@@ -136,9 +151,8 @@ impl Scenario {
             Self::LargestDifference => {
                 "A 1200\u{a0}K burner against liquid nitrogen at \
                  77\u{a0}K, the widest gap the sliders allow. The flywheel \
-                 turns fastest here, and the Carnot limit is highest, \
-                 about 94%, yet the engine still turns only a small part of the \
-                 heat into work."
+                 turns fastest and the Carnot limit is about 94%, yet only a \
+                 little of the heat becomes work."
             }
         }
     }

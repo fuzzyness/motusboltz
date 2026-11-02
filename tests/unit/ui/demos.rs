@@ -68,6 +68,7 @@ fn the_banner_fits_beside_the_scene_above_the_bottom_row() {
             width: span,
             window_width: width,
             height,
+            sliders: true,
         };
         let bottom = corner_button(&Pen::offline(), area).y;
         for scenario in SCENARIOS {

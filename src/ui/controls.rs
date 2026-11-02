@@ -4,9 +4,10 @@
 //! top, with the Demos menu dropping under them while it is open; a row of
 //! Reset, Start or Pause, Slow and Tracers centered along the bottom, where
 //! Start takes Pause's place whenever pressing it would help (Space does
-//! whichever is shown); the hot, cold and helium sliders on a card at the
-//! right; a button beside that card and the panel's, at the window's edge,
-//! that opens and closes each (see `drawer`); and Hide all, tucked in the bottom-right corner, which hides
+//! whichever is shown); the hot, cold and helium sliders and the
+//! regenerator's switch on a card at the right; a button beside that card
+//! and the panel's, at the window's edge, that opens and closes each (see
+//! `drawer`); and Hide all, tucked in the bottom-right corner, which hides
 //! everything but itself.
 
 use macroquad::prelude::{
@@ -56,7 +57,8 @@ use crate::ui::pen::{
 };
 use crate::ui::slider::{
     self,
-    Slider, //
+    Slider,
+    Switch, //
 };
 
 /// Inset of the toggles and the bottom row from the free part's edges.
@@ -312,6 +314,9 @@ pub struct SceneArea {
     pub window_width: f32,
     /// Height of the window.
     pub height: f32,
+    /// The slider column's card is on screen, covering the window's right
+    /// edge beside it.
+    pub sliders: bool,
 }
 
 impl SceneArea {
@@ -518,7 +523,8 @@ fn unshifted(pen: &Pen) {
 /// What the controls did this frame.
 ///
 /// Slider values are reported when a temperature changes and when the
-/// helium slider is released, since a new fill restarts the gas.
+/// helium slider is released, since a new fill restarts the gas; the
+/// switch is reported when a click flips it.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ControlEvents {
     /// The button pressed, if any.
@@ -529,6 +535,8 @@ pub struct ControlEvents {
     pub cold_kelvin: Option<f32>,
     /// The new helium concentration, in mol/L.
     pub concentration: Option<f32>,
+    /// Whether the regenerator is now in, after a click on its switch.
+    pub regenerator: Option<bool>,
 }
 
 /// The buttons and the sliders.
@@ -539,6 +547,8 @@ pub struct Controls {
     cold: Slider,
     /// The helium concentration.
     concentration: Slider,
+    /// Whether the regenerator is in.
+    regenerator: Switch,
     /// The button under the pointer, if any.
     hovered: Option<Action>,
     /// A press that started on a button is still held, so dragging off the
@@ -552,12 +562,14 @@ pub struct Controls {
 }
 
 impl Controls {
-    /// Controls with the sliders at the given settings.
+    /// Controls with the sliders at the given settings and the regenerator
+    /// out.
     pub fn new(hot_kelvin: f32, cold_kelvin: f32, concentration: f32) -> Self {
         Self {
             hot: Slider::hot_temperature(hot_kelvin),
             cold: Slider::cold_temperature(cold_kelvin),
             concentration: Slider::concentration(concentration),
+            regenerator: Switch::regenerator(false),
             hovered: None,
             button_gesture: false,
             sliders_shown: true,
@@ -621,11 +633,13 @@ impl Controls {
         for slider in [&mut self.hot, &mut self.cold, &mut self.concentration] {
             slider.animate(sliders, dt);
         }
-        let (hot, cold, concentration) = if sliders {
+        self.regenerator.animate(sliders, dt);
+        let (hot, cold, concentration, flipped) = if sliders {
             (
                 self.hot.update(),
                 self.cold.update(),
                 self.concentration.update(),
+                self.regenerator.update(),
             )
         } else {
             Default::default()
@@ -635,6 +649,7 @@ impl Controls {
             hot_kelvin: hot.changed.then(|| self.hot.value()),
             cold_kelvin: cold.changed.then(|| self.cold.value()),
             concentration: concentration.released.then(|| self.concentration.value()),
+            regenerator: flipped.then(|| self.regenerator.is_on()),
         }
     }
 
@@ -649,17 +664,24 @@ impl Controls {
         self.cold.set_value(cold_kelvin);
     }
 
+    /// Flips the regenerator's switch to a setting chosen another way (key
+    /// E or a demo).
+    pub fn set_regenerator(&mut self, on: bool) {
+        self.regenerator.set_on(on);
+    }
+
     /// Whether the camera should ignore the mouse this frame.
     pub fn blocks_camera(&self) -> bool {
         let sliders = self.sliders_shown
             && (self.hot.blocks_camera()
                 || self.cold.blocks_camera()
-                || self.concentration.blocks_camera());
+                || self.concentration.blocks_camera()
+                || self.regenerator.blocks_camera());
         self.hovered.is_some() || self.button_gesture || sliders
     }
 
-    /// Draws the slider card and the sliders (when shown), then every
-    /// button.
+    /// Draws the slider card with the sliders and the switch (when shown),
+    /// then every button.
     ///
     /// The panel's card is the app's to draw, under the panel; its button
     /// comes here.
@@ -678,6 +700,7 @@ impl Controls {
             self.hot.draw(pen);
             self.cold.draw(pen);
             self.concentration.draw(pen);
+            self.regenerator.draw(pen);
             unshifted(pen);
         }
         // The menu first, so its items come out from under the toggles.

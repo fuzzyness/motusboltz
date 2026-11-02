@@ -36,6 +36,8 @@ const HIDE_ALL_KEY: KeyCode = KeyCode::U;
 const DEMOS_KEY: KeyCode = KeyCode::M;
 /// Shows or hides the labels on the scene.
 const LABELS_KEY: KeyCode = KeyCode::N;
+/// Puts the regenerator in the opening or takes it out.
+const REGENERATOR_KEY: KeyCode = KeyCode::E;
 /// Gives the flywheel an additive kick, which can overdrive the engine.
 ///
 /// It is left out of the help text on purpose; it exists for testing.
@@ -77,12 +79,13 @@ const ZOOM_OUT_KEYS: [KeyCode; 2] = [KeyCode::Minus, KeyCode::KpSubtract];
 /// Every key binding the Keys list shows, as (keys, what they do).
 ///
 /// The hidden kick is left out.
-pub const SHORTCUTS: [(&str, &str); 18] = [
+pub const SHORTCUTS: [(&str, &str); 19] = [
     ("Space", "Start, pause or resume"),
     ("L", "Slow motion"),
     ("F", "Follow particles (tracers)"),
     ("T", "Reset with fresh gas"),
     ("1 to 5", "Less or more helium"),
+    ("E", "Regenerator in or out"),
     ("M", "Demos: ready-made settings"),
     ("N", "Show or hide the labels"),
     ("I", "Simple or advanced readings"),
@@ -143,6 +146,8 @@ pub struct KeyCommands {
     pub demos: bool,
     /// Show or hide the labels.
     pub labels: bool,
+    /// Put the regenerator in or take it out.
+    pub regenerator: bool,
     /// Kick the flywheel.
     pub kick: bool,
     /// Index of the fill preset chosen with keys 1 to 5.
@@ -171,6 +176,7 @@ impl KeyCommands {
             hide_all: pressed(HIDE_ALL_KEY),
             demos: pressed(DEMOS_KEY),
             labels: pressed(LABELS_KEY),
+            regenerator: pressed(REGENERATOR_KEY),
             kick: pressed(KICK_KEY),
             fill_preset: FILL_KEYS.into_iter().position(&pressed),
         }

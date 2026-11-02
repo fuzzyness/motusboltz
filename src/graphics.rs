@@ -1,6 +1,7 @@
 //! 3D drawing of the particles, tracer trails, cylinders, the opening
-//! between them, the pistons, rods, crankshaft and flywheel, the burner
-//! and ice that stand for the two reservoirs, and the background.
+//! between them and the regenerator's screens in it, the pistons, rods,
+//! crankshaft and flywheel, the burner and ice that stand for the two
+//! reservoirs, and the background.
 //!
 //! Drawing only; nothing here affects the physics.
 
@@ -16,6 +17,7 @@ pub mod ice;
 pub mod levels;
 pub mod outline;
 pub mod particles;
+pub mod regenerator;
 pub mod soft_view;
 pub mod solid;
 pub mod sprites;
@@ -67,6 +69,7 @@ use particles::{
     ParticleRenderer,
     camera_light_direction, //
 };
+use regenerator::RegeneratorScreens;
 use soft_view::SoftView;
 use sprites::{
     Facing,
@@ -204,6 +207,8 @@ fn shade(color: Color, brightness: f32) -> Color {
 pub struct Scene {
     /// The cylinders and the opening between them.
     chamber: ConnectedChamberVisual,
+    /// The regenerator's screens, drawn while they are in the opening.
+    screens: RegeneratorScreens,
     /// The see-through grid of the grid scenery.
     floor: FloorGrid,
     /// The block, pistons, rods, crankshaft and flywheel.
@@ -248,6 +253,7 @@ impl Scene {
         };
         Self {
             chamber: ConnectedChamberVisual::new(geometry),
+            screens: RegeneratorScreens::new(geometry, simulation.regenerator().screens()),
             floor: FloorGrid::new(shape.base),
             assembly: Assembly::new(geometry, simulation.power_pistons()),
             particles: ParticleRenderer::new(extent),
@@ -347,13 +353,21 @@ impl Scene {
         self.ice.build(self.levels.cold, seconds, light, facing);
         self.heat_sparks.build(simulation, camera, seconds);
         self.chamber.draw(camera);
-        self.assembly.draw(simulation.power_pistons(), camera);
+        self.screens.draw(
+            simulation.regenerator(),
+            simulation.hot_kelvin(),
+            simulation.cold_kelvin(),
+        );
         self.fire.draw_burner();
         self.ice.draw_solid(camera, light);
         if scenery == Scenery::Sky {
             self.cloud.draw(camera, light);
         }
         self.particles.draw(simulation, camera, background);
+        // The screens show faintly through the gas, but not through the
+        // pistons, which come after.
+        self.screens.draw_ghost(simulation.regenerator(), camera);
+        self.assembly.draw(simulation.power_pistons(), camera);
         // The see-through grid and trails after everything solid, so they
         // blend over it.
         if scenery == Scenery::Grid {

@@ -24,6 +24,7 @@ fn area(width: f32, height: f32) -> SceneArea {
         width: span,
         window_width: width,
         height,
+        sliders: true,
     }
 }
 
@@ -74,7 +75,8 @@ fn the_tags_stay_in_the_scene_apart() {
             assert!(placed[0].is_some(), "the system always has its tag");
             let boxes: Vec<Rect> = placed.into_iter().flatten().map(|(_, rect)| rect).collect();
             for (index, rect) in boxes.iter().enumerate() {
-                assert!(rect.x >= area.edge && rect.right() <= area.right());
+                assert!(rect.x >= area.edge && rect.right() <= width);
+                assert!(!slider_column(width).overlaps(rect), "clear of the sliders");
                 assert!(rect.y > TOGGLES_BOTTOM && rect.bottom() < row_top(height));
                 let earlier = cards.iter().chain(&boxes[..index]);
                 assert!(earlier.into_iter().all(|other| !other.overlaps(rect)));

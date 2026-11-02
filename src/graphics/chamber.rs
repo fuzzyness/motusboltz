@@ -56,16 +56,17 @@ const PASSAGE_RIM_SEGMENTS: usize = 32;
 /// Rim segments between the lines along the opening.
 const PASSAGE_LONGITUDINAL_STRIDE: usize = 4;
 
-/// Appends a tube of `sections` cross-sections in `color` to `mesh`,
-/// joining the last back to the first if `closed`.
+/// Appends a tube of `radius` with `sections` cross-sections in `color` to
+/// `mesh`, joining the last back to the first if `closed`.
 ///
 /// `cross_section` gives each section's center and the two basis vectors of
 /// its plane. The triangles face outward for both circular rims and
-/// vertical guides.
-fn append_tube(
+/// vertical guides. The light is baked into the vertex colors.
+pub(super) fn append_tube(
     mesh: &mut Mesh,
     sections: usize,
     closed: bool,
+    radius: f32,
     color: Color,
     mut cross_section: impl FnMut(usize) -> (Vec3, Vec3, Vec3),
 ) {
@@ -79,7 +80,7 @@ fn append_tube(
             let angle = TAU * side as f32 / FRAME_TUBE_SIDES as f32;
             let (sin_angle, cos_angle) = angle.sin_cos();
             let normal = axis_u * cos_angle + axis_v * sin_angle;
-            let position = center + normal * FRAME_TUBE_RADIUS;
+            let position = center + normal * radius;
             let brightness =
                 FRAME_AMBIENT_LIGHT + FRAME_DIFFUSE_LIGHT * normal.dot(light_direction).max(0.0);
             mesh.vertices
@@ -134,19 +135,27 @@ impl CylinderFrame {
         let half_height = chamber.height / 2.0;
         let (bottom, top) = (-half_height, half_height);
         for y in [bottom, top] {
-            append_tube(&mut mesh, CYLINDER_RING_SEGMENTS, true, color, |section| {
-                let angle = TAU * section as f32 / CYLINDER_RING_SEGMENTS as f32;
-                let (sin_angle, cos_angle) = angle.sin_cos();
-                let radial = vec3(cos_angle, 0.0, sin_angle);
-                (radial * chamber.radius + Vec3::Y * y, radial, Vec3::Y)
-            });
+            let tube = FRAME_TUBE_RADIUS;
+            append_tube(
+                &mut mesh,
+                CYLINDER_RING_SEGMENTS,
+                true,
+                tube,
+                color,
+                |section| {
+                    let angle = TAU * section as f32 / CYLINDER_RING_SEGMENTS as f32;
+                    let (sin_angle, cos_angle) = angle.sin_cos();
+                    let radial = vec3(cos_angle, 0.0, sin_angle);
+                    (radial * chamber.radius + Vec3::Y * y, radial, Vec3::Y)
+                },
+            );
         }
         for guide in 0..CYLINDER_VERTICAL_GUIDES {
             let angle = TAU * guide as f32 / CYLINDER_VERTICAL_GUIDES as f32;
             let (sin_angle, cos_angle) = angle.sin_cos();
             let radial = vec3(cos_angle, 0.0, sin_angle);
             let lateral = vec3(sin_angle, 0.0, -cos_angle);
-            append_tube(&mut mesh, 2, false, color, |section| {
+            append_tube(&mut mesh, 2, false, FRAME_TUBE_RADIUS, color, |section| {
                 let y = [bottom, top][section];
                 (radial * chamber.radius + Vec3::Y * y, radial, lateral)
             });

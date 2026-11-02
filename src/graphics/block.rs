@@ -83,9 +83,9 @@ const STEEL: Color = Color::from_rgba(150, 160, 178, 255);
 /// Teal, for the insulated opening (the color of its old outline).
 const OPENING_STEEL: Color = Color::from_rgba(52, 196, 168, 255);
 /// Copper, on the hot side.
-const HOT_STEEL: Color = Color::from_rgba(232, 122, 58, 255);
+pub(super) const HOT_STEEL: Color = Color::from_rgba(232, 122, 58, 255);
 /// Cobalt, on the cold side.
-const COLD_STEEL: Color = Color::from_rgba(58, 128, 236, 255);
+pub(super) const COLD_STEEL: Color = Color::from_rgba(58, 128, 236, 255);
 
 /// Fragment shader that cuts the window and lights the steel.
 const BLOCK_FRAGMENT: &str = r#"#version 100

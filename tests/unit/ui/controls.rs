@@ -32,6 +32,7 @@ fn area_for(width: f32, height: f32, panel: bool, sliders: bool) -> SceneArea {
         width: span,
         window_width: width,
         height,
+        sliders,
     }
 }
 

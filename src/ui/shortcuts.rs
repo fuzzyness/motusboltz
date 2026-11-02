@@ -22,7 +22,7 @@ const TITLE_SIZE: f32 = 13.0;
 /// Text size of the bindings.
 const TEXT_SIZE: f32 = 15.0;
 /// Distance between baselines.
-const LINE: f32 = 21.0;
+const LINE: f32 = 20.0;
 /// Gap between the keys and what they do.
 const COLUMN_GAP: f32 = 16.0;
 /// Corner radius of the card.

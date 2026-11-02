@@ -1,12 +1,13 @@
 //! The energy strip: the first law as a picture, beside the scene.
 //!
-//! Two bars of equal length show where the gas's energy came from and went
-//! over the recent turns. The top bar is what came in: heat from a wall,
-//! work done on the gas, or energy the gas gave up. The bottom bar is what
-//! went out: work on the pistons, heat to a wall, or energy the gas kept.
-//! Each part has its own color, as in the panel: orange for heat at the hot
-//! side, yellow for work, blue for heat at the cold side and gray for the
-//! gas's own energy. The strip shows once a turn is done, in the column
+//! Two bars of equal length show where the engine's energy came from and
+//! went over the recent turns. The top bar is what came in: heat from a
+//! wall, work done on the gas, or energy the engine gave up. The bottom bar
+//! is what went out: work on the pistons, heat to a wall, or energy the
+//! engine kept. Each part has its own color, as in the panel: orange for
+//! heat at the hot side, yellow for work, blue for heat at the cold side
+//! and gray for the engine's own energy, which is the gas's, and the
+//! regenerator's screens' while they are in. The strip shows once a turn is done, in the column
 //! under the sliders' card, just above Hide all, out of the engine's way. In a window too short
 //! for it there, it goes to the scene's bottom-left corner while the panel
 //! is closed, and is left out while the panel's own first law is open.
@@ -68,7 +69,7 @@ const SMALL_SIZE: f32 = 11.0;
 const KEY_SIZE: f32 = 13.0;
 /// Least space between the key's two columns.
 const KEY_COLUMN_GAP: f32 = 8.0;
-/// Color of the gas's own energy.
+/// Color of the engine's own energy.
 const STORED_COLOR: Color = Color::from_rgba(150, 160, 178, 255);
 /// The heading.
 const HEADING: &str = "ENERGY EACH TURN";
@@ -107,7 +108,7 @@ fn terms(recent: TurnSummary, units: HeliumCalibration) -> [Term; 4] {
         },
         Term {
             name: "ΔU",
-            joules: -joules(change.gas_energy),
+            joules: -joules(recent.per_turn().engine_energy_change()),
             color: STORED_COLOR,
         },
     ]
