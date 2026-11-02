@@ -56,13 +56,6 @@ const KEY_PAN_SPEED: f32 = 0.5;
 /// Keyboard zoom rate, in e-folds of the distance per second.
 const KEY_ZOOM_RATE: f32 = 0.9;
 
-/// Whether a right drag pans.
-///
-/// It does natively. In the browser a right click also opens the context
-/// menu, which swallows the button release, so the camera stayed stuck
-/// panning; there Shift+drag and Shift+WASD/arrows pan instead.
-const RIGHT_DRAG_PANS: bool = !cfg!(target_arch = "wasm32");
-
 /// Pointer state for one frame, read by the caller.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Pointer {
@@ -145,7 +138,11 @@ impl OrbitCamera {
         }
 
         let left_down = is_mouse_button_down(MouseButton::Left);
-        let right_down = RIGHT_DRAG_PANS && is_mouse_button_down(MouseButton::Right);
+        // A right drag pans, as Shift with a left drag does. In the browser,
+        // the page keeps the context menu from opening and hands on a
+        // release outside the canvas, so the drag always ends (see
+        // `web/page.js`).
+        let right_down = is_mouse_button_down(MouseButton::Right);
         let drag = if right_down || (left_down && pointer.shift_down) {
             Some(Drag::Pan)
         } else {

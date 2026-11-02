@@ -4,10 +4,9 @@
 //! top, with the Demos menu dropping under them while it is open; a row of
 //! Reset, Start or Pause, Slow and Tracers centered along the bottom, where
 //! Start takes Pause's place whenever pressing it would help (Space does
-//! whichever is shown); the hot, cold and helium sliders on a
-//! card at the right; a hump on that card and on the panel's that closes
-//! each, leaving a tab at the window's edge that opens it again (see
-//! `drawer`); and Hide all, tucked in the bottom-right corner, which hides
+//! whichever is shown); the hot, cold and helium sliders on a card at the
+//! right; a button beside that card and the panel's, at the window's edge,
+//! that opens and closes each (see `drawer`); and Hide all, tucked in the bottom-right corner, which hides
 //! everything but itself.
 
 use macroquad::prelude::{
@@ -17,7 +16,8 @@ use macroquad::prelude::{
     Vec2,
     is_mouse_button_down,
     is_mouse_button_pressed,
-    mouse_position, //
+    mouse_position,
+    vec2, //
 };
 
 use crate::ui::button::{
@@ -33,16 +33,23 @@ use crate::ui::demos::{
     SCENARIOS,
     Scenario, //
 };
+use crate::ui::draw_target::{
+    draw_moved,
+    draw_to_screen, //
+};
 use crate::ui::drawer::{
     self,
-    Edge, //
+    Edge,
+    TabLook, //
 };
 use crate::ui::layout::{
     CONTROL_WIDTH,
     PANEL_INSET,
+    PANEL_LEFT,
     PANEL_WIDTH,
     control_left, //
 };
+use crate::ui::motion::smooth;
 use crate::ui::pen::{
     Pen,
     grown, //
@@ -95,9 +102,9 @@ pub const TOGGLES_BOTTOM: f32 = MARGIN + TOGGLE_HEIGHT;
 /// On-screen button actions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
-    /// Show or hide the panel.
+    /// Show or hide the readings panel.
     TogglePanel,
-    /// Show or hide the sliders.
+    /// Show or hide the settings (the sliders).
     ToggleSliders,
     /// Open or close the Demos menu.
     ToggleDemos,
@@ -174,6 +181,13 @@ pub struct ButtonStates {
     pub sky: bool,
     /// The slider column is open.
     pub sliders: bool,
+    /// The panel is peeked (see `drawer::Slide`).
+    pub panel_peek: bool,
+    /// The slider column is peeked.
+    pub sliders_peek: bool,
+    /// The slider column has slid all the way out, open or peeked, so its
+    /// sliders take input.
+    pub sliders_out: bool,
     /// Everything but Hide all is hidden.
     pub hidden: bool,
 }
@@ -193,6 +207,9 @@ impl ButtonStates {
         no_gap: true,
         sky: true,
         sliders: true,
+        panel_peek: true,
+        sliders_peek: true,
+        sliders_out: true,
         hidden: true,
     };
 }
@@ -201,8 +218,8 @@ impl Action {
     /// Button text, with the key that does the same.
     pub fn label(self, states: ButtonStates) -> Label {
         let (text, key) = match self {
-            Self::TogglePanel => ("Panel", "G"),
-            Self::ToggleSliders => ("Sliders", "C"),
+            Self::TogglePanel => ("Readings", "G"),
+            Self::ToggleSliders => ("Settings", "C"),
             Self::ToggleAll if states.hidden => ("Show all", "U"),
             Self::ToggleAll => ("Hide all", "U"),
             Self::ToggleDemos => ("Demos", "M"),
@@ -304,15 +321,13 @@ impl SceneArea {
     }
 }
 
-/// How a button is drawn: a pill, the hump on an open drawer's card, or
-/// the tab a closed drawer leaves at the window's edge.
+/// How a button is drawn: a pill, or the button beside a drawer at the
+/// window's edge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shape {
     /// A pill in the scene.
     Pill,
-    /// The grip in the hump of an open drawer at an edge.
-    Hump(Edge),
-    /// The tab a closed drawer leaves at an edge.
+    /// The button of the drawer at an edge.
     Tab(Edge),
 }
 
@@ -335,8 +350,8 @@ pub struct Placed {
 
 /// The panel's card in a window `height` points tall.
 pub fn panel_card(height: f32) -> Rect {
-    let width = PANEL_WIDTH - PANEL_INSET;
-    Rect::new(PANEL_INSET, PANEL_INSET, width, height - 2.0 * PANEL_INSET)
+    let width = PANEL_WIDTH - PANEL_LEFT;
+    Rect::new(PANEL_LEFT, PANEL_INSET, width, height - 2.0 * PANEL_INSET)
 }
 
 /// The sliders' card for a window `width` points wide.
@@ -366,28 +381,15 @@ pub fn corner_button(pen: &Pen, area: SceneArea) -> Rect {
     Rect::new(left, top, width, CORNER_HEIGHT)
 }
 
-/// The button for the drawer at `edge`: the grip in its hump while it is
-/// open, or the tab at the window's edge while it is closed.
+/// The button for the drawer at `edge`, beside its card at the window's
+/// edge, open or closed.
 fn drawer_button(edge: Edge, states: ButtonStates, area: SceneArea) -> Placed {
-    let (action, card, open) = match edge {
-        Edge::Left => (Action::TogglePanel, panel_card(area.height), states.panel),
-        Edge::Right => (
-            Action::ToggleSliders,
-            slider_column(area.window_width),
-            states.sliders,
-        ),
+    let (action, card) = match edge {
+        Edge::Left => (Action::TogglePanel, panel_card(area.height)),
+        Edge::Right => (Action::ToggleSliders, slider_column(area.window_width)),
     };
-    let (rect, shape) = if open {
-        (drawer::hump(card, edge), Shape::Hump(edge))
-    } else {
-        // The tab stays level with the card's middle.
-        let middle = card.center().y;
-        (
-            drawer::tab(edge, area.window_width, middle),
-            Shape::Tab(edge),
-        )
-    };
-    action.placed(states, rect, LABEL_SIZE, shape)
+    let rect = drawer::tab(card, edge, area.window_width);
+    action.placed(states, rect, LABEL_SIZE, Shape::Tab(edge))
 }
 
 /// Widths of `actions` with labels at `size`, and their total side by
@@ -479,6 +481,38 @@ fn widest(pen: &Pen, action: Action, size: f32) -> f32 {
 /// Middle of the toggles across, in `area`, where the keys list centers.
 pub fn toggles_middle(area: SceneArea) -> f32 {
     area.left + area.width / 2.0
+}
+
+/// Where the moving parts of the controls are this frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ControlMotion {
+    /// How far the panel's card stands from its open place along x, or
+    /// `None` while it is out of sight.
+    pub panel_shift: Option<f32>,
+    /// The same for the slider column's card, with its sliders.
+    pub sliders_shift: Option<f32>,
+    /// How far the glow of the panel stuck open has faded in, from 0 to 1.
+    pub panel_glow: f32,
+    /// The same for the slider column.
+    pub sliders_glow: f32,
+    /// How far the Demos menu has dropped, from 0 (folded) to 1 (all of
+    /// it).
+    pub menu: f32,
+}
+
+/// Sends `pen`'s drawing that follows `shift` points along x, if it
+/// draws.
+fn shifted(pen: &Pen, shift: f32) {
+    if pen.live() {
+        draw_moved(Vec2::ZERO, 1.0, vec2(shift, 0.0));
+    }
+}
+
+/// Sends `pen`'s drawing back to the screen, if it draws.
+fn unshifted(pen: &Pen) {
+    if pen.live() {
+        draw_to_screen();
+    }
 }
 
 /// What the controls did this frame.
@@ -582,7 +616,7 @@ impl Controls {
             self.press(action);
         }
 
-        let sliders = states.sliders && !states.hidden;
+        let sliders = states.sliders_out && !states.hidden;
         self.sliders_shown = sliders;
         for slider in [&mut self.hot, &mut self.cold, &mut self.concentration] {
             slider.animate(sliders, dt);
@@ -627,16 +661,33 @@ impl Controls {
     /// Draws the slider card and the sliders (when shown), then every
     /// button.
     ///
-    /// The panel's card, with its hump, is the app's to draw, under the
-    /// panel; the hump's grip comes here.
-    pub fn draw(&self, pen: &mut Pen, area: SceneArea, states: ButtonStates) {
-        if states.sliders && !states.hidden {
-            drawer::draw_card(pen, slider_column(area.window_width), Edge::Right, true);
+    /// The panel's card is the app's to draw, under the panel; its button
+    /// comes here.
+    pub fn draw(
+        &self,
+        pen: &mut Pen,
+        area: SceneArea,
+        states: ButtonStates,
+        motion: ControlMotion,
+    ) {
+        if let Some(shift) = motion.sliders_shift.filter(|_| !states.hidden) {
+            shifted(pen, shift);
+            let card = slider_column(area.window_width);
+            let tab = drawer::tab(card, Edge::Right, area.window_width);
+            drawer::draw_card(pen, card, Edge::Right, (shift == 0.0).then_some(tab));
             self.hot.draw(pen);
             self.cold.draw(pen);
             self.concentration.draw(pen);
+            unshifted(pen);
+        }
+        // The menu first, so its items come out from under the toggles.
+        if motion.menu > 0.0 && !states.hidden {
+            self.draw_menu(pen, area, states, motion.menu);
         }
         for placed in place_buttons(pen, area, states) {
+            if matches!(placed.action, Action::Demo(_)) {
+                continue;
+            }
             if placed.action == Action::Start && states.no_gap {
                 draw_tip(pen, area, placed.rect.y);
             }
@@ -644,16 +695,61 @@ impl Controls {
             let label = placed.label;
             match placed.shape {
                 Shape::Pill => {
-                    let rect = button::sunk(placed.rect, self.depth(&placed));
-                    button::draw(pen, rect, label, placed.look, hovered, placed.size);
-                }
-                Shape::Hump(edge) => {
-                    drawer::draw_hump_mark(pen, placed.rect, edge, label.key, hovered);
+                    self.draw_pill(pen, &placed, placed.rect, hovered);
                 }
                 Shape::Tab(edge) => {
-                    drawer::draw_tab(pen, placed.rect, edge, label.text, label.key, hovered);
+                    // A peeked drawer is not stuck: a click keeps it out.
+                    let (glow, shift, card) = match edge {
+                        Edge::Left => (
+                            motion.panel_glow,
+                            motion.panel_shift,
+                            panel_card(area.height),
+                        ),
+                        Edge::Right => (
+                            motion.sliders_glow,
+                            motion.sliders_shift,
+                            slider_column(area.window_width),
+                        ),
+                    };
+                    let look = TabLook {
+                        glow,
+                        joined: (shift == Some(0.0)).then_some(card),
+                    };
+                    let width = area.window_width;
+                    drawer::draw_tab(pen, placed.rect, edge, width, label.text, label.key, look);
                 }
             }
+        }
+    }
+}
+
+impl Controls {
+    /// Draws `placed` as a pill in `rect`, pressed to its depth.
+    fn draw_pill(&self, pen: &mut Pen, placed: &Placed, rect: Rect, hovered: bool) {
+        let rect = button::sunk(rect, self.depth(placed));
+        button::draw(pen, rect, placed.label, placed.look, hovered, placed.size);
+    }
+
+    /// Draws the Demos menu for `states` in `area`, `dropped` from 0
+    /// (folded under the toggles) to 1 (all out).
+    ///
+    /// Its items drop out one at a time, each from behind the one above,
+    /// and fold back last first.
+    fn draw_menu(&self, pen: &mut Pen, area: SceneArea, states: ButtonStates, dropped: f32) {
+        let items: Vec<Placed> = demo_menu(pen, area, states).collect();
+        let count = items.len() as f32;
+        for (index, placed) in items.iter().enumerate().rev() {
+            let out = smooth(dropped * count - index as f32);
+            if out <= 0.0 {
+                continue;
+            }
+            let rise = (TOGGLE_HEIGHT + MENU_GAP) * (1.0 - out);
+            let rect = Rect {
+                y: placed.rect.y - rise,
+                ..placed.rect
+            };
+            let hovered = self.hovered == Some(placed.action);
+            self.draw_pill(pen, placed, rect, hovered);
         }
     }
 }

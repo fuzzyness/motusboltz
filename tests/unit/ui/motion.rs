@@ -16,6 +16,16 @@ fn smooth_runs_from_rest_to_rest() {
 }
 
 #[test]
+fn bounce_ends_at_rest_after_passing_it_slightly() {
+    assert_eq!(bounce(0.0, 1.0), 0.0);
+    assert_eq!(bounce(1.0, 1.0), 1.0);
+    let peak = (0..=100)
+        .map(|step| bounce(step as f32 / 100.0, 1.0))
+        .fold(0.0, f32::max);
+    assert!(peak > 1.02 && peak < 1.05, "{peak}");
+}
+
+#[test]
 fn advance_crosses_in_its_time_and_stops_at_the_ends() {
     const SECONDS: f32 = 0.3;
     let mut progress = 0.0;

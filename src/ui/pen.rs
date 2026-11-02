@@ -229,7 +229,7 @@ impl Pen {
     }
 
     /// Whether the pen draws to the screen.
-    fn live(&self) -> bool {
+    pub fn live(&self) -> bool {
         self.mode == Mode::Draw
     }
 
@@ -498,6 +498,31 @@ impl Pen {
         for (index, &point) in outline.iter().enumerate() {
             let next = outline[(index + 1) % outline.len()];
             draw_triangle(center, point, next, color);
+        }
+    }
+
+    /// Strokes the open `path` `width` wide in `color`, centered on it.
+    ///
+    /// Each point's two sides are offset along the average of its
+    /// segments' normals, so the band's pieces meet edge to edge and a
+    /// see-through color does not darken at the joins.
+    pub fn stroke(&self, path: &[Vec2], width: f32, color: Color) {
+        if !self.live() || path.len() < 2 {
+            return;
+        }
+        let normal = |from: Vec2, to: Vec2| (to - from).normalize_or_zero().perp();
+        let sides: Vec<(Vec2, Vec2)> = (0..path.len())
+            .map(|index| {
+                let before = normal(path[index.saturating_sub(1)], path[index]);
+                let after = normal(path[index], path[(index + 1).min(path.len() - 1)]);
+                let across = (before + after).normalize_or_zero() * width / 2.0;
+                (path[index] + across, path[index] - across)
+            })
+            .collect();
+        for pair in sides.windows(2) {
+            let ((a, b), (c, d)) = (pair[0], pair[1]);
+            draw_triangle(a, b, c, color);
+            draw_triangle(b, d, c, color);
         }
     }
 

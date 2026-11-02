@@ -77,7 +77,7 @@ const ZOOM_OUT_KEYS: [KeyCode; 2] = [KeyCode::Minus, KeyCode::KpSubtract];
 /// Every key binding the Keys list shows, as (keys, what they do).
 ///
 /// The hidden kick is left out.
-pub const SHORTCUTS: [(&str, &str); 17] = [
+pub const SHORTCUTS: [(&str, &str); 18] = [
     ("Space", "Start, pause or resume"),
     ("L", "Slow motion"),
     ("F", "Follow particles (tracers)"),
@@ -86,13 +86,14 @@ pub const SHORTCUTS: [(&str, &str); 17] = [
     ("M", "Demos: ready-made settings"),
     ("N", "Show or hide the labels"),
     ("I", "Simple or advanced readings"),
-    ("G", "Show or hide the panel"),
-    ("C", "Show or hide the sliders"),
+    ("G", "Show or hide the readings"),
+    ("C", "Show or hide the settings"),
     ("U", "Hide or show everything"),
     ("H", "Show or hide these keys"),
     ("V", "Sky or grid scenery"),
     ("Drag, WASD", "Turn the view"),
     ("Shift + either", "Move the view"),
+    ("Right drag", "Move the view"),
     ("Wheel, - =", "Zoom"),
     ("R", "Reset the view"),
 ];

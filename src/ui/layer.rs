@@ -260,12 +260,15 @@ impl CachedLayer {
         self.step(area, stale) != Step::Copy
     }
 
-    /// Shows `area`, in screen points, over whatever is drawn behind it.
+    /// Shows `area`, in screen points, over whatever is drawn behind it,
+    /// moved `shift` points along x.
     ///
     /// `paint` draws its content in screen coordinates. It runs only when
     /// `stale` is true or the image had to be (re)made, as on the first
-    /// frame or after the window changes size.
-    pub fn draw(&mut self, area: Rect, stale: bool, paint: impl FnOnce()) {
+    /// frame or after the window changes size. Drawn straight to the
+    /// screen, it is moved by the caller's camera; copied, the copy is
+    /// moved here, and the screen's own camera is left set.
+    pub fn draw(&mut self, area: Rect, stale: bool, shift: f32, paint: impl FnOnce()) {
         if let Copier::Untried = self.copier {
             self.copier = match load_materials() {
                 Some(materials) => Copier::Ready(materials),
@@ -298,13 +301,13 @@ impl CachedLayer {
             gl_use_material(&materials.paint);
             paint();
             gl_use_default_material();
-            draw_to_screen();
         }
 
+        draw_to_screen();
         gl_use_material(&materials.copy);
         draw_texture_ex(
             &image.target.texture,
-            area.x,
+            area.x + shift,
             area.y,
             WHITE,
             DrawTextureParams {

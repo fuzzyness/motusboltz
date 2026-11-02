@@ -50,6 +50,15 @@
       // click elsewhere on the page or in the browser takes away.
       simulation.addEventListener("blur", () => { hint.hidden = false; });
       simulation.addEventListener("focus", () => { hint.hidden = true; });
+      // A right drag pans the view. Keep the browser's menu from opening on
+      // it, and hand a release made outside the canvas on to it, so a drag
+      // that ends off the engine still ends.
+      simulation.addEventListener("contextmenu", (event) => event.preventDefault());
+      window.addEventListener("mouseup", (event) => {
+        if (event.target !== simulation) {
+          simulation.dispatchEvent(new MouseEvent("mouseup", event));
+        }
+      });
       simulation.focus();
     }
   </script>

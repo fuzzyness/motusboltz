@@ -19,7 +19,12 @@
 use macroquad::miniquad::Backend;
 use macroquad::prelude::{
     Camera,
-    get_internal_gl, //
+    Camera2D,
+    Vec2,
+    get_internal_gl,
+    screen_height,
+    screen_width,
+    vec2, //
 };
 
 /// Sends the drawing that follows to `camera`.
@@ -32,6 +37,21 @@ pub fn draw_to(camera: &dyn Camera) {
 pub fn draw_to_screen() {
     macroquad::prelude::set_default_camera();
     forget_texture_bindings();
+}
+
+/// Sends the drawing that follows to the screen, scaled by `scale` about
+/// `origin` and then moved by `shift`, all in screen points.
+pub fn draw_moved(origin: Vec2, scale: f32, shift: Vec2) {
+    let size = vec2(screen_width(), screen_height());
+    // A drawn point q lands at origin + (q - origin) * scale + shift. The
+    // camera's target is the point that lands at the screen's middle;
+    // Macroquad turns y over for the screen, so both zooms are positive.
+    let camera = Camera2D {
+        target: (size / 2.0 - origin * (1.0 - scale) - shift) / scale,
+        zoom: 2.0 * scale / size,
+        ..Default::default()
+    };
+    draw_to(&camera);
 }
 
 /// Clears Miniquad's record of bound textures and buffers, exactly as it

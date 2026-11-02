@@ -30,6 +30,7 @@ use crate::ui::button::{
 };
 use crate::ui::layout::{
     PANEL_INSET,
+    PANEL_LEFT,
     PANEL_WIDTH, //
 };
 use crate::ui::pen::{
@@ -56,9 +57,9 @@ pub const TITLE: &str = "MotusBoltz";
 /// Room inside the card around its content.
 const MARGIN: f32 = 16.0;
 /// The content's left edge.
-const LEFT: f32 = PANEL_INSET + MARGIN;
+const LEFT: f32 = PANEL_LEFT + MARGIN;
 /// Width of the content.
-const CONTENT_WIDTH: f32 = PANEL_WIDTH - PANEL_INSET - 2.0 * MARGIN;
+const CONTENT_WIDTH: f32 = PANEL_WIDTH - PANEL_LEFT - 2.0 * MARGIN;
 /// Room kept under the content at the card's bottom, clear of its rounded
 /// corners.
 const BOTTOM_ROOM: f32 = 6.0;
@@ -451,9 +452,9 @@ impl EnginePanel {
         pen.set_shadow(Some(TEXT_SHADOW));
         // Content scrolled up under the header is cut off there.
         let viewport = Rect::new(
-            PANEL_INSET,
+            PANEL_LEFT,
             HEADER_HEIGHT,
-            PANEL_WIDTH - PANEL_INSET,
+            PANEL_WIDTH - PANEL_LEFT,
             self.viewport_height,
         );
         pen.clip(Some(viewport));

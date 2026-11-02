@@ -219,7 +219,7 @@ pub fn banner(pen: &Pen, width: f32, scenario: Scenario, start: bool, bottom: f3
 
 /// Draws the banner for `scenario` in a window `width` points wide, ending
 /// with the prompt while `start` is offered, its words faded in to `fade`,
-/// standing on `bottom`.
+/// standing on `bottom`, moved `shift` points right of its place.
 pub fn draw_banner(
     pen: &mut Pen,
     width: f32,
@@ -227,10 +227,15 @@ pub fn draw_banner(
     start: bool,
     fade: f32,
     bottom: f32,
+    shift: f32,
 ) {
     let room = text_width(width);
     let lines = lines(pen, scenario, room, start);
-    let card = card(width, lines.len(), bottom);
+    let placed = card(width, lines.len(), bottom);
+    let card = Rect {
+        x: placed.x + shift,
+        ..placed
+    };
     pen.round_rect(card, BACKING_RADIUS, BACKING);
     let (left, right) = (card.x + PADDING, card.right() - PADDING);
     let mut y = card.y + PADDING + pen.text_height("H", TEXT_SIZE);

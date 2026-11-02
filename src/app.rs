@@ -22,6 +22,7 @@ use macroquad::prelude::{
     next_frame,
     screen_height,
     screen_width, //
+    vec2,
 };
 use macroquad::rand::{
     gen_range,
@@ -51,6 +52,7 @@ use crate::ui::controls::{
     BACKING_RADIUS,
     ButtonStates,
     ControlEvents,
+    ControlMotion,
     Controls,
     MARGIN,
     SceneArea,
@@ -60,9 +62,14 @@ use crate::ui::demos::{
     self,
     Scenario, //
 };
+use crate::ui::draw_target::{
+    draw_moved,
+    draw_to_screen, //
+};
 use crate::ui::drawer::{
     self,
-    Edge, //
+    Edge,
+    Slide, //
 };
 use crate::ui::energy_strip;
 use crate::ui::fonts;
@@ -152,8 +159,22 @@ const FOLLOWED_PARTICLES: usize = 5;
 const MAX_ANIMATION_DT: f32 = 0.1;
 /// Seconds the labels take to grow out of their dots or shrink into them.
 const LABELS_SECONDS: f32 = 0.3;
-/// Seconds a demo's banner takes to fade its words in.
-const BANNER_FADE_SECONDS: f32 = 0.6;
+/// Seconds a stuck drawer's glow takes to fade in or out.
+const GLOW_SECONDS: f32 = 0.4;
+/// Seconds the keys list takes to grow out of the Keys toggle or shrink
+/// back into it.
+const KEYS_SECONDS: f32 = 0.2;
+/// Seconds the Demos menu takes to drop all its items or fold them back.
+const MENU_SECONDS: f32 = 0.3;
+/// Seconds a demo's banner takes to sweep in from the window's right edge,
+/// bounce and all.
+const BANNER_SWEEP_SECONDS: f32 = 0.5;
+/// How far the banner overshoots its place (see `motion::bounce`).
+const BANNER_OVERSHOOT: f32 = 1.2;
+/// Seconds into the sweep when the banner's words start to fade in.
+const BANNER_WORDS_DELAY: f32 = 0.25;
+/// Seconds the banner's words take to fade in.
+const BANNER_FADE_SECONDS: f32 = 0.4;
 /// Extra zoom-out so the cylinders, crank and flywheel all fit the first view.
 const CAMERA_FRAMING_MARGIN: f32 = 1.42;
 
@@ -206,10 +227,22 @@ struct App {
     /// The demo set up last, until a slider or a new fill changes its
     /// settings.
     demo: Option<Scenario>,
-    /// Seconds since the demo was set up, which fade its banner in.
+    /// Seconds since the demo was set up, which sweep its banner in.
     demo_age: f32,
     /// How far the labels have grown out of their dots, from 0 to 1.
     labels_grown: f32,
+    /// How far the keys list has grown out of its toggle, from 0 to 1.
+    keys_grown: f32,
+    /// How far the Demos menu has dropped, from 0 to 1.
+    menu_dropped: f32,
+    /// The panel's slide out of the left edge.
+    panel_slide: Slide,
+    /// The slider column's slide out of the right edge.
+    sliders_slide: Slide,
+    /// How far the glow of the panel, stuck open, has faded in.
+    panel_glow: f32,
+    /// The same for the slider column.
+    sliders_glow: f32,
     /// The sky with a cloud to stand on, or the dark grid.
     scenery: Scenery,
     /// When Start shows.
@@ -264,6 +297,12 @@ impl App {
             demo: Some(FIRST_DEMO),
             demo_age: 0.0,
             labels_grown: 1.0,
+            keys_grown: 0.0,
+            menu_dropped: 0.0,
+            panel_slide: Slide::new(true),
+            sliders_slide: Slide::new(true),
+            panel_glow: 1.0,
+            sliders_glow: 1.0,
             scenery: Scenery::default(),
             start_prompt: StartPrompt::new(),
             frame_stats: FrameStats::new(),
@@ -274,6 +313,44 @@ impl App {
     /// Whether the panel is on screen this frame.
     fn panel_shown(&self) -> bool {
         self.show_panel && !self.hide_all
+    }
+
+    /// Whether any of the panel shows this frame, open, peeked or sliding.
+    fn panel_visible(&self) -> bool {
+        self.panel_slide.shown() && !self.hide_all
+    }
+
+    /// Whether the panel is all the way out, open or peeked, so it takes
+    /// the pointer.
+    fn panel_live(&self) -> bool {
+        self.panel_slide.settled_out() && !self.hide_all
+    }
+
+    /// How far the panel and the slider column stand from their open
+    /// places along x, or `None` out of sight, in a window `width` by
+    /// `height` points.
+    fn drawer_shifts(&self, width: f32, height: f32) -> (Option<f32>, Option<f32>) {
+        let panel = controls::panel_card(height);
+        let sliders = controls::slider_column(width);
+        (
+            self.panel_slide
+                .shift(Edge::Left, drawer::slide_distance(panel, Edge::Left, width)),
+            self.sliders_slide.shift(
+                Edge::Right,
+                drawer::slide_distance(sliders, Edge::Right, width),
+            ),
+        )
+    }
+
+    /// Whether `pointer` is over a drawer that is all the way out, where
+    /// it should not turn the camera.
+    fn over_drawer(&self, pointer: Vec2) -> bool {
+        let (width, height) = (screen_width(), screen_height());
+        let panel = drawer::reach(controls::panel_card(height), Edge::Left, width);
+        let sliders = drawer::reach(controls::slider_column(width), Edge::Right, width);
+        !self.hide_all
+            && ((self.panel_slide.settled_out() && panel.contains(pointer))
+                || (self.sliders_slide.settled_out() && sliders.contains(pointer)))
     }
 
     /// Where the buttons go this frame.
@@ -305,6 +382,9 @@ impl App {
                 && self.demo.is_none(),
             sky: self.scenery == Scenery::Sky,
             sliders: self.show_sliders,
+            panel_peek: self.panel_slide.peeking(),
+            sliders_peek: self.sliders_slide.peeking(),
+            sliders_out: self.sliders_slide.settled_out(),
             hidden: self.hide_all,
         }
     }
@@ -329,7 +409,8 @@ impl App {
         let events = self
             .controls
             .update(self.scene_area(), self.button_states(), dt);
-        let panel_blocks = self.panel_shown()
+        let pointer = Vec2::from(mouse_position());
+        let panel_blocks = self.panel_live()
             && self.panel.handle_pointer(PanelPointer {
                 position: Vec2::from(mouse_position()),
                 wheel_pixels: wheel,
@@ -342,7 +423,9 @@ impl App {
         self.camera.update(
             CameraKeys::read(),
             Pointer {
-                enabled: !(self.controls.blocks_camera() || panel_blocks),
+                enabled: !(self.controls.blocks_camera()
+                    || panel_blocks
+                    || self.over_drawer(pointer)),
                 shift_down: shift_down(),
                 wheel_pixels: wheel,
             },
@@ -462,10 +545,44 @@ impl App {
     }
 
     /// Moves the overlays' animations on by `dt` seconds of wall time: the
-    /// labels grow or shrink, and the demo's banner fades in.
+    /// drawers slide, peeked under the pointer; the labels, the keys list
+    /// and the Demos menu grow or shrink; and the demo's banner fades in.
     fn animate(&mut self, dt: f32) {
+        let pointer = Vec2::from(mouse_position());
+        let held = is_mouse_button_down(MouseButton::Left);
+        let (width, height) = (screen_width(), screen_height().max(1.0));
+        let shown = !self.hide_all;
+        let drawers = [
+            (
+                &mut self.panel_slide,
+                self.show_panel,
+                controls::panel_card(height),
+                Edge::Left,
+            ),
+            (
+                &mut self.sliders_slide,
+                self.show_sliders,
+                controls::slider_column(width),
+                Edge::Right,
+            ),
+        ];
+        for (slide, open, card, edge) in drawers {
+            let tab = drawer::tab(card, edge, width);
+            let on_tab = shown && tab.contains(pointer);
+            let on_card = shown && drawer::reach(card, edge, width).contains(pointer);
+            slide.update(open, on_tab, on_card, held, dt);
+        }
+        // A stuck drawer's glow fades in once it has slid all the way out.
+        let stuck = (
+            self.show_panel && self.panel_slide.settled_out(),
+            self.show_sliders && self.sliders_slide.settled_out(),
+        );
+        self.panel_glow = motion::advance(self.panel_glow, stuck.0, dt, GLOW_SECONDS);
+        self.sliders_glow = motion::advance(self.sliders_glow, stuck.1, dt, GLOW_SECONDS);
         let labels = self.show_labels && !self.show_demos;
         self.labels_grown = motion::advance(self.labels_grown, labels, dt, LABELS_SECONDS);
+        self.keys_grown = motion::advance(self.keys_grown, self.show_keys, dt, KEYS_SECONDS);
+        self.menu_dropped = motion::advance(self.menu_dropped, self.show_demos, dt, MENU_SECONDS);
         self.demo_age += dt;
     }
 
@@ -485,7 +602,7 @@ impl App {
         self.frame_stats.record(now, physics_seconds, limited);
         let start_fraction = self.simulation.power_pistons().start_speed_fraction();
         self.start_prompt.update(start_fraction, now);
-        if self.panel_shown() {
+        if self.panel_visible() {
             self.panel.update(&self.simulation, now);
         }
     }
@@ -499,7 +616,8 @@ impl App {
         self.scene.render(&self.simulation, &camera, self.scenery);
 
         // Measure every string first, then draw (see `Pen` for why).
-        let panel_stale = self.panel_shown() && self.panel.needs_paint(self.status(), area.height);
+        let panel_stale =
+            self.panel_visible() && self.panel.needs_paint(self.status(), area.height);
         let view = camera.matrix();
         self.draw_overlay(&mut Pen::warm(), area, view, panel_stale);
         self.draw_overlay(&mut Pen::screen(), area, view, panel_stale);
@@ -542,21 +660,34 @@ impl App {
             let grown = motion::smooth(self.labels_grown);
             scene_labels::draw(pen, &self.simulation, view, area, &cards, grown);
         }
-        if self.panel_shown() {
+        let (panel_shift, sliders_shift) = self.drawer_shifts(width, area.height);
+        if let Some(shift) = panel_shift.filter(|_| shown) {
             let panel_area = Rect::new(0.0, 0.0, PANEL_WIDTH, area.height);
-            drawer::draw_card(pen, controls::panel_card(area.height), Edge::Left, true);
             if pen.is_warming() {
                 if self.panel_layer.will_paint(panel_area, panel_stale) {
                     self.panel.draw(pen, &self.simulation, status, area.height);
                 }
             } else {
+                draw_moved(Vec2::ZERO, 1.0, vec2(shift, 0.0));
+                // Settled out, the card and its tab are one shape.
+                let card = controls::panel_card(area.height);
+                let tab = drawer::tab(card, Edge::Left, width);
+                drawer::draw_card(pen, card, Edge::Left, (shift == 0.0).then_some(tab));
                 let (panel, simulation) = (&mut self.panel, &self.simulation);
-                self.panel_layer.draw(panel_area, panel_stale, || {
+                self.panel_layer.draw(panel_area, panel_stale, shift, || {
                     panel.draw(&mut Pen::screen(), simulation, status, area.height);
                 });
+                draw_to_screen();
             }
         }
-        self.controls.draw(pen, area, self.button_states());
+        let motion = ControlMotion {
+            panel_shift,
+            sliders_shift,
+            panel_glow: motion::smooth(self.panel_glow),
+            sliders_glow: motion::smooth(self.sliders_glow),
+            menu: self.menu_dropped,
+        };
+        self.controls.draw(pen, area, self.button_states(), motion);
         if self.hide_all {
             return;
         }
@@ -574,19 +705,37 @@ impl App {
         }
         pen.text_right(BUILD_LABEL, label_right, label_y, size, BUILD_LABEL_COLOR);
         if let Some(demo) = self.demo {
-            let fade = motion::smooth(self.demo_age / BANNER_FADE_SECONDS);
-            demos::draw_banner(pen, width, demo, start, fade, banner_bottom);
+            // Like a game's text box, it sweeps in from the right with a
+            // slight bounce, then its words fade in.
+            let age = self.demo_age;
+            let swept = motion::bounce(age / BANNER_SWEEP_SECONDS, BANNER_OVERSHOOT);
+            let shift = (1.0 - swept) * (width - column.x);
+            let fade = motion::smooth((age - BANNER_WORDS_DELAY) / BANNER_FADE_SECONDS);
+            demos::draw_banner(pen, width, demo, start, fade, banner_bottom, shift);
         }
         self.draw_readout(pen, &readout, column, readout_bottom);
-        // The keys list drops down under the toggles.
-        if self.show_keys {
+        // The keys list grows down out of the Keys toggle.
+        let grown = motion::smooth(self.keys_grown);
+        if grown > 0.0 {
             let list_top = TOGGLES_BOTTOM + MARGIN / 2.0;
             let middle = controls::toggles_middle(area);
             let room = (
                 area.width - 2.0 * MARGIN,
                 area.height - TOGGLES_BOTTOM - SHORTCUTS_BOTTOM_ROOM,
             );
+            let toggle = controls::place_buttons(pen, area, self.button_states())
+                .into_iter()
+                .find(|placed| placed.action == Action::ToggleKeys)
+                .map_or(vec2(middle, list_top), |placed| {
+                    vec2(placed.rect.center().x, placed.rect.bottom())
+                });
+            if pen.live() {
+                draw_moved(toggle, grown, Vec2::ZERO);
+            }
             shortcuts::draw(pen, middle, list_top, room.0, room.1);
+            if pen.live() {
+                draw_to_screen();
+            }
         }
     }
 

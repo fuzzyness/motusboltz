@@ -151,10 +151,10 @@ const ROW_ACTIONS: [Action; 5] = [
     Action::ToggleTracers,
 ];
 
-/// An open drawer shows its hump, beside its card; a closed one, its tab,
-/// at the window's edge.
+/// A drawer's button stands at the window's edge, beside its card, open
+/// or closed.
 #[test]
-fn drawers_show_a_hump_when_open_and_an_edge_tab_when_closed() {
+fn drawer_buttons_stay_at_the_edges_beside_their_cards() {
     let pen = Pen::offline();
     let (width, height) = (1440.0, 900.0);
     for open in [true, false] {
@@ -172,17 +172,12 @@ fn drawers_show_a_hump_when_open_and_an_edge_tab_when_closed() {
         };
         let panel = find(Action::TogglePanel);
         let sliders = find(Action::ToggleSliders);
-        if open {
-            assert_eq!(panel.shape, Shape::Hump(Edge::Left));
-            assert_eq!(sliders.shape, Shape::Hump(Edge::Right));
-            assert!((panel.rect.x - panel_card(height).right()).abs() < 1e-3);
-            assert!((sliders.rect.right() - slider_column(width).x).abs() < 1e-3);
-        } else {
-            assert_eq!(panel.shape, Shape::Tab(Edge::Left));
-            assert_eq!(sliders.shape, Shape::Tab(Edge::Right));
-            assert_eq!(panel.rect.x, 0.0);
-            assert!((sliders.rect.right() - width).abs() < 1e-3);
-        }
+        assert_eq!(panel.shape, Shape::Tab(Edge::Left));
+        assert_eq!(sliders.shape, Shape::Tab(Edge::Right));
+        assert_eq!(panel.rect.x, 0.0);
+        assert!(panel.rect.right() <= panel_card(height).x + 1e-3);
+        assert!((sliders.rect.right() - width).abs() < 1e-3);
+        assert!(sliders.rect.x >= slider_column(width).right() - 1e-3);
     }
 }
 

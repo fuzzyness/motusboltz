@@ -28,6 +28,16 @@
 		engineCanvas.focus({ preventScroll: true });
 	});
 	engineCanvas.addEventListener("blur", () => setEngaged(false));
+
+	// A right drag pans the view. Keep the browser's menu from opening on
+	// it, and hand a release made outside the canvas on to it, so a drag
+	// that ends off the engine still ends.
+	engineCanvas.addEventListener("contextmenu", (event) => event.preventDefault());
+	window.addEventListener("mouseup", (event) => {
+		if (event.target !== engineCanvas) {
+			engineCanvas.dispatchEvent(new MouseEvent("mouseup", event));
+		}
+	});
 	engineCanvas.addEventListener("keydown", (event) => {
 		if (event.key === "Escape") {
 			engineCanvas.blur();

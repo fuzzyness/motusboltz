@@ -74,6 +74,8 @@ use sprites::{
 };
 use trails::TrailRenderer;
 
+/// Seconds the old scenery takes to dissolve into the new one.
+const SCENERY_DISSOLVE_SECONDS: f64 = 0.35;
 /// Macroquad's per-draw-call vertex buffer size, set in the window
 /// configuration; every mesh must fit within it.
 pub const DRAW_CALL_VERTEX_CAPACITY: usize = 16_384;
@@ -225,6 +227,11 @@ pub struct Scene {
     cloud: CloudFloor,
     /// The softened view the scene is drawn into.
     soft: SoftView,
+    /// The view as it last stood in the other scenery, dissolving into
+    /// the new one after a switch.
+    previous: SoftView,
+    /// The scenery last drawn, and when on the clock it was switched to.
+    scenery: Option<(Scenery, f64)>,
     /// How strongly the burner, ice and glows show, easing after the
     /// sliders.
     levels: ReservoirLevels,
@@ -252,6 +259,8 @@ impl Scene {
             backdrop: Backdrop::new(geometry),
             cloud: CloudFloor::new(shape),
             soft: SoftView::new(),
+            previous: SoftView::new(),
+            scenery: None,
             levels: ReservoirLevels::default(),
         }
     }
@@ -260,12 +269,24 @@ impl Scene {
     /// screen camera set.
     ///
     /// The frame is drawn into a softened view (see `soft_view.rs`), or
-    /// straight to the screen where that cannot be built. The clock eases
+    /// straight to the screen where that cannot be built. For a moment
+    /// after the scenery switches, the last view of the old one dissolves
+    /// over the new one through a dither. The clock eases
     /// the reservoir effects toward the sliders and animates the flames,
     /// mist and clouds, so they keep moving while the simulation is paused.
     pub fn render(&mut self, simulation: &ConnectedChambers, camera: &Camera3D, scenery: Scenery) {
         let (width, height, dpi) = (screen_width(), screen_height(), screen_dpi_scale());
         let seconds = get_time();
+        // A switch keeps the old view, drawn last frame, and draws the new
+        // scenery into the other.
+        match self.scenery {
+            Some((shown, _)) if shown != scenery => {
+                std::mem::swap(&mut self.soft, &mut self.previous);
+                self.scenery = Some((scenery, seconds));
+            }
+            None => self.scenery = Some((scenery, f64::NEG_INFINITY)),
+            Some(_) => {}
+        }
         clear_background(BACKGROUND);
         self.levels
             .follow(simulation.hot_kelvin(), simulation.cold_kelvin(), seconds);
@@ -298,6 +319,12 @@ impl Scene {
         self.draw(simulation, &camera, scenery, fade, seconds);
         draw_to_screen();
         self.soft.present(width, height);
+        let since = self.scenery.map_or(f64::INFINITY, |(_, at)| seconds - at);
+        let dissolved = (since / SCENERY_DISSOLVE_SECONDS) as f32;
+        if dissolved < 1.0 {
+            self.previous
+                .present_dithered(width, height, dpi, 1.0 - dissolved);
+        }
     }
 
     /// Draws the engine as it is now in `scenery`.

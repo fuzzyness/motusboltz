@@ -72,7 +72,7 @@ fn the_banner_fits_beside_the_scene_above_the_bottom_row() {
         let bottom = corner_button(&Pen::offline(), area).y;
         for scenario in SCENARIOS {
             let mut pen = Pen::offline();
-            draw_banner(&mut pen, width, scenario, true, 1.0, bottom);
+            draw_banner(&mut pen, width, scenario, true, 1.0, bottom, 0.0);
             let card = banner(&pen, width, scenario, true, bottom);
             assert!(card.x >= area.right() && card.right() <= width);
             assert!(card.y > slider_column(width).bottom() && card.bottom() <= bottom);

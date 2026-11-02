@@ -13,6 +13,13 @@ pub fn smooth(t: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// `t` from 0 to 1 eased out past 1 and back, by up to about a share of
+/// `overshoot` / 27 at `overshoot` 1: a slight bounce at the end of a move.
+pub fn bounce(t: f32, overshoot: f32) -> f32 {
+    let u = t.clamp(0.0, 1.0) - 1.0;
+    1.0 + (overshoot + 1.0) * u * u * u + overshoot * u * u
+}
+
 /// `progress` stepped `dt` seconds toward 1 if `on`, or toward 0, at a pace
 /// that crosses the whole way in `seconds`.
 pub fn advance(progress: f32, on: bool, dt: f32, seconds: f32) -> f32 {

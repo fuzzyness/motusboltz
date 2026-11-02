@@ -5,6 +5,10 @@
 //! than the crisp edges of a modern one. The panel, buttons and text are
 //! drawn afterwards at full resolution, so they stay sharp. It also means
 //! fewer pixels to fill on slow laptops and phones.
+//!
+//! A finished view can also be laid over the next one through an ordered
+//! dither, which dissolves one scenery into the other in the chunky,
+//! patterned way of an old console.
 
 use macroquad::prelude::{
     Camera2D,
@@ -18,6 +22,8 @@ use macroquad::prelude::{
     RenderTarget,
     RenderTargetParams,
     ShaderSource,
+    UniformDesc,
+    UniformType,
     WHITE,
     draw_texture_ex,
     gl_use_default_material,
@@ -66,6 +72,39 @@ void main() {
     gl_FragColor = vec4(texture2D(Texture, uv).rgb, 1.0);
 }"#;
 
+/// Side of a dither cell, in screen points.
+const DITHER_CELL: f32 = 2.0;
+
+/// Fragment shader that keeps a share of the view, `Shown`, through a 4x4
+/// ordered dither of square cells `Cell` pixels wide.
+///
+/// Each cell's threshold comes from the Bayer matrix, built from its 2x2
+/// pattern so it needs no table, and from small numbers only, so it holds
+/// at the low precision of phone GPUs; a cell shows while its threshold is below
+/// `Shown`, so the view breaks up evenly as `Shown` falls.
+const DITHER_FRAGMENT: &str = r#"#version 100
+precision mediump float;
+
+varying lowp vec2 uv;
+
+uniform sampler2D Texture;
+uniform float Shown;
+uniform float Cell;
+
+float bayer2(vec2 cell) {
+    vec2 corner = mod(floor(cell), 2.0);
+    return fract(corner.x * 0.5 + corner.y * 0.75);
+}
+
+void main() {
+    vec2 cell = floor(gl_FragCoord.xy / Cell);
+    float threshold = bayer2(cell * 0.5) * 0.25 + bayer2(cell);
+    if (threshold >= Shown) {
+        discard;
+    }
+    gl_FragColor = vec4(texture2D(Texture, uv).rgb, 1.0);
+}"#;
+
 /// The view's size in pixels for a `width` by `height` window in screen
 /// points, at `dpi` pixels per point.
 pub fn pixels(width: f32, height: f32, dpi: f32) -> (u32, u32) {
@@ -85,6 +124,9 @@ pub struct SoftView {
     copy: Option<Option<Material>>,
     /// The image the view is drawn into, and its size in pixels.
     target: Option<(RenderTarget, (u32, u32))>,
+    /// The dither shader, made on first use; `Some(None)` where it cannot
+    /// be built.
+    dither: Option<Option<Material>>,
 }
 
 impl SoftView {
@@ -93,6 +135,7 @@ impl SoftView {
         Self {
             copy: None,
             target: None,
+            dither: None,
         }
     }
 
@@ -149,7 +192,47 @@ impl SoftView {
         let (Some(Some(copy)), Some((target, _))) = (&self.copy, &self.target) else {
             return;
         };
-        gl_use_material(copy);
+        Self::cover(copy, target, width, height);
+    }
+
+    /// Lays the view, as last drawn, over a `width` by `height` window at
+    /// `dpi` through the dither, keeping a `shown` share of it, from 0 to 1.
+    ///
+    /// Nothing is drawn where the dither shader cannot be built. The screen
+    /// camera must be set.
+    pub fn present_dithered(&mut self, width: f32, height: f32, dpi: f32, shown: f32) {
+        let dither = self.dither.get_or_insert_with(|| {
+            load_material(
+                ShaderSource::Glsl {
+                    vertex: COPY_VERTEX,
+                    fragment: DITHER_FRAGMENT,
+                },
+                MaterialParams {
+                    pipeline_params: PipelineParams {
+                        depth_test: Comparison::Always,
+                        ..Default::default()
+                    },
+                    uniforms: vec![
+                        UniformDesc::new("Shown", UniformType::Float1),
+                        UniformDesc::new("Cell", UniformType::Float1),
+                    ],
+                    ..Default::default()
+                },
+            )
+            .ok()
+        });
+        let (Some(dither), Some((target, _))) = (dither.as_ref(), &self.target) else {
+            return;
+        };
+        dither.set_uniform("Shown", shown);
+        dither.set_uniform("Cell", DITHER_CELL * dpi);
+        Self::cover(dither, target, width, height);
+    }
+
+    /// Draws `target` through `material` over the whole `width` by
+    /// `height` window.
+    fn cover(material: &Material, target: &RenderTarget, width: f32, height: f32) {
+        gl_use_material(material);
         draw_texture_ex(
             &target.texture,
             0.0,
