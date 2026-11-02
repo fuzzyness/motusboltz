@@ -96,7 +96,8 @@ pub struct GasMeasurements {
     pub temperature_kelvin: Option<f64>,
     /// Helium concentration, in mol/L.
     pub concentration_mol_per_l: f64,
-    /// Ideal-gas pressure, when the temperature is known.
+    /// Pressure on the region's piston, measured from the gas's hits (see
+    /// `gauge`), once its gauge reads.
     pub pressure_pa: Option<f64>,
 }
 
@@ -149,12 +150,18 @@ impl HeliumCalibration {
         self.energy_joules(reduced_pressure) / METERS_PER_UNIT.powi(3)
     }
 
-    /// Readings for a region's particles filling `volume_m3`.
+    /// Readings for a region's particles filling `volume_m3`, with the
+    /// measured `pressure` on its piston in reduced units, if any.
     ///
     /// # Panics
     ///
     /// Panics if `volume_m3` is not positive.
-    pub fn measure(self, sample: KineticMoments, volume_m3: f64) -> GasMeasurements {
+    pub fn measure(
+        self,
+        sample: KineticMoments,
+        volume_m3: f64,
+        pressure: Option<f64>,
+    ) -> GasMeasurements {
         assert!(volume_m3 > 0.0);
         let moles = self.total_moles(sample.count);
         let temperature_kelvin = sample.temperature_kelvin();
@@ -162,7 +169,7 @@ impl HeliumCalibration {
             count: sample.count,
             temperature_kelvin,
             concentration_mol_per_l: moles / (volume_m3 * LITERS_PER_CUBIC_METER),
-            pressure_pa: temperature_kelvin.map(|kelvin| moles * GAS_CONSTANT * kelvin / volume_m3),
+            pressure_pa: pressure.map(|reduced| self.pressure_pa(reduced)),
         }
     }
 }

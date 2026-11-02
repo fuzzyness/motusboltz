@@ -511,19 +511,64 @@ fn concentration_scaling_is_independent_of_geometry_size() {
     assert!(larger.total_moles() > original.total_moles());
 }
 
-#[test]
-fn maximum_initial_concentration_gives_near_equal_ideal_pressures() {
-    const EXPECTED_PRESSURE_PA: f64 = 1_000.0 * GAS_CONSTANT * 300.0;
-    const RELATIVE_TOLERANCE: f64 = 0.10;
-    let simulation = ConnectedChambers::seeded_at_concentration(1.0);
+/// `(measured, ideal)` pressure on each piston, in pascals, for a fill at
+/// `concentration` held still at 300 K for `seconds`; the ideal one is
+/// nRT / V from the cylinder's particles.
+fn pressures_at_rest(concentration: f32, seconds: f32) -> [(f64, f64); 2] {
+    let mut simulation = ConnectedChambers::seeded_at_concentration(concentration);
+    simulation.pin_pistons();
+    for _ in 0..(seconds / FIXED_DT) as usize {
+        simulation.step(FIXED_DT);
+    }
     let readings = simulation.measurements();
-    for pressure in [
-        readings.hot.pressure_pa.unwrap(),
-        readings.cold.pressure_pa.unwrap(),
-    ] {
-        assert!(
-            ((pressure - EXPECTED_PRESSURE_PA) / EXPECTED_PRESSURE_PA).abs() < RELATIVE_TOLERANCE
-        );
+    let pistons = [simulation.pistons.hot(), simulation.pistons.cold()];
+    let pair = |gas: GasMeasurements, piston: PistonState| {
+        let volume = simulation
+            .pistons
+            .cylinder_volume_m3(simulation.geometry, piston);
+        let moles = simulation.units.total_moles(gas.count);
+        let ideal = moles * GAS_CONSTANT * gas.temperature_kelvin.unwrap() / volume;
+        (gas.pressure_pa.unwrap(), ideal)
+    };
+    [
+        pair(readings.hot, pistons[0]),
+        pair(readings.cold, pistons[1]),
+    ]
+}
+
+/// A fresh fill's gauges have watched nothing, so they do not read yet.
+#[test]
+fn gauges_wait_before_reading() {
+    let fresh = ConnectedChambers::seeded(TEST_COUNT).measurements();
+    assert_eq!(
+        (fresh.hot.pressure_pa, fresh.cold.pressure_pa),
+        (None, None)
+    );
+}
+
+/// Held still at 300 K, the gas's measured push on each piston matches the
+/// ideal-gas pressure nRT / V for a thin fill, and rises above it for a
+/// dense one, as a real gas's does, since the particles take up room. The
+/// two cylinders, joined by the opening, read alike.
+#[test]
+fn measured_pressure_departs_from_the_ideal_gas_law_as_the_gas_gets_dense() {
+    const SECONDS: f32 = 8.0;
+    const THIN: f32 = 0.25;
+    const DENSE: f32 = 1.0;
+    const THIN_TOLERANCE: f64 = 0.15;
+    const ALIKE: f64 = 0.12;
+    let ratio = |(measured, ideal): (f64, f64)| measured / ideal;
+    let thin = pressures_at_rest(THIN, SECONDS);
+    let dense = pressures_at_rest(DENSE, SECONDS);
+    assert!(
+        thin.iter()
+            .all(|&pair| (ratio(pair) - 1.0).abs() < THIN_TOLERANCE),
+        "{thin:?}"
+    );
+    let mean = |pairs: [(f64, f64); 2]| pairs.iter().map(|&pair| ratio(pair)).sum::<f64>() / 2.0;
+    assert!(mean(dense) > 1.0 && mean(dense) > mean(thin), "{dense:?}");
+    for [hot, cold] in [thin, dense] {
+        assert!((hot.0 - cold.0).abs() / cold.0 < ALIKE, "{hot:?} {cold:?}");
     }
 }
 

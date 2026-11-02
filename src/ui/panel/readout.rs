@@ -47,7 +47,8 @@ const LOOPS_NOT_YET: &str = "Dots: each cylinder's state now";
 pub struct Gas {
     /// Temperature.
     pub kelvin: Option<f64>,
-    /// Ideal-gas pressure estimate, P = nRT/V, in bar.
+    /// Pressure on the cylinder's piston, measured from the gas's hits, in
+    /// bar.
     pub bar: Option<f64>,
     /// Particles in the cylinder.
     pub particles: usize,

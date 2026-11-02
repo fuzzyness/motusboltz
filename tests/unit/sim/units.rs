@@ -32,16 +32,20 @@ fn temperature_leaves_out_bulk_flow() {
     assert!((sample.temperature_kelvin().unwrap() - expected).abs() < TOLERANCE);
 }
 
+/// The concentration is the helium amount over the volume, and a measured
+/// pressure passes through in pascals.
 #[test]
-fn pressure_and_concentration_follow_the_ideal_gas_law() {
+fn concentration_and_measured_pressure_come_out_in_si() {
+    const REDUCED_PRESSURE: f64 = 0.5;
     let gas = HeliumCalibration::new(VOLUME_M3);
     let mut sample = KineticMoments::default();
     sample.record(vec3(-1.0, 0.0, 0.0));
     sample.record(vec3(1.0, 0.0, 0.0));
-    let readings = gas.measure(sample, VOLUME_M3);
+    let unread = gas.measure(sample, VOLUME_M3, None);
+    assert_eq!(unread.pressure_pa, None);
+    let readings = gas.measure(sample, VOLUME_M3, Some(REDUCED_PRESSURE));
     let moles = gas.total_moles(readings.count);
-    let kelvin = readings.temperature_kelvin.unwrap();
-    let expected = moles * GAS_CONSTANT * kelvin / VOLUME_M3;
+    let expected = gas.pressure_pa(REDUCED_PRESSURE);
     assert!((readings.pressure_pa.unwrap() - expected).abs() < TOLERANCE);
     let liters = VOLUME_M3 * LITERS_PER_CUBIC_METER;
     assert!((readings.concentration_mol_per_l - moles / liters).abs() < TOLERANCE);

@@ -6,6 +6,7 @@
 pub mod cycle;
 pub mod engine;
 pub mod gas;
+pub mod gauge;
 pub mod geometry;
 pub mod grid;
 pub mod pistons;

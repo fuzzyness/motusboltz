@@ -116,7 +116,7 @@ fn draw_gas(pen: &mut Pen, readout: &Readout, top: f32) -> f32 {
             kelvin_text(hot.kelvin),
             kelvin_text(cold.kelvin),
         ),
-        ("Pressure (estimate)", bar(hot.bar), bar(cold.bar)),
+        ("Pressure", bar(hot.bar), bar(cold.bar)),
         (
             "Particles",
             hot.particles.to_string(),
@@ -138,7 +138,7 @@ fn draw_gas(pen: &mut Pen, readout: &Readout, top: f32) -> f32 {
         "{} particles = {:.3} mol ({} in the opening)",
         now.particles, now.moles, now.passage_particles
     );
-    let pressure_note = "Pressure here is an ideal-gas estimate, P = nRT / V.";
+    let pressure_note = "Pressure: the gas's hits on each piston, over the last 2 s.";
     for note in [amount_note.as_str(), pressure_note] {
         y += SMALL_LINE;
         pen.fitted(note, LEFT, y, CONTENT_WIDTH, SMALL_SIZE, QUIET);

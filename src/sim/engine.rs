@@ -23,6 +23,7 @@ use crate::sim::gas::{
     PARTICLE_MASS,
     Particle, //
 };
+use crate::sim::gauge::PressureGauge;
 use crate::sim::geometry::{
     ChamberGeometry,
     DEFAULT_GEOMETRY,
@@ -144,6 +145,8 @@ pub struct ConnectedChambers {
     tracers: Option<Tracers>,
     /// Recent heat exchanges at the walls, for drawing.
     sparks: HeatSparks,
+    /// A pressure gauge on each piston, indexed by `HOT` and `COLD`.
+    gauges: [PressureGauge; 2],
 }
 
 impl ConnectedChambers {
@@ -231,6 +234,7 @@ impl ConnectedChambers {
             units: HeliumCalibration::new(volume_m3),
             tracers: None,
             sparks: HeatSparks::new(),
+            gauges: [PressureGauge::new(); 2],
         }
     }
 
@@ -378,7 +382,7 @@ impl ConnectedChambers {
         )
     }
 
-    /// Temperature, concentration and ideal-gas pressure for each cylinder.
+    /// Temperature, concentration and measured pressure for each cylinder.
     ///
     /// Each region's mean flow is left out of its temperature; the passage
     /// reports only its particle count.
@@ -387,14 +391,18 @@ impl ConnectedChambers {
         for particle in &self.particles {
             moments[self.region(particle.position) as usize].record(particle.velocity);
         }
-        let measure = |region: Region, piston: PistonState| {
+        let face_area = self.pistons.face_area() as f64;
+        let measure = |region: Region, piston: PistonState, gauge: PressureGauge| {
             let volume = self.pistons.cylinder_volume_m3(self.geometry, piston);
-            self.units.measure(moments[region as usize], volume)
+            let pressure = gauge.pressure(face_area);
+            self.units
+                .measure(moments[region as usize], volume, pressure)
         };
+        let [hot, cold] = self.gauges;
         ChamberMeasurements {
-            hot: measure(Region::Hot, self.pistons.hot()),
+            hot: measure(Region::Hot, self.pistons.hot(), hot),
             passage_count: moments[Region::Passage as usize].count(),
-            cold: measure(Region::Cold, self.pistons.cold()),
+            cold: measure(Region::Cold, self.pistons.cold(), cold),
         }
     }
 
@@ -577,6 +585,9 @@ impl ConnectedChambers {
                 pistons.cylinder_volume_m3(self.geometry, piston) / METERS_PER_UNIT.powi(3)
             }),
         };
+        for (gauge, impulse) in self.gauges.iter_mut().zip(substep.gas_impulse) {
+            gauge.record(impulse, substep.dt);
+        }
         let kelvin = (self.thermal.hot_kelvin(), self.thermal.cold_kelvin());
         let (thermal, particles, gas_work) =
             (&self.thermal, &self.particles, self.piston_work_by_gas);
