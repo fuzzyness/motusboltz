@@ -203,3 +203,20 @@ fn legs_meet_their_pads_without_a_gap() {
     );
     assert!(low > shape.top, "the leg pokes through the pad");
 }
+
+/// The hand crank sits past the shaft's cold end, and its handle goes
+/// round with the shaft: the angle read back from the handle is the
+/// shaft's.
+#[test]
+fn the_hand_crank_turns_with_the_shaft_past_its_cold_end() {
+    let geometry = DEFAULT_GEOMETRY;
+    let pistons = PowerPistons::new(geometry, PARTICLE_RADIUS);
+    let crank = hand_crank(geometry, &pistons);
+    assert!(crank.center.x > geometry.cylinder_offset);
+    assert!((crank.center.y - pistons.shaft_height()).abs() < 1e-6);
+    let top = crank.handle(0.0);
+    assert!((top.y - crank.center.y - crank.arm).abs() < 1e-5);
+    for angle in [-2.5_f32, -1.0, 0.0, 0.7, 2.0] {
+        assert!((crank.angle_of(crank.handle(angle)) - angle).abs() < 1e-5);
+    }
+}

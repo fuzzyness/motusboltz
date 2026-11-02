@@ -76,7 +76,7 @@ const HOLD_WINDOW: f64 = 0.5;
 /// at 1200/100 K).
 const STARTER_ENERGY: f64 = 1_600.0;
 /// Sign of the speed when the shaft turns in the heat-engine direction.
-const FORWARD: f64 = -1.0;
+pub const FORWARD: f64 = -1.0;
 
 /// Flywheel energy Start gives a shaft at rest for `count` particles.
 ///
@@ -445,13 +445,24 @@ impl PowerPistons {
     /// booked as starter work, apart from gas work. Returns whether the
     /// speed changed.
     pub fn start(&mut self) -> bool {
-        let target = FORWARD * self.start_speed;
-        if self.angular_velocity * FORWARD >= self.start_speed {
+        self.crank(self.start_speed)
+    }
+
+    /// Turns the shaft by hand at `speed` (radians per second of model
+    /// time) in the heat-engine direction, like a crank with a ratchet.
+    ///
+    /// The crank catches only a shaft turning slower than the hand, and
+    /// never drives it past the starting speed, so it can start the engine
+    /// but not overdrive it, as Start cannot. The change in flywheel energy
+    /// is booked as starter work. Returns whether the speed changed.
+    pub fn crank(&mut self, speed: f64) -> bool {
+        let speed = speed.clamp(0.0, self.start_speed);
+        if self.angular_velocity * FORWARD >= speed {
             return false;
         }
         self.let_go();
         let before = self.kinetic_energy();
-        self.angular_velocity = target;
+        self.angular_velocity = FORWARD * speed;
         self.starter_work += self.kinetic_energy() - before;
         true
     }

@@ -1,13 +1,16 @@
 //! The main loop.
 //!
-//! Each frame reads the input, steps the simulation, updates the panel and
-//! camera, and draws the background, then the scene with its labels, the
+//! Each frame reads the input, turns any grabbed crank or valve, steps the
+//! simulation with the walls moving toward their settings, updates the
+//! panel and camera, and draws the background, then the scene with its labels, the
 //! panel on the left and the sliders on the right with the demo's banner
 //! under them, and the buttons over the scene. Under the toggles at the
 //! scene's top left go the frame rate (in the Advanced view) and the
 //! warning when physics time is dropped.
 
 use macroquad::miniquad::date;
+use std::f32::consts::TAU;
+
 use macroquad::prelude::{
     Camera,
     Color,
@@ -15,14 +18,15 @@ use macroquad::prelude::{
     MouseButton,
     Rect,
     Vec2,
+    Vec3,
     get_frame_time,
     is_mouse_button_down,
     is_mouse_button_pressed,
     mouse_position,
     next_frame,
     screen_height,
-    screen_width, //
-    vec2,
+    screen_width,
+    vec2, //
 };
 use macroquad::rand::{
     gen_range,
@@ -30,12 +34,17 @@ use macroquad::rand::{
 };
 use macroquad::time::get_time;
 
+use crate::graphics::assembly::hand_crank;
+use crate::graphics::block::BlockShape;
+use crate::graphics::valves::valve_wheels;
 use crate::graphics::{
     Scene,
     Scenery, //
 };
 use crate::sim::engine::ConnectedChambers;
 use crate::sim::geometry::ChamberGeometry;
+use crate::sim::pistons::FORWARD;
+use crate::sim::reservoir::ReservoirSide;
 use crate::sim::units::{
     DEFAULT_CONCENTRATION,
     MAX_CONCENTRATION,
@@ -76,6 +85,18 @@ use crate::ui::fonts;
 use crate::ui::frame_stats::{
     FrameStats,
     LIMITED_TEXT, //
+};
+use crate::ui::handles::{
+    Grab,
+    Handle,
+    Ray,
+    VALVE_TURNS,
+    pick,
+    ramped,
+    valve_kelvin,
+    valve_opening,
+    valve_turn,
+    wheel_angle, //
 };
 use crate::ui::input::{
     CameraKeys,
@@ -211,6 +232,11 @@ pub async fn run() {
 struct App {
     /// The engine.
     simulation: ConnectedChambers,
+    /// The hot and cold walls' settings, from the sliders or the valves;
+    /// the walls move toward them (see `handles::ramped`).
+    settings: (f32, f32),
+    /// The crank or valve held with the mouse, if any.
+    grab: Option<Grab>,
     /// The simulation is paused.
     paused: bool,
     /// Slow motion is on.
@@ -306,6 +332,8 @@ impl App {
             scenery: Scenery::default(),
             start_prompt: StartPrompt::new(),
             frame_stats: FrameStats::new(),
+            settings: (hot_kelvin, cold_kelvin),
+            grab: None,
             simulation,
         }
     }
@@ -418,15 +446,20 @@ impl App {
                 pressed: is_mouse_button_pressed(MouseButton::Left),
                 down: is_mouse_button_down(MouseButton::Left),
             });
+        let over_controls =
+            self.controls.blocks_camera() || panel_blocks || self.over_drawer(pointer);
+        let button = (
+            is_mouse_button_down(MouseButton::Left),
+            is_mouse_button_pressed(MouseButton::Left),
+        );
+        self.turn_grabbed(pointer, button, over_controls, dt);
         self.apply(keys, events);
         self.animate(dt);
         self.step();
         self.camera.update(
             CameraKeys::read(),
             Pointer {
-                enabled: !(self.controls.blocks_camera()
-                    || panel_blocks
-                    || self.over_drawer(pointer)),
+                enabled: !over_controls && self.grab.is_none(),
                 shift_down: shift_down(),
                 wheel_pixels: wheel,
             },
@@ -536,11 +569,78 @@ impl App {
             self.simulation.set_concentration(concentration);
         }
         if let Some(kelvin) = events.hot_kelvin {
-            self.simulation.set_hot_kelvin(kelvin);
+            self.settings.0 = kelvin;
         }
         if let Some(kelvin) = events.cold_kelvin {
-            self.simulation.set_cold_kelvin(kelvin);
+            self.settings.1 = kelvin;
         }
+    }
+
+    /// Grabs a crank or valve pressed at `pointer` (unless the press is
+    /// `over_controls`), lets go when the button is up, and turns what is
+    /// held with the pointer over `dt` seconds of wall time.
+    ///
+    /// `button` is whether the left button is down, and whether it went
+    /// down this frame.
+    fn turn_grabbed(&mut self, pointer: Vec2, button: (bool, bool), over_controls: bool, dt: f32) {
+        let (down, pressed) = button;
+        if !down {
+            self.grab = None;
+            return;
+        }
+        let matrix = self.camera.camera().matrix();
+        let size = vec2(screen_width(), screen_height().max(1.0));
+        let geometry = self.simulation.geometry();
+        let pistons = self.simulation.power_pistons();
+        let crank = hand_crank(geometry, pistons);
+        let wheels = valve_wheels(BlockShape::new(geometry));
+        if self.grab.is_none() && pressed && !over_controls {
+            let handles = [
+                (Handle::Crank, crank.handle(pistons.angle())),
+                (Handle::Valve(ReservoirSide::Hot), wheels[0].center),
+                (Handle::Valve(ReservoirSide::Cold), wheels[1].center),
+            ];
+            self.grab = pick(&handles, matrix, size, pointer).map(Grab::new);
+        }
+        let Some(mut grab) = self.grab else {
+            return;
+        };
+        let ray = Ray::through(matrix, size, pointer);
+        match grab.handle {
+            Handle::Crank => {
+                // The plane the handle sweeps, square to the shaft.
+                let plane = crank.handle(pistons.angle());
+                let point = ray.and_then(|ray| ray.meet(plane, Vec3::X));
+                let turn = grab.turned(point.map(|point| crank.angle_of(point)));
+                let pace = if self.slow { SLOW_MOTION_FACTOR } else { 1.0 };
+                let model_dt = (dt * pace) as f64;
+                // The shaft's angle falls as it turns forward.
+                let speed = turn as f64 * FORWARD / model_dt;
+                if model_dt > 0.0 && speed > 0.0 && self.simulation.crank_engine(speed) {
+                    self.paused = false;
+                }
+            }
+            Handle::Valve(side) => {
+                let wheel = match side {
+                    ReservoirSide::Hot => wheels[0],
+                    ReservoirSide::Cold => wheels[1],
+                };
+                let point = ray.and_then(|ray| ray.meet(wheel.center, Vec3::Y));
+                let turn = grab.turned(point.map(|point| wheel_angle(wheel.center, point)));
+                if turn != 0.0 {
+                    let setting = match side {
+                        ReservoirSide::Hot => &mut self.settings.0,
+                        ReservoirSide::Cold => &mut self.settings.1,
+                    };
+                    let opening = valve_opening(side, *setting) + turn / (VALVE_TURNS * TAU);
+                    *setting = valve_kelvin(side, opening);
+                    self.controls.set_kelvin(self.settings.0, self.settings.1);
+                    // The demo's banner would no longer be true.
+                    self.demo = None;
+                }
+            }
+        }
+        self.grab = Some(grab);
     }
 
     /// Sets up `scenario`: its temperatures on the walls and the sliders,
@@ -548,6 +648,7 @@ impl App {
     /// waiting for Start.
     fn set_up(&mut self, scenario: Scenario) {
         let (hot_kelvin, cold_kelvin) = scenario.kelvin();
+        self.settings = (hot_kelvin, cold_kelvin);
         self.simulation.set_hot_kelvin(hot_kelvin);
         self.simulation.set_cold_kelvin(cold_kelvin);
         self.simulation.set_regenerator(scenario.regenerator());
@@ -612,6 +713,14 @@ impl App {
             self.simulation.follow_particles(FOLLOWED_PARTICLES, seed);
         }
         let pace = if self.slow { SLOW_MOTION_FACTOR } else { 1.0 };
+        if !self.paused {
+            // The walls move toward their settings in model time.
+            let dt = pace * get_frame_time().min(MAX_ANIMATION_DT);
+            let hot = ramped(self.simulation.hot_kelvin(), self.settings.0, dt);
+            let cold = ramped(self.simulation.cold_kelvin(), self.settings.1, dt);
+            self.simulation.set_hot_kelvin(hot);
+            self.simulation.set_cold_kelvin(cold);
+        }
         let limited = !self.paused && self.simulation.update(pace * get_frame_time());
         let physics_seconds = date::now() - physics_start;
         let now = get_time();
@@ -629,6 +738,10 @@ impl App {
         // The scene fills the window, behind the panel and the sliders; the
         // camera keeps the engine at the window's middle.
         let camera = self.camera.camera();
+        self.scene.set_valve_turns((
+            valve_turn(ReservoirSide::Hot, self.settings.0),
+            valve_turn(ReservoirSide::Cold, self.settings.1),
+        ));
         self.scene.render(&self.simulation, &camera, self.scenery);
 
         // Measure every string first, then draw (see `Pen` for why).

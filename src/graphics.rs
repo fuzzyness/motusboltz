@@ -1,7 +1,8 @@
 //! 3D drawing of the particles, tracer trails, cylinders, the opening
 //! between them and the regenerator's screens in it, the pistons, rods,
-//! crankshaft and flywheel, the burner and ice that stand for the two
-//! reservoirs, and the background.
+//! crankshaft and flywheel, the burner and the liquid-nitrogen coil that
+//! stand for the two reservoirs, the valves that set them, and the
+//! background.
 //!
 //! Drawing only; nothing here affects the physics.
 
@@ -13,8 +14,8 @@ pub mod cloud;
 pub mod fire;
 pub mod floor;
 pub mod heat_sparks;
-pub mod ice;
 pub mod levels;
+pub mod nitrogen;
 pub mod outline;
 pub mod particles;
 pub mod regenerator;
@@ -22,7 +23,14 @@ pub mod soft_view;
 pub mod solid;
 pub mod sprites;
 pub mod trails;
+pub mod valves;
 
+use macroquad::miniquad::{
+    BlendFactor,
+    BlendState,
+    BlendValue,
+    Equation, //
+};
 use macroquad::models::{
     Mesh,
     draw_mesh, //
@@ -63,8 +71,8 @@ use cloud::CloudFloor;
 use fire::Fire;
 use floor::FloorGrid;
 use heat_sparks::HeatSparks;
-use ice::Ice;
 use levels::ReservoirLevels;
+use nitrogen::Nitrogen;
 use particles::{
     ParticleRenderer,
     camera_light_direction, //
@@ -76,6 +84,7 @@ use sprites::{
     SpriteMaterials, //
 };
 use trails::TrailRenderer;
+use valves::Valves;
 
 /// Seconds the old scenery takes to dissolve into the new one.
 const SCENERY_DISSOLVE_SECONDS: f64 = 0.35;
@@ -151,6 +160,41 @@ fn mix_color(first: Color, second: Color, amount: f32) -> Color {
 /// `Light` uniforms and the `extra` ones, or `None` if its shader cannot
 /// be built.
 fn load_lit(fragment: &'static str, extra: &[(&str, UniformType)]) -> Option<Material> {
+    let pipeline_params = PipelineParams {
+        depth_write: true,
+        depth_test: Comparison::LessOrEqual,
+        ..Default::default()
+    };
+    load_lit_with(fragment, extra, pipeline_params)
+}
+
+/// A see-through material lit per pixel by `fragment`, with the `Eye` and
+/// `Light` uniforms: blended over what is drawn behind it by the alpha the
+/// fragment gives, hidden by what is in front, and hiding nothing drawn
+/// after it. `None` if its shader cannot be built.
+fn load_clear(fragment: &'static str) -> Option<Material> {
+    let blend = BlendState::new(
+        Equation::Add,
+        BlendFactor::Value(BlendValue::SourceAlpha),
+        BlendFactor::OneMinusValue(BlendValue::SourceAlpha),
+    );
+    let pipeline_params = PipelineParams {
+        depth_write: false,
+        depth_test: Comparison::LessOrEqual,
+        color_blend: Some(blend),
+        ..Default::default()
+    };
+    load_lit_with(fragment, &[], pipeline_params)
+}
+
+/// A material lit per pixel by `fragment` with `pipeline_params`, the
+/// `Eye` and `Light` uniforms and the `extra` ones, or `None` if its
+/// shader cannot be built.
+fn load_lit_with(
+    fragment: &'static str,
+    extra: &[(&str, UniformType)],
+    pipeline_params: PipelineParams,
+) -> Option<Material> {
     let lighting = [("Eye", UniformType::Float3), ("Light", UniformType::Float3)];
     let uniforms = lighting
         .iter()
@@ -160,11 +204,6 @@ fn load_lit(fragment: &'static str, extra: &[(&str, UniformType)]) -> Option<Mat
     let source = ShaderSource::Glsl {
         vertex: LIT_VERTEX,
         fragment,
-    };
-    let pipeline_params = PipelineParams {
-        depth_write: true,
-        depth_test: Comparison::LessOrEqual,
-        ..Default::default()
     };
     let params = MaterialParams {
         pipeline_params,
@@ -219,11 +258,16 @@ pub struct Scene {
     trails: TrailRenderer,
     /// The burner.
     fire: Fire,
-    /// The ice.
-    ice: Ice,
+    /// The coil of liquid nitrogen.
+    nitrogen: Nitrogen,
+    /// The gas and nitrogen valves.
+    valves: Valves,
+    /// How far each valve's wheel is turned from shut, hot first, in
+    /// radians counterclockwise seen from above.
+    valve_turns: (f32, f32),
     /// Twinkles where heat crosses the walls.
     heat_sparks: HeatSparks,
-    /// `None` where the sprite shader cannot be built: the burner and ice
+    /// `None` where the sprite shader cannot be built: the burner and nitrogen
     /// still show, without flames or mist.
     sprite_materials: Option<SpriteMaterials>,
     /// The sky or the dark background.
@@ -237,7 +281,7 @@ pub struct Scene {
     previous: SoftView,
     /// The scenery last drawn, and when on the clock it was switched to.
     scenery: Option<(Scenery, f64)>,
-    /// How strongly the burner, ice and glows show, easing after the
+    /// How strongly the burner, nitrogen and glows show, easing after the
     /// sliders.
     levels: ReservoirLevels,
 }
@@ -259,7 +303,9 @@ impl Scene {
             particles: ParticleRenderer::new(extent),
             trails: TrailRenderer::new(),
             fire: Fire::new(shape),
-            ice: Ice::new(shape),
+            nitrogen: Nitrogen::new(shape),
+            valves: Valves::new(shape),
+            valve_turns: (0.0, 0.0),
             heat_sparks: HeatSparks::new(geometry),
             sprite_materials: SpriteMaterials::load(),
             backdrop: Backdrop::new(geometry),
@@ -269,6 +315,12 @@ impl Scene {
             scenery: None,
             levels: ReservoirLevels::default(),
         }
+    }
+
+    /// Turns the valves' wheels, hot first, from shut, in radians
+    /// counterclockwise seen from above, for the frames to come.
+    pub fn set_valve_turns(&mut self, turns: (f32, f32)) {
+        self.valve_turns = turns;
     }
 
     /// Draws the background and the engine for one frame, and leaves the
@@ -349,17 +401,17 @@ impl Scene {
         let facing = Facing::toward(camera);
         let light = camera_light_direction(camera);
         self.fire.build(self.levels.heat, seconds, facing);
-        self.ice.load_shader();
-        self.ice.build(self.levels.cold, seconds, light, facing);
+        self.nitrogen.build(self.levels.cold, seconds, facing);
         self.heat_sparks.build(simulation, camera, seconds);
         self.chamber.draw(camera);
         self.screens.draw(
             simulation.regenerator(),
             simulation.hot_kelvin(),
             simulation.cold_kelvin(),
+            camera,
         );
         self.fire.draw_burner();
-        self.ice.draw_solid(camera, light);
+        self.valves.draw(self.valve_turns, camera);
         if scenery == Scenery::Sky {
             self.cloud.draw(camera, light);
         }
@@ -368,6 +420,8 @@ impl Scene {
         // pistons, which come after.
         self.screens.draw_ghost(simulation.regenerator(), camera);
         self.assembly.draw(simulation.power_pistons(), camera);
+        // The coil after everything solid, which shows through it.
+        self.nitrogen.draw_coil(camera);
         // The see-through grid and trails after everything solid, so they
         // blend over it.
         if scenery == Scenery::Grid {
@@ -382,7 +436,7 @@ impl Scene {
         // the tracers are on.
         if let Some(materials) = &self.sprite_materials {
             self.fire.draw(materials);
-            self.ice.draw(materials);
+            self.nitrogen.draw(materials);
             if simulation.tracers().is_none() {
                 self.heat_sparks.draw(materials);
             }

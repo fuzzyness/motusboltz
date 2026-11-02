@@ -155,7 +155,7 @@ impl Solid {
     }
 
     /// Adds a four-sided face with corners in order around it.
-    fn quad(&mut self, corners: [Vec3; 4], normals: [Vec3; 4], colors: [Color; 4]) {
+    pub(super) fn quad(&mut self, corners: [Vec3; 4], normals: [Vec3; 4], colors: [Color; 4]) {
         let [a, b, c, d] = [0, 1, 2, 3].map(|i| self.vertex(corners[i], normals[i], colors[i]));
         self.indices.extend([a, b, c, a, c, d]);
     }

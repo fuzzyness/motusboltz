@@ -1,12 +1,13 @@
-//! How hot the burner and how cold the ice look, following the sliders
+//! How hot the burner and how cold the nitrogen look, following the walls
 //! smoothly.
 //!
-//! When a slider moves, the flames, ice, mist and background
-//! glows grow or shrink over about a second instead of jumping. The
-//! reservoirs themselves change at once; only the picture eases.
+//! When a wall's temperature moves, the flames, nitrogen, mist and background
+//! glows grow or shrink over about a second instead of jumping. The walls
+//! already move toward a new setting at a steady pace (see `ui::handles`);
+//! the picture eases on top of that, so it never jumps.
 
 use super::fire::heat_level;
-use super::ice::cold_level;
+use super::nitrogen::cold_level;
 
 /// The time over which the picture covers about two thirds of the way to a
 /// new setting.
@@ -27,7 +28,7 @@ pub fn ease(current: f32, target: f32, seconds: f32) -> f32 {
 pub struct ReservoirLevels {
     /// How hot the burner looks.
     pub heat: f32,
-    /// How cold the ice looks.
+    /// How cold the nitrogen looks.
     pub cold: f32,
     /// The clock at the last update; `None` before the first, which starts
     /// at the settings as they are.

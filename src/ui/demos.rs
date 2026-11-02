@@ -45,7 +45,7 @@ const TITLE_GAP: f32 = 4.0;
 /// Space between a demo's name and its temperatures in the title.
 const TITLE_SPACE: &str = "   ";
 /// The banner's last line while Start is offered.
-const PROMPT: &str = "Press Start (Space).";
+const PROMPT: &str = "Press Start (Space) or turn the red crank.";
 /// Color of the prompt, Start's own amber.
 const PROMPT_COLOR: Color = Color::from_rgba(255, 208, 132, 255);
 

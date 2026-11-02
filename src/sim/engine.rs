@@ -399,6 +399,12 @@ impl ConnectedChambers {
         self.pistons.start()
     }
 
+    /// Turns the shaft by hand at `speed` radians per second of model time
+    /// (see `PowerPistons::crank`); returns whether the speed changed.
+    pub fn crank_engine(&mut self, speed: f64) -> bool {
+        self.pistons.crank(speed)
+    }
+
     /// Kicks the flywheel once (see `PowerPistons::kick`).
     pub fn kick_flywheel(&mut self) {
         self.pistons.kick();

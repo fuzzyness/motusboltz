@@ -3,7 +3,7 @@
 //!
 //! The line runs along the block's front, around that cylinder's rounded
 //! end, and back along the block's back. The burner follows it around the
-//! hot half and the ice heap around the cold half.
+//! hot half and the nitrogen coil around the cold half.
 
 use std::f32::consts::{
     FRAC_PI_2,
@@ -20,7 +20,7 @@ use macroquad::prelude::{
 pub enum Half {
     /// The burner's half, on the -x side.
     Hot,
-    /// The ice's half, on the +x side.
+    /// The nitrogen's half, on the +x side.
     Cold,
 }
 

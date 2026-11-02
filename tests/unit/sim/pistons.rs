@@ -160,6 +160,22 @@ fn start_never_exceeds_the_starting_speed() {
     );
 }
 
+/// The hand crank is a ratchet: it catches only a slower shaft, drives it
+/// forward at the hand's speed, never past the starting speed, and books
+/// what it gives as starter work.
+#[test]
+fn the_crank_drives_forward_up_to_the_starting_speed() {
+    let mut pistons = free_pistons();
+    let start_speed = pistons.start_speed;
+    assert!(!pistons.crank(0.0), "a still hand does nothing");
+    assert!(pistons.crank(0.3 * start_speed));
+    assert!((pistons.start_speed_fraction() - 0.3).abs() < 1e-12);
+    assert!(!pistons.crank(0.2 * start_speed), "a slower hand slips");
+    assert!(pistons.crank(5.0 * start_speed));
+    assert!((pistons.start_speed_fraction() - 1.0).abs() < 1e-12);
+    assert!((pistons.starter_work() - pistons.kinetic_energy()).abs() < EPSILON as f64);
+}
+
 #[test]
 fn start_tops_up_a_slow_or_backward_shaft() {
     for initial in [-0.5, 0.0, 0.7] {

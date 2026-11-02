@@ -61,7 +61,8 @@ const PASSAGE_LONGITUDINAL_STRIDE: usize = 4;
 ///
 /// `cross_section` gives each section's center and the two basis vectors of
 /// its plane. The triangles face outward for both circular rims and
-/// vertical guides. The light is baked into the vertex colors.
+/// vertical guides. The light is baked into the vertex colors, and each
+/// vertex keeps its outward normal for shaders that light it themselves.
 pub(super) fn append_tube(
     mesh: &mut Mesh,
     sections: usize,
@@ -83,8 +84,10 @@ pub(super) fn append_tube(
             let position = center + normal * radius;
             let brightness =
                 FRAME_AMBIENT_LIGHT + FRAME_DIFFUSE_LIGHT * normal.dot(light_direction).max(0.0);
-            mesh.vertices
-                .push(Vertex::new2(position, Vec2::ZERO, shade(color, brightness)));
+            mesh.vertices.push(Vertex {
+                normal: normal.extend(0.0),
+                ..Vertex::new2(position, Vec2::ZERO, shade(color, brightness))
+            });
         }
     }
 

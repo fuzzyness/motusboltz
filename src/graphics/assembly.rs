@@ -108,6 +108,16 @@ const WEB_PIN_RADIUS: f32 = 0.15;
 /// How far the shaft runs past each outer web.
 const SHAFT_STUB: f32 = 0.14;
 
+/// Length of the hand crank's arm, from the shaft to the handle.
+const HAND_ARM: f32 = 0.75;
+/// Half-widths of the arm at the shaft and at the handle.
+const HAND_ARM_HALF_WIDTH: (f32, f32) = (0.1, 0.07);
+/// Half the arm's thickness, along the shaft.
+const HAND_ARM_HALF_THICK: f32 = 0.045;
+/// Length of the handle, out along the shaft from the arm.
+const HANDLE_LENGTH: f32 = 0.4;
+/// Radius of the handle.
+const HANDLE_RADIUS: f32 = 0.075;
 /// Outer radius of the flywheel, in the middle of the shaft.
 const FLYWHEEL_RADIUS: f32 = 1.25;
 /// Depth of the flywheel's rim.
@@ -190,6 +200,8 @@ const BRASS: Color = finish(255, 186, 36, 0.85);
 const BRASS_DARK: Color = finish(214, 132, 20, 0.6);
 /// The bearing stands' paint.
 const PAINT: Color = finish(48, 72, 170, 0.35);
+/// The hand crank's handle: red-painted wood, easy to spot.
+const HANDLE_PAINT: Color = finish(200, 56, 44, 0.3);
 
 /// The hot crank's angle relative to the shaft angle, as in the
 /// simulation.
@@ -223,6 +235,36 @@ struct Layout {
 }
 
 impl Layout {
+    /// Where everything goes for `geometry`, with cranks of `crank_radius`
+    /// on a shaft at `shaft_y`.
+    fn new(geometry: ChamberGeometry, crank_radius: f32, shaft_y: f32) -> Self {
+        let shape = BlockShape::new(geometry);
+        Self {
+            unit: shape.bore,
+            offset: shape.offset,
+            bore: shape.bore,
+            block_top: shape.top,
+            shaft_y,
+            crank_radius,
+        }
+    }
+
+    /// The end of the shaft's stub past the cold cylinder's outer web.
+    fn shaft_end(self) -> f32 {
+        let web_half = WEB_THICKNESS * self.unit / 2.0;
+        self.offset + self.web_middle() + web_half + SHAFT_STUB * self.unit
+    }
+
+    /// The hand crank on the end of the shaft.
+    fn hand_crank(self) -> HandCrank {
+        let thick = HAND_ARM_HALF_THICK * self.unit;
+        HandCrank {
+            center: vec3(self.shaft_end() + thick, self.shaft_y, 0.0),
+            arm: HAND_ARM * self.unit,
+            handle_length: HANDLE_LENGTH * self.unit,
+        }
+    }
+
     /// The crank pin of the cylinder at `x`, with its crank at `angle`.
     fn crank_pin(self, x: f32, angle: f32) -> Vec3 {
         let (sin, cos) = angle.sin_cos();
@@ -243,6 +285,40 @@ impl Layout {
     fn web_middle(self) -> f32 {
         (ROD_THICKNESS / 2.0 + SIDE_GAP + WEB_THICKNESS / 2.0) * self.unit
     }
+}
+
+/// The hand crank on the cold end of the shaft, which turns with it.
+///
+/// Its arm runs straight up from the shaft at shaft angle zero, so the
+/// handle stands at the shaft's angle around the shaft, the way
+/// `about_shaft` turns it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HandCrank {
+    /// The point on the shaft in the middle of the arm.
+    pub center: Vec3,
+    /// From the shaft to the middle of the handle.
+    pub arm: f32,
+    /// How far the handle reaches out along the shaft from the arm.
+    pub handle_length: f32,
+}
+
+impl HandCrank {
+    /// The middle of the handle with the shaft at `angle`.
+    pub fn handle(self, angle: f32) -> Vec3 {
+        self.center + about_shaft(angle) * (Vec3::Y * self.arm) + Vec3::X * self.handle_length / 2.0
+    }
+
+    /// The angle around the shaft of `point`, as `about_shaft` counts it:
+    /// zero straight above, rising toward +z.
+    pub fn angle_of(self, point: Vec3) -> f32 {
+        let from = point - self.center;
+        from.z.atan2(from.y)
+    }
+}
+
+/// The hand crank of an engine of `geometry` driven by `pistons`.
+pub fn hand_crank(geometry: ChamberGeometry, pistons: &PowerPistons) -> HandCrank {
+    Layout::new(geometry, pistons.stroke() / 2.0, pistons.shaft_height()).hand_crank()
 }
 
 /// Where one part's vertices are in the mesh and how it moves.
@@ -345,14 +421,7 @@ impl Assembly {
     /// Panics if the parts would not fit Macroquad's buffers.
     fn build(geometry: ChamberGeometry, crank_radius: f32, shaft_y: f32) -> Self {
         let shape = BlockShape::new(geometry);
-        let layout = Layout {
-            unit: shape.bore,
-            offset: shape.offset,
-            bore: shape.bore,
-            block_top: shape.top,
-            shaft_y,
-            crank_radius,
-        };
+        let layout = Layout::new(geometry, crank_radius, shaft_y);
         let mut solid = Solid::new();
         let mut parts = Vec::new();
         let mut add = |solid: &mut Solid, motion, build: &dyn Fn(&mut Solid)| {
@@ -367,6 +436,9 @@ impl Assembly {
             crankshaft(solid, layout)
         });
         add(&mut solid, Motion::Shaft, &|solid| flywheel(solid, layout));
+        add(&mut solid, Motion::Shaft, &|solid| {
+            hand_crank_part(solid, layout)
+        });
         add(&mut solid, Motion::Fixed, &|solid| stands(solid, layout));
         for hot in [true, false] {
             add(&mut solid, Motion::Piston { hot }, &|solid| {
@@ -483,7 +555,7 @@ fn crankshaft(solid: &mut Solid, layout: Layout) {
     let y = layout.shaft_y;
     let web = layout.web_middle();
     let web_half = WEB_THICKNESS * unit / 2.0;
-    let outer = layout.offset + web + web_half + SHAFT_STUB * unit;
+    let outer = layout.shaft_end();
     // Into the middle of each web, so no seam shows.
     let inner = layout.offset - web;
     // Main journals: through the middle (and the flywheel and bearings),
@@ -531,6 +603,32 @@ fn crankshaft(solid: &mut Solid, layout: Layout) {
             BRIGHT_STEEL,
         );
     }
+}
+
+/// The hand crank, at shaft angle zero: a steel arm straight up from the
+/// cold end of the shaft and a red handle out from its tip.
+fn hand_crank_part(solid: &mut Solid, layout: Layout) {
+    let unit = layout.unit;
+    let crank = layout.hand_crank();
+    let tip = crank.center + Vec3::Y * crank.arm;
+    let (root, end) = (HAND_ARM_HALF_WIDTH.0 * unit, HAND_ARM_HALF_WIDTH.1 * unit);
+    // The arm reaches a little past the shaft and the handle, so both are
+    // held.
+    solid.bar(
+        crank.center - Vec3::Y * root,
+        tip + Vec3::Y * end,
+        Vec3::Z,
+        (root, end),
+        HAND_ARM_HALF_THICK * unit,
+        STEEL,
+    );
+    solid.cylinder(
+        tip,
+        tip + Vec3::X * (crank.handle_length + HAND_ARM_HALF_THICK * unit),
+        HANDLE_RADIUS * unit,
+        SMALL_SEGMENTS,
+        HANDLE_PAINT,
+    );
 }
 
 /// The flywheel, a spoked brass wheel in the middle of the shaft.

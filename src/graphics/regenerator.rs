@@ -6,8 +6,9 @@
 //! Sixteen screens side by side through the thin wall would read as one
 //! solid plug, so every four are drawn as one, at their middle and their
 //! mean temperature. Each is a ring of wire around the opening's edge with
-//! a grid of straight wires across it, built once as thin shaded tubes;
-//! each frame only their colors change. From most views the gas in the cold cylinder
+//! a grid of straight wires across it, built once as thin tubes and lit as
+//! the block's steel is, so the mesh looks made of the same metal; each
+//! frame only their colors change. From most views the gas in the cold cylinder
 //! stands in front of the opening, so after the gas is drawn the screens
 //! are drawn again faintly over it, farthest first, like a ghost seen
 //! through it. Drawing only; the physics uses `Regenerator`.
@@ -43,14 +44,16 @@ use macroquad::prelude::{
 
 use super::block::{
     COLD_STEEL,
-    HOT_STEEL, //
+    HOT_STEEL,
+    key_light, //
 };
 use super::chamber::append_tube;
 use super::{
     DRAW_CALL_INDEX_CAPACITY,
     DRAW_CALL_VERTEX_CAPACITY,
-    mix_color,
-    shade, //
+    draw_lit,
+    load_lit,
+    mix_color, //
 };
 use crate::sim::geometry::ChamberGeometry;
 use crate::sim::regenerator::{
@@ -79,15 +82,41 @@ const COLD_WIRE: Color = COLD_STEEL;
 const MIDDLE_WIRE: Color = Color::from_rgba(168, 86, 200, 255);
 /// Wire at the hot wall's temperature: the hot side's copper.
 const HOT_WIRE: Color = HOT_STEEL;
-/// Least light on a wire, so the thin wires stay bright on their dark
-/// side.
-const MIN_WIRE_LIGHT: f32 = 0.8;
 /// Smallest gap between the walls' temperatures used for the tint, so
 /// equal walls do not divide by zero.
 const MIN_TINT_SPAN_KELVIN: f32 = 1.0;
 /// Opacity of each screen drawn over the gas; where they line up, the
 /// nearest show most.
 const GHOST_OPACITY: f32 = 0.3;
+
+/// Fragment shader of the wires: the block's steel lighting (see
+/// `block.rs`), with its diffuse light, shine and rim, but no window cut
+/// and no turned rings, which would be lost on a thin wire. A wire is seen
+/// from every side, so a normal facing away is turned toward the eye.
+const STEEL_FRAGMENT: &str = r#"#version 100
+precision mediump float;
+
+varying lowp vec4 color;
+varying lowp vec2 uv;
+varying vec3 world;
+varying vec3 surface_normal;
+
+uniform sampler2D Texture;
+uniform vec3 Eye;
+uniform vec3 Light;
+
+void main() {
+    vec3 toward_eye = normalize(Eye - world);
+    vec3 n = normalize(surface_normal);
+    n = dot(n, toward_eye) < 0.0 ? -n : n;
+    float diffuse = max(dot(n, Light), 0.0);
+    float facing = max(dot(n, toward_eye), 0.0);
+    float shine = pow(max(dot(n, normalize(Light + toward_eye)), 0.0), 24.0);
+    float rim = pow(1.0 - facing, 3.0);
+    vec3 lit = color.rgb * (0.32 + 0.6 * diffuse + 0.15 * facing)
+        + vec3(0.5) * shine + vec3(0.55, 0.7, 1.0) * rim * 0.22;
+    gl_FragColor = vec4(lit, 1.0) * texture2D(Texture, uv);
+}"#;
 
 /// Vertex shader of the ghost: the vertex colors, placed as usual.
 const GHOST_VERTEX: &str = r#"#version 100
@@ -117,11 +146,12 @@ void main() {
     gl_FragColor = vec4(color.rgb, Opacity);
 }"#;
 
-/// Whether the ghost's material is ready.
+/// Whether a material is ready.
 ///
-/// It is built on the first draw, since its shader needs the window; if it
-/// cannot be built, the screens are drawn only once, behind the gas.
-enum Ghost {
+/// It is built on the first draw, since its shader needs the window. If
+/// the steel's cannot be built, the wires are drawn in flat color; if the
+/// ghost's cannot, the screens are drawn only once, behind the gas.
+enum Shader {
     /// Not built yet.
     Untried,
     /// Built.
@@ -136,14 +166,14 @@ pub struct RegeneratorScreens {
     mesh: Mesh,
     /// The first vertex of each screen, then the end of the last.
     starts: Vec<usize>,
-    /// The light on each vertex, from 0 to 1.
-    light: Vec<f32>,
     /// The mesh's triangles screen by screen from the cold side to the
     /// hot side, the reverse of the mesh's own order, for the ghost seen
     /// from the hot side.
     reversed: Vec<u16>,
+    /// The material that lights the wires as steel, once tried.
+    steel: Shader,
     /// The material that draws the screens over the gas, once tried.
-    ghost: Ghost,
+    ghost: Shader,
 }
 
 impl RegeneratorScreens {
@@ -211,40 +241,36 @@ impl RegeneratorScreens {
         assert!(mesh.vertices.len() <= u16::MAX as usize);
         assert!(mesh.vertices.len() < DRAW_CALL_VERTEX_CAPACITY);
         assert!(mesh.indices.len() < DRAW_CALL_INDEX_CAPACITY);
-        let light = mesh
-            .vertices
-            .iter()
-            .map(|vertex| {
-                let baked = vertex.color[0] as f32 / u8::MAX as f32;
-                MIN_WIRE_LIGHT + (1.0 - MIN_WIRE_LIGHT) * baked
-            })
-            .collect();
         Self {
             mesh,
             starts,
-            light,
             reversed,
-            ghost: Ghost::Untried,
+            steel: Shader::Untried,
+            ghost: Shader::Untried,
         }
     }
 
-    /// Draws `regenerator`'s screens, tinted between walls at `hot_kelvin`
-    /// and `cold_kelvin`, if they are in the opening.
-    pub fn draw(&mut self, regenerator: &Regenerator, hot_kelvin: f32, cold_kelvin: f32) {
+    /// Draws `regenerator`'s screens seen from `camera`, tinted between
+    /// walls at `hot_kelvin` and `cold_kelvin`, if they are in the opening.
+    pub fn draw(
+        &mut self,
+        regenerator: &Regenerator,
+        hot_kelvin: f32,
+        cold_kelvin: f32,
+        camera: &Camera3D,
+    ) {
         if !regenerator.is_enabled() {
             return;
         }
         for (index, screen) in drawn(regenerator.screens()).into_iter().enumerate() {
             let color = tint(screen.kelvin, hot_kelvin, cold_kelvin);
             let (start, end) = (self.starts[index], self.starts[index + 1]);
-            for (vertex, light) in self.mesh.vertices[start..end]
-                .iter_mut()
-                .zip(&self.light[start..end])
-            {
-                vertex.color = shade(color, *light).into();
+            for vertex in &mut self.mesh.vertices[start..end] {
+                vertex.color = color.into();
             }
         }
-        draw_mesh(&self.mesh);
+        let steel = ready(&mut self.steel, || load_lit(STEEL_FRAGMENT, &[]));
+        draw_lit([&self.mesh], steel, camera, key_light(camera.position));
     }
 
     /// Draws `regenerator`'s screens again, faintly, over everything drawn
@@ -254,10 +280,7 @@ impl RegeneratorScreens {
         if !regenerator.is_enabled() {
             return;
         }
-        if let Ghost::Untried = self.ghost {
-            self.ghost = load_ghost().map_or(Ghost::Unavailable, Ghost::Ready);
-        }
-        let Ghost::Ready(material) = &self.ghost else {
+        let Some(material) = ready(&mut self.ghost, load_ghost) else {
             return;
         };
         // The mesh runs from the hot side (negative x) to the cold side.
@@ -272,6 +295,18 @@ impl RegeneratorScreens {
         if from_hot_side {
             std::mem::swap(&mut self.mesh.indices, &mut self.reversed);
         }
+    }
+}
+
+/// The material in `slot`, built with `load` on the first call, or `None`
+/// if it could not be built.
+fn ready(slot: &mut Shader, load: impl FnOnce() -> Option<Material>) -> Option<&Material> {
+    if let Shader::Untried = slot {
+        *slot = load().map_or(Shader::Unavailable, Shader::Ready);
+    }
+    match slot {
+        Shader::Ready(material) => Some(material),
+        _ => None,
     }
 }
 

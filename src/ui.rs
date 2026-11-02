@@ -12,6 +12,7 @@ pub mod drawer;
 pub mod energy_strip;
 pub mod fonts;
 pub mod frame_stats;
+pub mod handles;
 pub mod input;
 pub mod layer;
 pub mod layout;

@@ -5,7 +5,7 @@ use crate::graphics::outline::tests::outside_block;
 use crate::sim::geometry::DEFAULT_GEOMETRY;
 
 #[test]
-fn cloud_stays_under_the_floor_except_its_edge_bumps_beyond_the_burner_and_ice() {
+fn cloud_stays_under_the_floor_except_its_edge_bumps_beyond_the_burner_and_nitrogen() {
     let shape = BlockShape::new(DEFAULT_GEOMETRY);
     let cloud = CloudFloor::new(shape);
     let mut above = 0;
@@ -14,10 +14,10 @@ fn cloud_stays_under_the_floor_except_its_edge_bumps_beyond_the_burner_and_ice()
         if point.y > shape.base + 1e-3 {
             above += 1;
             let out = outside_block(shape.offset, shape.outer, Vec2::new(point.x, point.z));
-            // The burner and the ice heap reach about 0.65 bore radii out.
+            // The burner reaches about 0.65 bore radii out, and the nitrogen less.
             assert!(
                 out > 0.7 * shape.bore,
-                "{point} rises among the burner or ice"
+                "{point} rises among the burner or nitrogen"
             );
         }
     }
