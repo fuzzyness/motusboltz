@@ -51,6 +51,7 @@ use macroquad::rand::{
     srand, //
 };
 use macroquad::time::get_time;
+use macroquad::window::set_fullscreen;
 
 use crate::graphics::assembly::hand_crank;
 use crate::graphics::block::BlockShape;
@@ -113,6 +114,7 @@ use crate::ui::frame_stats::{
     FrameStats,
     LIMITED_TEXT, //
 };
+use crate::ui::full_screen;
 use crate::ui::handles::{
     Grab,
     Handle,
@@ -143,7 +145,11 @@ use crate::ui::menu::{
     Outcome, //
 };
 use crate::ui::motion;
-use crate::ui::page;
+use crate::ui::page::{
+    self,
+    Arm,
+    Capture, //
+};
 use crate::ui::panel::{
     EnginePanel,
     PanelPointer, //
@@ -221,6 +227,9 @@ const BANNER_WORDS_DELAY: f32 = 0.25;
 const BANNER_TAB: &str = "Demo";
 /// Seconds the banner's words take to fade in.
 const BANNER_FADE_SECONDS: f32 = 0.4;
+/// Seconds a newly set-up demo's banner stays out before it tucks itself
+/// away, unless its tab sticks it out; the pointer over it holds it.
+const BANNER_SHOW_SECONDS: f32 = 10.0;
 /// How the view dissolves into first person or back out: a little slower
 /// and chunkier than a switch of scenery, rippling in waves.
 const FIRST_PERSON_DISSOLVE: Dissolve = Dissolve {
@@ -230,6 +239,10 @@ const FIRST_PERSON_DISSOLVE: Dissolve = Dissolve {
 };
 /// The key that opens the menu.
 const MENU_KEY: KeyCode = KeyCode::Escape;
+/// Seconds Esc is ignored after the browser let the mouse go, which Esc
+/// itself may have done: the menu that opened stays open rather than being
+/// closed again by the same key.
+const ESCAPE_QUIET_SECONDS: f32 = 0.3;
 /// Extra zoom-out so the cylinders, crank and flywheel all fit the first view.
 const CAMERA_FRAMING_MARGIN: f32 = 1.42;
 
@@ -275,6 +288,20 @@ struct App {
     walker: Option<Walker>,
     /// The menu Esc opens.
     menu: Menu,
+    /// What the next press on the simulation should do in the page hosting
+    /// it, as found this frame (see `page::arm`).
+    armed: Arm,
+    /// The mouse is captured for looking around in first person, as this
+    /// frame last found it.
+    mouse_held: bool,
+    /// Seconds left while Esc is ignored (see `ESCAPE_QUIET_SECONDS`).
+    escape_quiet: f32,
+    /// The application's window fills the screen (on the web page, the
+    /// page says; see `page::full_screen`).
+    full_screen: bool,
+    /// The window is to switch to or from full screen once the mouse
+    /// button is let go (see `switch_full_screen`).
+    full_screen_waiting: bool,
     /// The crank, valve, button or cartridge held with the mouse, if any.
     grab: Option<Grab>,
     /// The simulation is paused.
@@ -295,9 +322,12 @@ struct App {
     demo: Option<Scenario>,
     /// Seconds since the demo was set up, which fade its banner's words in.
     demo_age: f32,
-    /// The demo's banner is open; its tab at the window's right edge opens
-    /// and closes it, as the other drawers' do.
+    /// The demo's banner is stuck open; its tab at the window's right edge
+    /// opens and closes it, as the other drawers' do.
     show_banner: bool,
+    /// Seconds left while a newly set-up demo's banner shows by itself
+    /// (see `BANNER_SHOW_SECONDS`).
+    banner_popped: f32,
     /// The banner's slide out of the right edge.
     banner_slide: Slide,
     /// The banner's card as last drawn, open, if there is a demo.
@@ -380,8 +410,9 @@ impl App {
             show_demos: false,
             demo: Some(FIRST_DEMO),
             demo_age: 0.0,
-            show_banner: true,
-            banner_slide: Slide::new(true),
+            show_banner: false,
+            banner_popped: BANNER_SHOW_SECONDS,
+            banner_slide: Slide::new(false),
             banner_card: None,
             tag_grown: Vec::new(),
             cartridge_out: CARTRIDGE_TAG_DELAY,
@@ -401,6 +432,11 @@ impl App {
             drag: None,
             walker: None,
             menu: Menu::default(),
+            armed: Arm::Nothing,
+            mouse_held: false,
+            escape_quiet: 0.0,
+            full_screen: false,
+            full_screen_waiting: false,
             simulation,
         }
     }
@@ -450,7 +486,13 @@ impl App {
         };
         let on_tab = drawer::tab(card, Edge::Right, width).contains(pointer);
         if on_tab && is_mouse_button_pressed(MouseButton::Left) {
-            self.show_banner = !self.show_banner;
+            // Popped out by itself, a click puts it away, as it would a
+            // stuck one.
+            if self.banner_popped > 0.0 {
+                self.banner_popped = 0.0;
+            } else {
+                self.show_banner = !self.show_banner;
+            }
         }
         let on_card = self.banner_slide.shown() && card.contains(pointer);
         on_tab || on_card
@@ -518,11 +560,30 @@ impl App {
 
     /// Runs one frame: input, simulation, camera and drawing.
     fn frame(&mut self) {
+        // Whatever this frame finds the next press should do in the page
+        // stands until the next frame.
+        self.armed = Arm::Nothing;
+        self.run_frame();
+        page::arm(self.armed);
+    }
+
+    /// The work of `frame`, which tells the page what was armed.
+    fn run_frame(&mut self) {
         let keys = KeyCommands::read();
-        // Esc opens the menu; while it is open, it has the mouse.
-        if self.menu.open {
+        let dt = get_frame_time().min(MAX_ANIMATION_DT);
+        self.switch_full_screen();
+        self.escape_quiet = (self.escape_quiet - dt).max(0.0);
+        // In the browser, a capture let go (by Esc, as like as not) opens
+        // the menu, and the same Esc is not taken again to close it.
+        // A capture the page reports lost but holds again (a browser may
+        // report a loss while it grants one) is no loss.
+        let lost = page::take_lost() && self.walker.is_some() && page::capture() != Capture::Held;
+        if lost && !self.menu.open {
+            self.open_menu_after_loss();
+            self.escape_quiet = ESCAPE_QUIET_SECONDS;
+        } else if self.menu.open {
             self.use_menu();
-        } else if is_key_pressed(MENU_KEY) {
+        } else if self.escape_pressed() {
             self.open_menu();
         }
         self.menu.animate(get_frame_time().min(MAX_ANIMATION_DT));
@@ -552,10 +613,12 @@ impl App {
                 down: is_mouse_button_down(MouseButton::Left),
             });
         let over_banner = self.use_banner_tab(pointer);
+        let over_full_screen = self.use_full_screen_button(pointer);
         let over_controls = self.controls.blocks_camera()
             || panel_blocks
             || self.over_drawer(pointer)
-            || over_banner;
+            || over_banner
+            || over_full_screen;
         let button = (
             is_mouse_button_down(MouseButton::Left),
             is_mouse_button_pressed(MouseButton::Left),
@@ -590,31 +653,106 @@ impl App {
         let dt = get_frame_time().min(MAX_ANIMATION_DT);
         let pointer = Vec2::from(mouse_position());
         let size = vec2(screen_width(), screen_height().max(1.0));
+        let held = self.follow_capture(&mut walker);
         if !self.menu.open {
-            walker.look(pointer, self.menu.sensitivity);
+            if held {
+                walker.look(pointer, self.menu.sensitivity);
+            } else {
+                // In the browser, with the mouse let go and the menu closed
+                // by Esc, a click on the view captures it again.
+                self.armed = Arm::Capture;
+            }
             self.apply(keys, ControlEvents::default());
-            // In the browser, a click captures the mouse again if it was
-            // let go (see `use_menu`).
-            page::arm_capture(true);
         }
         self.walker = Some(walker);
         self.animate(dt);
         self.step();
         let camera = walker.camera();
         self.render_scene(&camera);
+        let waiting = !self.menu.open && page::capture() == Capture::Free;
         for pen in [&mut Pen::warm(), &mut Pen::screen()] {
-            first_person::draw_view(pen, size.x, size.y);
+            first_person::draw_view(pen, size.x, size.y, waiting);
             self.menu.draw(pen, size, pointer, true);
         }
     }
 
+    /// Arms the page to switch full screen when the pointer is over its
+    /// button, and returns whether it is, where it should not turn the
+    /// camera.
+    ///
+    /// Only the web page has the button: it switches full screen from the
+    /// press itself, armed here a frame ahead (see `page`). The application
+    /// switches it from the menu's options instead.
+    fn use_full_screen_button(&mut self, pointer: Vec2) -> bool {
+        let spot = full_screen::button_rect(&Pen::screen(), self.scene_area());
+        let over = page::HOSTED && !self.hide_all && self.drag.is_none() && spot.contains(pointer);
+        if over {
+            self.armed = Arm::FullScreen;
+        }
+        over
+    }
+
+    /// Switches the window to or from full screen, as asked from the menu,
+    /// once the mouse button is let go: switched while it is held, the
+    /// window can miss its release and take it as held for good.
+    fn switch_full_screen(&mut self) {
+        if self.full_screen_waiting && !is_mouse_button_down(MouseButton::Left) {
+            self.full_screen_waiting = false;
+            set_fullscreen(self.full_screen);
+        }
+    }
+
+    /// Whether Esc was pressed this frame and is not being ignored.
+    fn escape_pressed(&self) -> bool {
+        is_key_pressed(MENU_KEY) && self.escape_quiet <= 0.0
+    }
+
     /// Opens the menu; in first person, lets the mouse go.
+    ///
+    /// In the browser, the page lets it go, and `follow_capture` follows
+    /// once it has.
     fn open_menu(&mut self) {
         self.menu.open();
         if let Some(walker) = self.walker.as_mut() {
             walker.release();
+            if !page::HOSTED {
+                self.mouse_held = false;
+            }
             capture_mouse(false);
         }
+    }
+
+    /// Opens the menu for a capture the page lost, which has nothing to
+    /// let go; should the page hold it after all, `follow_capture` closes
+    /// the menu again as soon as it does.
+    fn open_menu_after_loss(&mut self) {
+        self.menu.open();
+        if let Some(walker) = self.walker.as_mut() {
+            walker.release();
+        }
+    }
+
+    /// Follows the capture of the mouse in first person this frame, and
+    /// returns whether it is held.
+    ///
+    /// Natively, the simulation holds it itself while the menu is closed.
+    /// In the browser, the page says: the head turns only while the mouse
+    /// is held, Macroquad's capture follows the page's, and a capture
+    /// granted while the menu is open, by a click on Resume, closes it.
+    fn follow_capture(&mut self, walker: &mut Walker) -> bool {
+        if !page::HOSTED {
+            return !self.menu.open;
+        }
+        let held = page::capture() == Capture::Held;
+        if held != self.mouse_held {
+            self.mouse_held = held;
+            walker.release();
+            capture_mouse(held);
+            if held {
+                self.menu.close();
+            }
+        }
+        held && !self.menu.open
     }
 
     /// Takes the mouse for the open menu this frame and carries out what is
@@ -627,7 +765,8 @@ impl App {
             is_mouse_button_down(MouseButton::Left),
             is_mouse_button_pressed(MouseButton::Left),
         );
-        let outcome = if is_key_pressed(MENU_KEY) {
+        let escape = self.escape_pressed();
+        let outcome = if escape {
             Some(Outcome::Resume)
         } else {
             self.menu.handle(pointer, button, size, first_person)
@@ -637,22 +776,33 @@ impl App {
                 self.menu.close();
                 self.leave_first_person();
             }
+            // In the browser, a click on Resume asks the page to capture the
+            // mouse, and the menu closes once it is held (see
+            // `follow_capture`); Esc cannot capture it, and closes the menu
+            // with the mouse free, for a click on the view to capture.
+            Some(Outcome::Resume) if first_person && page::HOSTED && !escape => {}
             Some(Outcome::Resume) => {
                 self.menu.close();
-                if first_person {
+                if first_person && !page::HOSTED {
                     capture_mouse(true);
                 }
             }
             Some(Outcome::ExitSimulation) => window::order_quit(),
+            // Switched once the button is let go (see `switch_full_screen`).
+            Some(Outcome::FullScreen) => {
+                self.full_screen = !self.full_screen;
+                self.menu.full_screen = self.full_screen;
+                self.full_screen_waiting = true;
+            }
             None => {}
         }
         // In the browser, a press on Resume must capture the mouse from the
-        // page's own handler of it (see `page`); so must any click on the
-        // view in first person with the menu closed, in case the mouse was
-        // let go (Esc closing the menu cannot capture it).
+        // page's own handler of it (see `page`).
         let over_resume =
             self.menu.item_at(size.x, size.y, first_person, pointer) == Some(Item::Resume);
-        page::arm_capture(self.walker.is_some() && (!self.menu.open || over_resume));
+        if self.walker.is_some() && self.menu.open && over_resume {
+            self.armed = Arm::Capture;
+        }
     }
 
     /// Picks up the figure pressed in its button at `pointer`, swings it
@@ -679,7 +829,9 @@ impl App {
         self.scene.set_highlight(over && down);
         // In the browser, the release must capture the mouse from the
         // page's own handler of it (see `page`).
-        page::arm_capture(over && down);
+        if over && down {
+            self.armed = Arm::Capture;
+        }
         if down {
             self.drag = Some(drag);
         } else {
@@ -715,8 +867,12 @@ impl App {
         self.scene.set_highlight(false);
         self.scene.dissolve(FIRST_PERSON_DISSOLVE);
         page::set_first_person(true);
-        page::arm_capture(false);
-        capture_mouse(true);
+        // In the browser, the page captures the mouse from the release that
+        // dropped the figure, and `follow_capture` follows it.
+        self.mouse_held = !page::HOSTED;
+        if !page::HOSTED {
+            capture_mouse(true);
+        }
     }
 
     /// Dissolves back to the orbit view as it was left, and frees the mouse.
@@ -725,8 +881,8 @@ impl App {
         // Told first, so the page does not take the mouse let go below for
         // a wish to open the menu.
         page::set_first_person(false);
-        page::arm_capture(false);
         self.scene.dissolve(FIRST_PERSON_DISSOLVE);
+        self.mouse_held = false;
         capture_mouse(false);
     }
 
@@ -953,7 +1109,9 @@ impl App {
         self.show_demos = false;
         self.demo = Some(scenario);
         self.demo_age = 0.0;
-        self.show_banner = true;
+        // Its banner pops out by itself for a while (see `animate`).
+        self.show_banner = false;
+        self.banner_popped = BANNER_SHOW_SECONDS;
     }
 
     /// Moves the overlays' animations on by `dt` seconds of wall time: the
@@ -1008,8 +1166,12 @@ impl App {
                 drawer::reach(card, Edge::Right, width).contains(pointer),
             )
         });
-        self.banner_slide
-            .update(self.show_banner, on_tab, on_card, held, dt);
+        // A banner popped out by itself waits while the pointer is on it.
+        if !(on_tab || on_card) {
+            self.banner_popped = (self.banner_popped - dt).max(0.0);
+        }
+        let out = self.show_banner || self.banner_popped > 0.0;
+        self.banner_slide.update(out, on_tab, on_card, held, dt);
         let stuck = self.show_banner && self.banner_slide.settled_out();
         self.banner_glow = motion::advance(self.banner_glow, stuck, dt, GLOW_SECONDS);
     }
@@ -1200,18 +1362,31 @@ impl App {
         if let Some(card) = strip {
             energy_strip::draw(pen, card, &self.simulation);
         }
-        // The figure's button sits left of Hide all, and the build label
-        // left of it, level with Hide all's text.
+        // The figure's button sits left of Hide all, on the web page the
+        // full-screen button left of it, and the build label left of them,
+        // level with Hide all's text.
         let spot = figure::button_rect(pen, area);
-        let hovered = spot.contains(Vec2::from(mouse_position()));
+        let pointer = Vec2::from(mouse_position());
+        let hovered = spot.contains(pointer);
         figure::draw_button(
             pen,
             spot,
             hovered && self.drag.is_none(),
             self.drag.is_some(),
         );
+        // The full-screen button is the web page's alone (see
+        // `use_full_screen_button`).
+        let switch = if page::HOSTED {
+            let switch = full_screen::button_rect(pen, area);
+            let hovered = switch.contains(pointer) && self.drag.is_none();
+            let full = page::full_screen().unwrap_or(false);
+            full_screen::draw_button(pen, switch, hovered, full);
+            switch
+        } else {
+            spot
+        };
         let corner = controls::corner_button(pen, area);
-        let label_right = spot.x - BUILD_LABEL_GAP;
+        let label_right = switch.x - BUILD_LABEL_GAP;
         let label_y = corner.y + (corner.h + pen.text_height("H", BUILD_LABEL_FONT_SIZE)) / 2.0;
         let size = BUILD_LABEL_FONT_SIZE;
         if self.scenery == Scenery::Sky {
@@ -1315,6 +1490,11 @@ impl App {
 fn capture_mouse(captured: bool) {
     set_cursor_grab(captured);
     show_mouse(!captured);
+    // In the browser, the page holds the capture, and lets it go only when
+    // asked (see `page::release`).
+    if !captured {
+        page::release();
+    }
 }
 
 /// Draws a shade behind one line of text at `x`, `width` wide at `size`,

@@ -56,3 +56,10 @@ fn the_mouse_turns_the_head() {
     let camera = walker.camera();
     assert_eq!(camera.position, walker.eye);
 }
+
+/// Both hints can be drawn in the app's font.
+#[test]
+fn the_hints_can_be_drawn() {
+    assert!(crate::ui::fonts::tests::drawable(HINT));
+    assert!(crate::ui::fonts::tests::drawable(WAITING_HINT));
+}

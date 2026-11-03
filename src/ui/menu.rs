@@ -6,7 +6,9 @@
 //! while the view is the figure's; and, in the application but not on the
 //! web page, set a little apart at the bottom, Exit simulation. Options
 //! opens a page of its own with the mouse sensitivity for looking around
-//! in first person, and Back.
+//! in first person, Full screen in the application (the web page has a
+//! button of its own for it, as only a click on the page can switch it),
+//! and Back.
 
 use macroquad::prelude::{
     Color,
@@ -49,8 +51,9 @@ const POP_FROM: f32 = 0.5;
 /// Extra space above Exit simulation, setting it apart from the rest, in
 /// points.
 const EXIT_GAP: f32 = 16.0;
-/// Whether the simulation can be left from its menu: in the application,
-/// but not on the web page, which the browser closes.
+/// Whether the simulation can be left, and its window switched to full
+/// screen, from its menu: in the application, but not on the web page,
+/// which the browser closes and switches.
 pub const CAN_EXIT: bool = !cfg!(target_arch = "wasm32");
 /// The menu's title.
 const TITLE: &str = "Menu";
@@ -102,6 +105,8 @@ pub enum Item {
     ExitSimulation,
     /// The mouse sensitivity, on the options page.
     Sensitivity,
+    /// Switches full screen on or off, on the options page.
+    FullScreen,
     /// Back from the options page.
     Back,
 }
@@ -115,6 +120,8 @@ pub enum Outcome {
     Resume,
     /// Leave the application.
     ExitSimulation,
+    /// Switch full screen on or off.
+    FullScreen,
 }
 
 /// The menu: open or not, which page, and the options it holds.
@@ -130,8 +137,10 @@ pub struct Menu {
     sliding: bool,
     /// How far it has popped up, from 0 (gone) to 1 (full size).
     shown: f32,
-    /// It offers Exit simulation (see `CAN_EXIT`).
+    /// It offers Exit simulation and Full screen (see `CAN_EXIT`).
     pub can_exit: bool,
+    /// The window fills the screen, which Full screen shows lit.
+    pub full_screen: bool,
 }
 
 impl Default for Menu {
@@ -143,6 +152,7 @@ impl Default for Menu {
             sliding: false,
             shown: 0.0,
             can_exit: CAN_EXIT,
+            full_screen: false,
         }
     }
 }
@@ -175,7 +185,12 @@ impl Menu {
     /// orbit view or `first_person`.
     pub fn rows(&self, width: f32, height: f32, first_person: bool) -> Vec<(Item, Rect)> {
         let items: Vec<Item> = if self.options {
-            vec![Item::Sensitivity, Item::Back]
+            let mut items = vec![Item::Sensitivity];
+            if self.can_exit {
+                items.push(Item::FullScreen);
+            }
+            items.push(Item::Back);
+            items
         } else {
             let mut items = vec![Item::Resume, Item::Options];
             if first_person {
@@ -261,6 +276,7 @@ impl Menu {
             Item::ExitFirstPerson => Some(Outcome::ExitFirstPerson),
             Item::Resume => Some(Outcome::Resume),
             Item::ExitSimulation => Some(Outcome::ExitSimulation),
+            Item::FullScreen => Some(Outcome::FullScreen),
             Item::Sensitivity => {
                 self.sliding = true;
                 self.sensitivity = sensitivity_at(track(rect), pointer.x);
@@ -326,12 +342,17 @@ impl Menu {
             }
             let look = Look {
                 hue: hue(item),
-                on: false,
+                on: item == Item::FullScreen && self.full_screen,
             };
             let hovered = rect.contains(pointer);
             let label = Label {
                 text: text(item),
-                key: if item == Item::Resume { "Esc" } else { "" },
+                key: match item {
+                    Item::Resume => "Esc",
+                    Item::FullScreen if self.full_screen => "On",
+                    Item::FullScreen => "Off",
+                    _ => "",
+                },
             };
             button::draw(pen, rect, label, look, hovered, LABEL_SIZE);
         }
@@ -382,6 +403,7 @@ fn text(item: Item) -> &'static str {
         Item::ExitFirstPerson => "Exit first person",
         Item::Resume => "Resume",
         Item::ExitSimulation => "Exit simulation",
+        Item::FullScreen => "Full screen",
         Item::Sensitivity => "Mouse sensitivity",
         Item::Back => "Back",
     }
@@ -390,7 +412,7 @@ fn text(item: Item) -> &'static str {
 /// A button's color.
 fn hue(item: Item) -> Hue {
     match item {
-        Item::Options | Item::Back | Item::Sensitivity => Hue::Pearl,
+        Item::Options | Item::Back | Item::Sensitivity | Item::FullScreen => Hue::Pearl,
         Item::ExitFirstPerson | Item::ExitSimulation => Hue::Coral,
         Item::Resume => Hue::Mint,
     }

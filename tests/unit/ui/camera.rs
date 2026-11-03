@@ -151,3 +151,14 @@ fn the_camera_stays_in_the_world() {
     camera.pan_by(vec2(0.0, 1.0e6), 900.0);
     assert!(camera.pan_offset.y >= -MAX_PAN_DOWN * 2.0 - 1e-3);
 }
+
+/// A drag starts only with a press and lasts while a button is held; a
+/// button that reads as held without a press, its release lost when the
+/// window switched to full screen, never turns the camera.
+#[test]
+fn a_drag_starts_with_a_press() {
+    assert!(!gesture_held(false, false, true), "held, never pressed");
+    assert!(gesture_held(false, true, true));
+    assert!(gesture_held(true, false, true), "held on");
+    assert!(!gesture_held(true, false, false), "let go");
+}

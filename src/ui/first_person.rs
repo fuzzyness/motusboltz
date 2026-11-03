@@ -65,6 +65,9 @@ const CROSSHAIR: Color = Color::new(1.0, 1.0, 1.0, 0.85);
 const CROSSHAIR_SHADE: Color = Color::new(0.0, 0.0, 0.0, 0.35);
 /// The hint at the bottom of the view.
 const HINT: &str = "Esc: menu";
+/// The hint while the mouse is let go in the browser, with the menu
+/// closed: a click on the view captures it again.
+const WAITING_HINT: &str = "Click to look around \u{b7} Esc: menu";
 /// Text size of the hint.
 const HINT_SIZE: f32 = 14.0;
 /// Room under the hint, in points.
@@ -160,12 +163,14 @@ impl Walker {
 }
 
 /// Draws the crosshair in the middle of a window `width` by `height`, and
-/// the hint under it.
-pub fn draw_view(pen: &mut Pen, width: f32, height: f32) {
+/// the hint under it, saying a click captures the mouse while `waiting`
+/// for one.
+pub fn draw_view(pen: &mut Pen, width: f32, height: f32, waiting: bool) {
     let middle = vec2(width, height) / 2.0;
     pen.circle(middle, CROSSHAIR_RING, CROSSHAIR_SHADE);
     pen.circle(middle, CROSSHAIR_RADIUS, CROSSHAIR);
-    let text = pen.measure(HINT, HINT_SIZE);
+    let hint = if waiting { WAITING_HINT } else { HINT };
+    let text = pen.measure(hint, HINT_SIZE);
     let baseline = height - HINT_BOTTOM;
     let left = (width - text) / 2.0;
     let shade = Rect::new(
@@ -175,7 +180,7 @@ pub fn draw_view(pen: &mut Pen, width: f32, height: f32) {
         HINT_SIZE + 2.0 * HINT_PAD,
     );
     pen.round_rect(shade, shade.h / 2.0, BACKING);
-    pen.text(HINT, left, baseline, HINT_SIZE, QUIET);
+    pen.text(hint, left, baseline, HINT_SIZE, QUIET);
 }
 
 #[cfg(test)]

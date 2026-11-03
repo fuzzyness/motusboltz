@@ -8,6 +8,7 @@ use macroquad::prelude::{
     Vec2,
     Vec3,
     is_mouse_button_down,
+    is_mouse_button_pressed,
     mouse_position,
     vec2,
     vec3, //
@@ -105,6 +106,11 @@ pub struct OrbitCamera {
     pan_offset: Vec2,
     /// The drag in progress and where the pointer was last frame.
     drag: Option<(Drag, Vec2)>,
+    /// A button was pressed over the scene and is still held: only then
+    /// does the camera move with the mouse, so a button that only reads as
+    /// held, its release lost (as when the window switches to full screen
+    /// mid-click), does not turn it.
+    gesture: bool,
 }
 
 impl OrbitCamera {
@@ -126,6 +132,7 @@ impl OrbitCamera {
             pitch: (offset.y / distance).asin(),
             pan_offset: Vec2::ZERO,
             drag: None,
+            gesture: false,
         }
     }
 
@@ -145,16 +152,22 @@ impl OrbitCamera {
         // started there is held; drop any drag so the camera does not jump.
         if !pointer.enabled {
             self.drag = None;
+            self.gesture = false;
             return;
         }
 
         let left_down = is_mouse_button_down(MouseButton::Left);
+        let pressed = is_mouse_button_pressed(MouseButton::Left)
+            || is_mouse_button_pressed(MouseButton::Right);
         // A right drag pans, as Shift with a left drag does. In the browser,
         // the page keeps the context menu from opening and hands on a
         // release outside the canvas, so the drag always ends (see
         // `web/page.js`).
         let right_down = is_mouse_button_down(MouseButton::Right);
-        let drag = if right_down || (left_down && pointer.shift_down) {
+        self.gesture = gesture_held(self.gesture, pressed, left_down || right_down);
+        let drag = if !self.gesture {
+            None
+        } else if right_down || (left_down && pointer.shift_down) {
             Some(Drag::Pan)
         } else {
             left_down.then_some(Drag::Orbit)
@@ -264,6 +277,14 @@ impl OrbitCamera {
             ..Default::default()
         }
     }
+}
+
+/// Whether a drag gesture is under way this frame, for one that `was`
+/// last frame, a button `pressed` over the scene this frame, and a button
+/// `down`: it starts with a press and lasts while a button is held, so a
+/// button that only reads as held, its press never seen, starts none.
+fn gesture_held(was: bool, pressed: bool, down: bool) -> bool {
+    (was || pressed) && down
 }
 
 #[cfg(test)]

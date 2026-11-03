@@ -58,7 +58,8 @@ fn the_menu_runs_resume_to_exit() {
     assert_eq!(items(&menu, false), [Item::Resume, Item::Options]);
 }
 
-/// Each button asks for its own thing; Options and Back turn the page.
+/// Each button asks for its own thing; Options and Back turn the page,
+/// which offers Full screen only in the application.
 #[test]
 fn the_buttons_do_what_they_say() {
     let mut menu = Menu::default();
@@ -74,7 +75,18 @@ fn the_buttons_do_what_they_say() {
         Some(Outcome::ExitSimulation)
     );
     assert_eq!(click(&mut menu, Item::Options, false), None);
+    assert_eq!(
+        items(&menu, false),
+        [Item::Sensitivity, Item::FullScreen, Item::Back]
+    );
+    assert_eq!(
+        click(&mut menu, Item::FullScreen, false),
+        Some(Outcome::FullScreen)
+    );
+    // The web page switches full screen with a button of its own.
+    menu.can_exit = false;
     assert_eq!(items(&menu, false), [Item::Sensitivity, Item::Back]);
+    menu.can_exit = true;
     assert_eq!(click(&mut menu, Item::Back, false), None);
     assert_eq!(items(&menu, false)[0], Item::Resume);
 }

@@ -14,6 +14,7 @@ pub mod figure;
 pub mod first_person;
 pub mod fonts;
 pub mod frame_stats;
+pub mod full_screen;
 pub mod handles;
 pub mod input;
 pub mod layer;
