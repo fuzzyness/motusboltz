@@ -87,7 +87,10 @@ use particles::{
     camera_light_direction, //
 };
 use regenerator::RegeneratorScreens;
-use soft_view::SoftView;
+use soft_view::{
+    DITHER_CELL,
+    SoftView, //
+};
 use sprites::{
     Facing,
     SpriteMaterials, //
@@ -308,6 +311,13 @@ pub struct Scene {
     /// How strongly the burner, nitrogen and glows show, easing after the
     /// sliders.
     levels: ReservoirLevels,
+    /// The table's top lights up, for dropping the first-person figure.
+    highlight: bool,
+    /// A dissolve from the last view to the next asked for: how many
+    /// seconds it takes and how wide its dither's cells are, in points.
+    dissolve: Option<(f64, f32)>,
+    /// Seconds the dissolve under way takes, and its cells' width.
+    dissolve_style: (f64, f32),
 }
 
 impl Scene {
@@ -342,6 +352,9 @@ impl Scene {
             previous: SoftView::new(),
             scenery: None,
             levels: ReservoirLevels::default(),
+            highlight: false,
+            dissolve: None,
+            dissolve_style: (SCENERY_DISSOLVE_SECONDS, DITHER_CELL),
         }
     }
 
@@ -358,6 +371,18 @@ impl Scene {
         self.switches = states;
     }
 
+    /// Lights the table's top while `on`, for the frames to come.
+    pub fn set_highlight(&mut self, on: bool) {
+        self.highlight = on;
+    }
+
+    /// Dissolves the view as last drawn into the next one over `seconds`
+    /// through the dither, as a switch of scenery does, with cells `cell`
+    /// points wide.
+    pub fn dissolve(&mut self, seconds: f64, cell: f32) {
+        self.dissolve = Some((seconds, cell));
+    }
+
     /// Draws the background and the engine for one frame, and leaves the
     /// screen camera set.
     ///
@@ -370,12 +395,16 @@ impl Scene {
     pub fn render(&mut self, simulation: &ConnectedChambers, camera: &Camera3D, scenery: Scenery) {
         let (width, height, dpi) = (screen_width(), screen_height(), screen_dpi_scale());
         let seconds = get_time();
-        // A switch keeps the old view, drawn last frame, and draws the new
-        // scenery into the other.
+        // A switch of scenery, or a dissolve asked for, keeps the old view,
+        // drawn last frame, and draws the new one into the other.
         match self.scenery {
-            Some((shown, _)) if shown != scenery => {
+            Some((shown, _)) if shown != scenery || self.dissolve.is_some() => {
                 std::mem::swap(&mut self.soft, &mut self.previous);
                 self.scenery = Some((scenery, seconds));
+                self.dissolve_style = self
+                    .dissolve
+                    .take()
+                    .unwrap_or((SCENERY_DISSOLVE_SECONDS, DITHER_CELL));
             }
             None => self.scenery = Some((scenery, f64::NEG_INFINITY)),
             Some(_) => {}
@@ -413,10 +442,11 @@ impl Scene {
         draw_to_screen();
         self.soft.present(width, height);
         let since = self.scenery.map_or(f64::INFINITY, |(_, at)| seconds - at);
-        let dissolved = (since / SCENERY_DISSOLVE_SECONDS) as f32;
+        let (length, cell) = self.dissolve_style;
+        let dissolved = (since / length) as f32;
         if dissolved < 1.0 {
             self.previous
-                .present_dithered(width, height, dpi, 1.0 - dissolved);
+                .present_dithered(width, height, dpi, cell, 1.0 - dissolved);
         }
     }
 
@@ -453,6 +483,9 @@ impl Scene {
         }
         self.fire.draw_burner();
         self.table.draw(camera);
+        // Lit right over the table, before what stands on it, which then
+        // covers it.
+        self.table.draw_highlight(self.highlight, seconds, camera);
         self.valves.draw(self.valve_turns, camera);
         self.buttons.draw_bodies(camera);
         self.cartridge.draw(camera);

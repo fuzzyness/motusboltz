@@ -10,6 +10,8 @@ pub mod demos;
 pub mod draw_target;
 pub mod drawer;
 pub mod energy_strip;
+pub mod figure;
+pub mod first_person;
 pub mod fonts;
 pub mod frame_stats;
 pub mod handles;

@@ -1,6 +1,7 @@
 //! The main loop.
 //!
-//! Each frame reads the input, turns any grabbed crank or valve or presses
+//! Each frame reads the input, drags the first-person figure, turns any
+//! grabbed crank or valve or presses
 //! a button or the regenerator's cartridge, steps the
 //! simulation with the walls moving toward their settings, updates the
 //! panel and camera, and draws the background, then the scene with its labels, the
@@ -8,26 +9,36 @@
 //! under them, and the buttons over the scene. Under the toggles at the
 //! scene's top left go the frame rate (in the Advanced view) and the
 //! warning when physics time is dropped.
+//!
+//! In first person, the frame turns the figure's head with the captured
+//! mouse instead, draws the scene from its eyes with only a crosshair over
+//! it, and opens the menu on Esc.
 
 use macroquad::miniquad::date;
 use std::f32::consts::TAU;
 
 use macroquad::prelude::{
     Camera,
+    Camera3D,
     Color,
+    KeyCode,
     Mat4,
     MouseButton,
     Rect,
     Vec2,
     Vec3,
     get_frame_time,
+    is_key_pressed,
     is_mouse_button_down,
     is_mouse_button_pressed,
     mouse_position,
     next_frame,
     screen_height,
     screen_width,
-    vec2, //
+    set_cursor_grab,
+    show_mouse,
+    vec2,
+    vec3, //
 };
 use macroquad::rand::{
     gen_range,
@@ -42,6 +53,7 @@ use crate::graphics::buttons::{
     button_boxes, //
 };
 use crate::graphics::cartridge;
+use crate::graphics::table;
 use crate::graphics::valves::valve_wheels;
 use crate::graphics::{
     Scene,
@@ -87,6 +99,8 @@ use crate::ui::drawer::{
     Slide, //
 };
 use crate::ui::energy_strip;
+use crate::ui::figure::{self, Drag};
+use crate::ui::first_person::{self, Choice, Walker};
 use crate::ui::fonts;
 use crate::ui::frame_stats::{
     FrameStats,
@@ -202,6 +216,13 @@ const BANNER_OVERSHOOT: f32 = 1.2;
 const BANNER_WORDS_DELAY: f32 = 0.25;
 /// Seconds the banner's words take to fade in.
 const BANNER_FADE_SECONDS: f32 = 0.4;
+/// Seconds the view takes to dissolve into first person or back out.
+const FIRST_PERSON_DISSOLVE_SECONDS: f64 = 0.75;
+/// Side of the dither's cells for that dissolve, in points: a quarter
+/// chunkier than a switch of scenery's.
+const FIRST_PERSON_DITHER_CELL: f32 = 2.5;
+/// The key that opens the first-person menu.
+const MENU_KEY: KeyCode = KeyCode::Escape;
 /// Extra zoom-out so the cylinders, crank and flywheel all fit the first view.
 const CAMERA_FRAMING_MARGIN: f32 = 1.42;
 
@@ -241,6 +262,10 @@ struct App {
     /// The hot and cold walls' settings, from the sliders or the valves;
     /// the walls move toward them (see `handles::ramped`).
     settings: (f32, f32),
+    /// The first-person figure, while it is dragged toward the table.
+    drag: Option<Drag>,
+    /// The figure standing on the table, while the view is its own.
+    walker: Option<Walker>,
     /// The crank, valve, button or cartridge held with the mouse, if any.
     grab: Option<Grab>,
     /// The simulation is paused.
@@ -343,6 +368,8 @@ impl App {
             frame_stats: FrameStats::new(),
             settings: (hot_kelvin, cold_kelvin),
             grab: None,
+            drag: None,
+            walker: None,
             simulation,
         }
     }
@@ -442,6 +469,10 @@ impl App {
     /// Runs one frame: input, simulation, camera and drawing.
     fn frame(&mut self) {
         let keys = KeyCommands::read();
+        if self.walker.is_some() {
+            self.first_person_frame(keys);
+            return;
+        }
         let wheel = wheel_pixels();
         let dt = get_frame_time().min(MAX_ANIMATION_DT);
         let events = self
@@ -461,6 +492,9 @@ impl App {
             is_mouse_button_down(MouseButton::Left),
             is_mouse_button_pressed(MouseButton::Left),
         );
+        // The figure, held, takes the pointer from the parts and the view.
+        let dragging = self.drag_figure(pointer, button, dt);
+        let button = if dragging { (false, false) } else { button };
         self.turn_grabbed(pointer, button, over_controls, dt);
         self.apply(keys, events);
         self.animate(dt);
@@ -468,7 +502,7 @@ impl App {
         self.camera.update(
             CameraKeys::read(),
             Pointer {
-                enabled: !over_controls && self.grab.is_none(),
+                enabled: !over_controls && self.grab.is_none() && !dragging,
                 shift_down: shift_down(),
                 wheel_pixels: wheel,
             },
@@ -476,6 +510,114 @@ impl App {
             screen_height(),
         );
         self.draw();
+    }
+
+    /// Runs one frame in first person: the head turns with the captured
+    /// mouse, or the menu takes it while open; the keys still act, and the
+    /// engine runs on.
+    fn first_person_frame(&mut self, keys: KeyCommands) {
+        let Some(mut walker) = self.walker else {
+            return;
+        };
+        let dt = get_frame_time().min(MAX_ANIMATION_DT);
+        let pointer = Vec2::from(mouse_position());
+        let (width, height) = (screen_width(), screen_height().max(1.0));
+        if walker.menu {
+            if is_mouse_button_pressed(MouseButton::Left) {
+                match first_person::menu_choice(width, height, pointer) {
+                    Some(Choice::Resume) => {
+                        walker.close_menu();
+                        capture_mouse(true);
+                    }
+                    Some(Choice::Exit) => {
+                        self.leave_first_person();
+                        return;
+                    }
+                    None => {}
+                }
+            }
+        } else if is_key_pressed(MENU_KEY) {
+            walker.open_menu();
+            capture_mouse(false);
+        } else {
+            walker.look(pointer);
+        }
+        self.walker = Some(walker);
+        self.apply(keys, ControlEvents::default());
+        self.animate(dt);
+        self.step();
+        let camera = walker.camera();
+        self.render_scene(&camera);
+        for pen in [&mut Pen::warm(), &mut Pen::screen()] {
+            first_person::draw_view(pen, width, height);
+            if walker.menu {
+                first_person::draw_menu(pen, width, height, pointer);
+            }
+        }
+    }
+
+    /// Picks up the figure pressed in its button at `pointer`, swings it
+    /// along as the pointer moves over `dt` seconds, lights the table while
+    /// it is over it, and drops it when the button is let go: onto the
+    /// table, into first person, or anywhere else, back into its button.
+    ///
+    /// `button` is whether the left button is down, and whether it went
+    /// down this frame. Returns whether the figure is held.
+    fn drag_figure(&mut self, pointer: Vec2, button: (bool, bool), dt: f32) -> bool {
+        let (down, pressed) = button;
+        if self.drag.is_none() && self.grab.is_none() && pressed && !self.hide_all {
+            let spot = figure::button_rect(&Pen::screen(), self.scene_area());
+            if spot.contains(pointer) {
+                self.drag = Some(Drag::new(pointer));
+            }
+        }
+        let Some(mut drag) = self.drag else {
+            self.scene.set_highlight(false);
+            return false;
+        };
+        drag.follow(pointer, dt);
+        let over = self.over_table(pointer);
+        self.scene.set_highlight(over && down);
+        if down {
+            self.drag = Some(drag);
+        } else {
+            self.drag = None;
+            if over {
+                self.enter_first_person();
+            }
+        }
+        true
+    }
+
+    /// Whether `pointer` is over the table's top in the orbit view.
+    fn over_table(&self, pointer: Vec2) -> bool {
+        let matrix = self.camera.camera().matrix();
+        let size = vec2(screen_width(), screen_height().max(1.0));
+        let shape = BlockShape::new(self.simulation.geometry());
+        let top = vec3(0.0, table::top_height(shape), 0.0);
+        Ray::through(matrix, size, pointer)
+            .and_then(|ray| ray.meet(top, Vec3::Y))
+            .is_some_and(|point| table::over_top(shape, vec2(point.x, point.z)))
+    }
+
+    /// Dissolves into the figure's eyes, standing on the table, and
+    /// captures the mouse.
+    fn enter_first_person(&mut self) {
+        let shape = BlockShape::new(self.simulation.geometry());
+        self.walker = Some(Walker::standing(shape));
+        self.grab = None;
+        self.scene.set_highlight(false);
+        self.scene
+            .dissolve(FIRST_PERSON_DISSOLVE_SECONDS, FIRST_PERSON_DITHER_CELL);
+        capture_mouse(true);
+    }
+
+    /// Dissolves back to the orbit view as it was left, and frees the mouse.
+    fn leave_first_person(&mut self) {
+        self.walker = None;
+        self.scene
+            .dissolve(FIRST_PERSON_DISSOLVE_SECONDS, FIRST_PERSON_DITHER_CELL);
+        capture_mouse(false);
     }
 
     /// Carries out the keys pressed and the controls used this frame.
@@ -790,6 +932,19 @@ impl App {
         // The scene fills the window, behind the panel and the sliders; the
         // camera keeps the engine at the window's middle.
         let camera = self.camera.camera();
+        self.render_scene(&camera);
+
+        // Measure every string first, then draw (see `Pen` for why).
+        let panel_stale =
+            self.panel_visible() && self.panel.needs_paint(self.status(), area.height);
+        let view = camera.matrix();
+        self.draw_overlay(&mut Pen::warm(), area, view, panel_stale);
+        self.draw_overlay(&mut Pen::screen(), area, view, panel_stale);
+    }
+
+    /// Draws the scene seen from `camera`, the valves, buttons and table as
+    /// the controls stand.
+    fn render_scene(&mut self, camera: &Camera3D) {
         self.scene.set_valve_turns((
             valve_turn(ReservoirSide::Hot, self.settings.0),
             valve_turn(ReservoirSide::Cold, self.settings.1),
@@ -799,14 +954,7 @@ impl App {
             on: [self.paused, self.tracers],
             held: [held(Handle::PauseButton), held(Handle::TracersButton)],
         });
-        self.scene.render(&self.simulation, &camera, self.scenery);
-
-        // Measure every string first, then draw (see `Pen` for why).
-        let panel_stale =
-            self.panel_visible() && self.panel.needs_paint(self.status(), area.height);
-        let view = camera.matrix();
-        self.draw_overlay(&mut Pen::warm(), area, view, panel_stale);
-        self.draw_overlay(&mut Pen::screen(), area, view, panel_stale);
+        self.scene.render(&self.simulation, camera, self.scenery);
     }
 
     /// Everything over the scene, seen through `view`: the labels, the
@@ -881,9 +1029,18 @@ impl App {
         if let Some(card) = strip {
             energy_strip::draw(pen, card, &self.simulation);
         }
-        // The build label sits left of Hide all, level with its text.
+        // The figure's button sits left of Hide all, and the build label
+        // left of it, level with Hide all's text.
+        let spot = figure::button_rect(pen, area);
+        let hovered = spot.contains(Vec2::from(mouse_position()));
+        figure::draw_button(
+            pen,
+            spot,
+            hovered && self.drag.is_none(),
+            self.drag.is_some(),
+        );
         let corner = controls::corner_button(pen, area);
-        let label_right = corner.x - BUILD_LABEL_GAP;
+        let label_right = spot.x - BUILD_LABEL_GAP;
         let label_y = corner.y + (corner.h + pen.text_height("H", BUILD_LABEL_FONT_SIZE)) / 2.0;
         let size = BUILD_LABEL_FONT_SIZE;
         if self.scenery == Scenery::Sky {
@@ -924,6 +1081,10 @@ impl App {
                 draw_to_screen();
             }
         }
+        // The dragged figure over everything.
+        if let Some(drag) = self.drag {
+            drag.draw(pen);
+        }
     }
 
     /// The readout's lines: the frame rate and physics time in the Advanced
@@ -957,6 +1118,13 @@ impl App {
             y += CORNER_LINE_HEIGHT;
         }
     }
+}
+
+/// Captures the mouse for looking around, hiding the pointer, or lets it
+/// go.
+fn capture_mouse(captured: bool) {
+    set_cursor_grab(captured);
+    show_mouse(!captured);
 }
 
 /// Draws a shade behind one line of text at `x`, `width` wide at `size`,

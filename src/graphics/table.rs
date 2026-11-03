@@ -4,9 +4,16 @@
 //! table: a top of planks laid along the shaft, an apron under its edge,
 //! and four square legs reaching down to the cloud or the grid. A shader
 //! draws the wood's grain from each point's place, so the table needs no
-//! texture. Built once and drawn in one call. Drawing only.
+//! texture. Built once and drawn in one call.
+//!
+//! While the first-person figure is dragged over it, the top lights up, a
+//! soft glow with a brighter rim pulsing gently, to show it can be dropped
+//! there. Drawing only.
 
-use macroquad::models::Mesh;
+use macroquad::models::{
+    Mesh,
+    Vertex, //
+};
 use macroquad::prelude::{
     Camera3D,
     Color,
@@ -26,6 +33,7 @@ use super::{
     DRAW_CALL_INDEX_CAPACITY,
     DRAW_CALL_VERTEX_CAPACITY,
     draw_lit,
+    load_clear,
     load_lit, //
 };
 
@@ -85,6 +93,24 @@ void main() {
     gl_FragColor = vec4(wood * (0.42 + 0.6 * diffuse) + vec3(shine), 1.0);
 }"#;
 
+/// Fragment shader for the highlight: its own color, unlit, blended over
+/// the top.
+const HIGHLIGHT_FRAGMENT: &str = r#"#version 100
+precision mediump float;
+
+varying lowp vec4 color;
+varying lowp vec2 uv;
+varying vec3 world;
+varying vec3 surface_normal;
+
+uniform sampler2D Texture;
+uniform vec3 Eye;
+uniform vec3 Light;
+
+void main() {
+    gl_FragColor = color * texture2D(Texture, uv);
+}"#;
+
 /// Half the top's length, along the shaft.
 ///
 /// Sizes are in bore radii, so the table keeps its proportions at any
@@ -117,6 +143,36 @@ const APRON_WOOD: Color = Color::new(0.6, 0.4, 0.24, ALONG_SHAFT);
 /// The legs' wood.
 const LEG_WOOD: Color = Color::new(0.6, 0.4, 0.24, UPRIGHT);
 
+/// The highlight's color; its opacity is set as it glows.
+const HIGHLIGHT_COLOR: Color = Color::new(1.0, 0.92, 0.5, 1.0);
+/// Opacity of the highlight's middle at full glow.
+const HIGHLIGHT_FILL: f32 = 0.42;
+/// Opacity of the highlight's rim at full glow.
+const HIGHLIGHT_RIM: f32 = 0.95;
+/// Width of the highlight's rim, in bore radii.
+const HIGHLIGHT_RIM_WIDTH: f32 = 0.8;
+/// How far above the top the highlight lies, so it never fights the top
+/// for depth: the softened view's 16-bit depth buffer tells surfaces apart
+/// only a few hundredths of a unit apart at the usual distance.
+const HIGHLIGHT_RAISE: f32 = 0.15;
+/// Pulses of the highlight per second.
+const HIGHLIGHT_PULSE_RATE: f32 = 1.4;
+/// How far the pulse dims the highlight at its faintest, as a share.
+const HIGHLIGHT_PULSE: f32 = 0.3;
+/// Seconds the highlight takes to come on or go out.
+const HIGHLIGHT_SECONDS: f32 = 0.15;
+
+/// Whether `point`, seen from above (x, z), is over the table's top under a
+/// block of `shape`.
+pub fn over_top(shape: BlockShape, point: Vec2) -> bool {
+    point.x.abs() <= TOP_HALF_LENGTH * shape.bore && point.y.abs() <= TOP_HALF_DEPTH * shape.bore
+}
+
+/// Height of the table's top surface under a block of `shape`.
+pub fn top_height(shape: BlockShape) -> f32 {
+    shape.base - BELOW_BLOCK
+}
+
 /// Height of the floor the table's legs stand on, under a block of
 /// `shape`.
 pub fn ground(shape: BlockShape) -> f32 {
@@ -138,6 +194,16 @@ pub struct Table {
     /// Made on the first draw (it needs a window); `Some(None)` where it
     /// cannot be built, and the table is drawn in plain colors.
     material: Option<Option<Material>>,
+    /// The highlight over the top: its middle's four corners, then its
+    /// rim's.
+    highlight: Mesh,
+    /// The highlight's see-through material, made on its first draw;
+    /// `Some(None)` where it cannot be built, and the top is not lit.
+    highlight_material: Option<Option<Material>>,
+    /// How strongly the highlight shows, from 0 to 1.
+    glow: f32,
+    /// The clock at the last highlight, if there was one.
+    last_seconds: Option<f64>,
 }
 
 impl Table {
@@ -157,6 +223,50 @@ impl Table {
                 texture: None,
             },
             material: None,
+            highlight: highlight_mesh(shape),
+            highlight_material: None,
+            glow: 0.0,
+            last_seconds: None,
+        }
+    }
+
+    /// Lights the top while `on`, easing in and out, pulsing gently, at
+    /// `seconds` on the clock, seen from `camera`; drawn see-through, right
+    /// after the table and before what stands on it.
+    pub fn draw_highlight(&mut self, on: bool, seconds: f64, camera: &Camera3D) {
+        let dt = self
+            .last_seconds
+            .map_or(0.0, |last| (seconds - last).max(0.0) as f32);
+        self.last_seconds = Some(seconds);
+        let step = dt / HIGHLIGHT_SECONDS;
+        let target = if on { 1.0 } else { 0.0 };
+        self.glow += (target - self.glow).clamp(-step, step);
+        if self.glow <= 0.0 {
+            return;
+        }
+        let pulse = 1.0
+            - HIGHLIGHT_PULSE
+                * (0.5
+                    - 0.5 * (std::f32::consts::TAU * HIGHLIGHT_PULSE_RATE * seconds as f32).cos());
+        let strength = self.glow * pulse;
+        for (index, vertex) in self.highlight.vertices.iter_mut().enumerate() {
+            let opacity = if index < 4 {
+                HIGHLIGHT_FILL
+            } else {
+                HIGHLIGHT_RIM
+            };
+            vertex.color = Color {
+                a: opacity * strength,
+                ..HIGHLIGHT_COLOR
+            }
+            .into();
+        }
+        let material = self
+            .highlight_material
+            .get_or_insert_with(|| load_clear(HIGHLIGHT_FRAGMENT));
+        if let Some(material) = material {
+            let light = key_light(camera.position);
+            draw_lit([&self.highlight], Some(material), camera, light);
         }
     }
 
@@ -177,11 +287,45 @@ impl Table {
     }
 }
 
+/// The highlight over the top of the table under a block of `shape`: a
+/// middle and a rim around it, colored when drawn.
+fn highlight_mesh(shape: BlockShape) -> Mesh {
+    let y = top_height(shape) + HIGHLIGHT_RAISE;
+    let (length, depth) = (TOP_HALF_LENGTH * shape.bore, TOP_HALF_DEPTH * shape.bore);
+    let rim = HIGHLIGHT_RIM_WIDTH * shape.bore;
+    let corners = |x: f32, z: f32| {
+        [
+            vec3(-x, y, -z),
+            vec3(x, y, -z),
+            vec3(x, y, z),
+            vec3(-x, y, z),
+        ]
+    };
+    let inner = corners(length - rim, depth - rim);
+    let outer = corners(length, depth);
+    let vertices: Vec<Vertex> = inner
+        .into_iter()
+        .chain(outer)
+        .map(|position| Vertex::new2(position, Vec2::ZERO, HIGHLIGHT_COLOR))
+        .collect();
+    // The middle, then a band from each inner edge to its outer edge.
+    let mut indices = vec![0, 1, 2, 0, 2, 3];
+    for side in 0..4u16 {
+        let next = (side + 1) % 4;
+        indices.extend([side, next, 4 + next, side, 4 + next, 4 + side]);
+    }
+    Mesh {
+        vertices,
+        indices,
+        texture: None,
+    }
+}
+
 /// The table's top, apron and legs under a block of `shape`.
 fn build(shape: BlockShape) -> Solid {
     let unit = shape.bore;
     let mut solid = Solid::new();
-    let top = shape.base - BELOW_BLOCK;
+    let top = top_height(shape);
     let underside = top - TOP_THICKNESS * unit;
     let (length, depth) = (TOP_HALF_LENGTH * unit, TOP_HALF_DEPTH * unit);
     let middle_y = (top + underside) / 2.0;

@@ -72,8 +72,8 @@ void main() {
     gl_FragColor = vec4(texture2D(Texture, uv).rgb, 1.0);
 }"#;
 
-/// Side of a dither cell, in screen points.
-const DITHER_CELL: f32 = 2.0;
+/// Side of a dither cell for a switch of scenery, in screen points.
+pub const DITHER_CELL: f32 = 2.0;
 
 /// Fragment shader that keeps a share of the view, `Shown`, through a 4x4
 /// ordered dither of square cells `Cell` pixels wide.
@@ -196,11 +196,12 @@ impl SoftView {
     }
 
     /// Lays the view, as last drawn, over a `width` by `height` window at
-    /// `dpi` through the dither, keeping a `shown` share of it, from 0 to 1.
+    /// `dpi` through the dither of cells `cell` points wide, keeping a
+    /// `shown` share of it, from 0 to 1.
     ///
     /// Nothing is drawn where the dither shader cannot be built. The screen
     /// camera must be set.
-    pub fn present_dithered(&mut self, width: f32, height: f32, dpi: f32, shown: f32) {
+    pub fn present_dithered(&mut self, width: f32, height: f32, dpi: f32, cell: f32, shown: f32) {
         let dither = self.dither.get_or_insert_with(|| {
             load_material(
                 ShaderSource::Glsl {
@@ -225,7 +226,7 @@ impl SoftView {
             return;
         };
         dither.set_uniform("Shown", shown);
-        dither.set_uniform("Cell", DITHER_CELL * dpi);
+        dither.set_uniform("Cell", cell * dpi);
         Self::cover(dither, target, width, height);
     }
 

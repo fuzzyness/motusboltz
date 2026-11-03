@@ -59,6 +59,20 @@
           simulation.dispatchEvent(new MouseEvent("mouseup", event));
         }
       });
+      // In first person the mouse is captured. Esc makes the browser let
+      // it go itself, and the key may never reach the canvas, so tell the
+      // simulation Esc was pressed, which opens its menu.
+      let captured = false;
+      document.addEventListener("pointerlockchange", () => {
+        const now = document.pointerLockElement === simulation;
+        if (captured && !now) {
+          for (const type of ["keydown", "keyup"]) {
+            simulation.dispatchEvent(
+              new KeyboardEvent(type, { code: "Escape", key: "Escape" }));
+          }
+        }
+        captured = now;
+      });
       simulation.focus();
     }
   </script>

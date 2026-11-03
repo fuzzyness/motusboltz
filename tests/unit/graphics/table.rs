@@ -57,3 +57,26 @@ fn the_grain_follows_each_part() {
         .collect();
     assert!(!top.is_empty() && top.iter().all(along_shaft));
 }
+
+/// The highlight covers the top just above it, and only the top counts as
+/// a place to drop the figure.
+#[test]
+fn the_highlight_lies_on_the_top() {
+    let shape = BlockShape::new(DEFAULT_GEOMETRY);
+    let mesh = highlight_mesh(shape);
+    for vertex in &mesh.vertices {
+        let point = vertex.position;
+        assert!(point.y > top_height(shape) && point.y < top_height(shape) + 0.5);
+        assert!(over_top(shape, Vec2::new(point.x, point.z)));
+    }
+    assert!(
+        mesh.indices
+            .iter()
+            .all(|&index| (index as usize) < mesh.vertices.len())
+    );
+    assert!(over_top(shape, Vec2::ZERO));
+    assert!(!over_top(
+        shape,
+        Vec2::new(TOP_HALF_LENGTH * shape.bore + 1.0, 0.0)
+    ));
+}
