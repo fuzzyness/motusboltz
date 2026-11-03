@@ -56,6 +56,8 @@ const RIM_WIDTH: f32 = 1.5;
 const TAB_HEIGHT: f32 = 136.0;
 /// Radius of the tab's corners.
 const TAB_RADIUS: f32 = 11.0;
+/// Least height of a tab beside a short card: room for a short word.
+const MIN_TAB_HEIGHT: f32 = 64.0;
 /// Radius of the fillets that join the tab to its card, or to the
 /// window's edge while the drawer is closed.
 const FILLET: f32 = 9.0;
@@ -172,13 +174,20 @@ pub fn reach(card: Rect, edge: Edge, screen_width: f32) -> Rect {
 /// The button of a drawer's `card` at `edge` of a window `screen_width`
 /// wide: against the window's edge, beside the card's outer side, level
 /// with its middle.
+///
+/// Beside a short card, the tab is shorter, so it and its fillets fit
+/// along the straight part of the card's side, clear of its rounded
+/// corners; otherwise the joined outline would run back on itself.
 pub fn tab(card: Rect, edge: Edge, screen_width: f32) -> Rect {
     let x = match edge {
         Edge::Left => 0.0,
         Edge::Right => screen_width - EDGE_TAB_WIDTH,
     };
     let middle = card.center().y;
-    Rect::new(x, middle - TAB_HEIGHT / 2.0, EDGE_TAB_WIDTH, TAB_HEIGHT)
+    let radius = CARD_RADIUS.min(card.w / 2.0).min(card.h / 2.0);
+    let straight = card.h - 2.0 * (radius + FILLET);
+    let height = TAB_HEIGHT.min(straight).max(MIN_TAB_HEIGHT);
+    Rect::new(x, middle - height / 2.0, EDGE_TAB_WIDTH, height)
 }
 
 /// The outline of a drawer's `card` at `edge`, clockwise on screen, joined

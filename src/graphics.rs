@@ -1,7 +1,7 @@
 //! 3D drawing of the particles, tracer trails, cylinders, the opening
-//! between them and the regenerator's screens in it, the pistons, rods,
+//! between them, the pistons, rods,
 //! crankshaft and flywheel, the burner and the liquid-nitrogen coil that
-//! stand for the two reservoirs, the valves that set them, the Pause and
+//! stand for the two reservoirs, the valves that set them, the Reset and
 //! Tracers buttons, the regenerator's cartridge, the table the engine
 //! stands on, and the background.
 //!
@@ -21,7 +21,6 @@ pub mod levels;
 pub mod nitrogen;
 pub mod outline;
 pub mod particles;
-pub mod regenerator;
 pub mod soft_view;
 pub mod solid;
 pub mod sprites;
@@ -86,10 +85,10 @@ use particles::{
     ParticleRenderer,
     camera_light_direction, //
 };
-use regenerator::RegeneratorScreens;
 use soft_view::{
     DITHER_CELL,
-    SoftView, //
+    SoftView,
+    Wave, //
 };
 use sprites::{
     Facing,
@@ -98,6 +97,27 @@ use sprites::{
 use table::Table;
 use trails::TrailRenderer;
 use valves::Valves;
+
+/// How one view dissolves into the next.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Dissolve {
+    /// Seconds it takes.
+    pub seconds: f64,
+    /// Side of the dither's cells, in points.
+    pub cell: f32,
+    /// Whether both views ripple in waves as it goes, most at its middle.
+    pub waves: bool,
+}
+
+/// A switch of scenery's dissolve.
+const SCENERY_DISSOLVE: Dissolve = Dissolve {
+    seconds: SCENERY_DISSOLVE_SECONDS,
+    cell: DITHER_CELL,
+    waves: false,
+};
+/// Period of the waves' clock, in seconds, so the shader's floats stay
+/// precise however long the app runs.
+const WAVE_PERIOD: f64 = 1000.0;
 
 /// Seconds the old scenery takes to dissolve into the new one.
 const SCENERY_DISSOLVE_SECONDS: f64 = 0.35;
@@ -183,8 +203,12 @@ fn load_lit(fragment: &'static str, extra: &[(&str, UniformType)]) -> Option<Mat
 
 /// A see-through material lit per pixel by `fragment`, with the `Eye` and
 /// `Light` uniforms: blended over what is drawn behind it by the alpha the
-/// fragment gives, hidden by what is in front, and hiding nothing drawn
-/// after it. `None` if its shader cannot be built.
+/// fragment gives, and hidden by what is in front. `None` if its shader
+/// cannot be built.
+///
+/// It writes depth too, so it hides what is drawn after it behind it:
+/// Miniquad tests depth only for pipelines that write it, and without the
+/// test, glass and domes showed through the block.
 fn load_clear(fragment: &'static str) -> Option<Material> {
     load_clear_with(fragment, &[])
 }
@@ -198,7 +222,7 @@ fn load_clear_with(fragment: &'static str, extra: &[(&str, UniformType)]) -> Opt
         BlendFactor::OneMinusValue(BlendValue::SourceAlpha),
     );
     let pipeline_params = PipelineParams {
-        depth_write: false,
+        depth_write: true,
         depth_test: Comparison::LessOrEqual,
         color_blend: Some(blend),
         ..Default::default()
@@ -265,8 +289,6 @@ fn shade(color: Color, brightness: f32) -> Color {
 pub struct Scene {
     /// The cylinders and the opening between them.
     chamber: ConnectedChamberVisual,
-    /// The regenerator's screens, drawn while they are in the opening.
-    screens: RegeneratorScreens,
     /// The see-through grid of the grid scenery.
     floor: FloorGrid,
     /// The wooden table the engine stands on.
@@ -286,9 +308,9 @@ pub struct Scene {
     /// How far each valve's wheel is turned from shut, hot first, in
     /// radians counterclockwise seen from above.
     valve_turns: (f32, f32),
-    /// The Pause and Tracers buttons.
+    /// The Reset and Tracers buttons.
     buttons: Buttons,
-    /// Whether Pause and Tracers are on and their buttons held down.
+    /// Whether Reset and Tracers are on and their buttons held down.
     switches: DomeStates,
     /// The regenerator's cartridge, on the table or in the opening.
     cartridge: Cartridge,
@@ -313,11 +335,19 @@ pub struct Scene {
     levels: ReservoirLevels,
     /// The table's top lights up, for dropping the first-person figure.
     highlight: bool,
-    /// A dissolve from the last view to the next asked for: how many
-    /// seconds it takes and how wide its dither's cells are, in points.
-    dissolve: Option<(f64, f32)>,
-    /// Seconds the dissolve under way takes, and its cells' width.
-    dissolve_style: (f64, f32),
+    /// A dissolve from the last view to the next asked for (see
+    /// `Dissolve`).
+    dissolve: Option<Dissolve>,
+    /// The engine is paused, which stills the flames, the sparks and the
+    /// nitrogen's bubbles and smoke.
+    paused: bool,
+    /// The clock the flames, sparks, bubbles and smoke move by: wall time,
+    /// stopped while the engine is paused.
+    effects_seconds: f64,
+    /// The wall clock at the last frame, if there was one.
+    last_seconds: Option<f64>,
+    /// The dissolve under way.
+    dissolve_style: Dissolve,
 }
 
 impl Scene {
@@ -331,7 +361,6 @@ impl Scene {
         };
         Self {
             chamber: ConnectedChamberVisual::new(geometry),
-            screens: RegeneratorScreens::new(geometry, simulation.regenerator().screens()),
             floor: FloorGrid::new(table::ground(shape)),
             table: Table::new(shape),
             assembly: Assembly::new(geometry, simulation.power_pistons()),
@@ -353,8 +382,11 @@ impl Scene {
             scenery: None,
             levels: ReservoirLevels::default(),
             highlight: false,
+            paused: false,
+            effects_seconds: 0.0,
+            last_seconds: None,
             dissolve: None,
-            dissolve_style: (SCENERY_DISSOLVE_SECONDS, DITHER_CELL),
+            dissolve_style: SCENERY_DISSOLVE,
         }
     }
 
@@ -364,11 +396,17 @@ impl Scene {
         self.valve_turns = turns;
     }
 
-    /// Lights the Pause and Tracers buttons while their switches are on
+    /// Lights the Reset and Tracers buttons while their switches are on
     /// and presses them in while held, as `states` says, for the frames to
     /// come.
     pub fn set_switches(&mut self, states: DomeStates) {
         self.switches = states;
+    }
+
+    /// Stills the flames, sparks and nitrogen while `paused`, for the frames
+    /// to come.
+    pub fn set_paused(&mut self, paused: bool) {
+        self.paused = paused;
     }
 
     /// Lights the table's top while `on`, for the frames to come.
@@ -379,8 +417,8 @@ impl Scene {
     /// Dissolves the view as last drawn into the next one over `seconds`
     /// through the dither, as a switch of scenery does, with cells `cell`
     /// points wide.
-    pub fn dissolve(&mut self, seconds: f64, cell: f32) {
-        self.dissolve = Some((seconds, cell));
+    pub fn dissolve(&mut self, style: Dissolve) {
+        self.dissolve = Some(style);
     }
 
     /// Draws the background and the engine for one frame, and leaves the
@@ -401,10 +439,7 @@ impl Scene {
             Some((shown, _)) if shown != scenery || self.dissolve.is_some() => {
                 std::mem::swap(&mut self.soft, &mut self.previous);
                 self.scenery = Some((scenery, seconds));
-                self.dissolve_style = self
-                    .dissolve
-                    .take()
-                    .unwrap_or((SCENERY_DISSOLVE_SECONDS, DITHER_CELL));
+                self.dissolve_style = self.dissolve.take().unwrap_or(SCENERY_DISSOLVE);
             }
             None => self.scenery = Some((scenery, f64::NEG_INFINITY)),
             Some(_) => {}
@@ -440,13 +475,22 @@ impl Scene {
         };
         self.draw(simulation, &camera, scenery, fade, seconds);
         draw_to_screen();
-        self.soft.present(width, height);
         let since = self.scenery.map_or(f64::INFINITY, |(_, at)| seconds - at);
-        let (length, cell) = self.dissolve_style;
-        let dissolved = (since / length) as f32;
+        let style = self.dissolve_style;
+        let dissolved = (since / style.seconds) as f32;
+        // Waves swell and settle over the dissolve, strongest halfway.
+        let wave = Wave {
+            strength: if style.waves && dissolved < 1.0 {
+                (std::f32::consts::PI * dissolved).sin()
+            } else {
+                0.0
+            },
+            time: (seconds % WAVE_PERIOD) as f32,
+        };
+        self.soft.present(width, height, wave);
         if dissolved < 1.0 {
             self.previous
-                .present_dithered(width, height, dpi, cell, 1.0 - dissolved);
+                .present_dithered(width, height, dpi, style.cell, 1.0 - dissolved, wave);
         }
     }
 
@@ -465,22 +509,22 @@ impl Scene {
     ) {
         let facing = Facing::toward(camera);
         let light = camera_light_direction(camera);
-        self.fire.build(self.levels.heat, seconds, facing);
-        self.nitrogen.build(self.levels.cold, seconds, facing);
-        self.heat_sparks.build(simulation, camera, seconds);
+        // The effects' clock stands still while the engine is paused.
+        let step = self
+            .last_seconds
+            .map_or(0.0, |last| (seconds - last).max(0.0));
+        self.last_seconds = Some(seconds);
+        if !self.paused {
+            self.effects_seconds += step;
+        }
+        let effects = self.effects_seconds;
+        self.fire.build(self.levels.heat, effects, facing);
+        self.nitrogen
+            .build(self.levels.cold, effects, facing, camera.position);
+        self.heat_sparks.build(simulation, camera, effects);
         self.cartridge
             .follow(simulation.regenerator().is_enabled(), seconds);
-        // The screens show once the cartridge is seated in the opening.
-        let seated = self.cartridge.seated();
         self.chamber.draw(camera);
-        if seated {
-            self.screens.draw(
-                simulation.regenerator(),
-                simulation.hot_kelvin(),
-                simulation.cold_kelvin(),
-                camera,
-            );
-        }
         self.fire.draw_burner();
         self.table.draw(camera);
         // Lit right over the table, before what stands on it, which then
@@ -493,11 +537,9 @@ impl Scene {
             self.cloud.draw(camera, light);
         }
         self.particles.draw(simulation, camera, background);
-        // The screens show faintly through the gas, but not through the
-        // pistons, which come after.
-        if seated {
-            self.screens.draw_ghost(simulation.regenerator(), camera);
-        }
+        // The seated cartridge shows faintly through the gas, but not
+        // through the pistons, which come after.
+        self.cartridge.draw_ghost();
         self.assembly.draw(simulation.power_pistons(), camera);
         // The coil after everything solid, which shows through it.
         self.nitrogen.draw_coil(camera);

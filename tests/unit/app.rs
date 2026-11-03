@@ -1,15 +1,10 @@
-//! Tests for `src/app.rs`: the build label, the first camera view and the
-//! fill presets.
+//! Tests for `src/app.rs`: the build label and the first camera view.
 
 use super::*;
 use crate::graphics::assembly::flywheel_radius;
 use crate::sim::engine::PARTICLE_RADIUS;
 use crate::sim::geometry::DEFAULT_GEOMETRY;
 use crate::sim::pistons::PowerPistons;
-use crate::sim::units::{
-    MAX_PARTICLES,
-    MIN_PARTICLES, //
-};
 use macroquad::prelude::{
     Mat4,
     Vec3,
@@ -78,19 +73,4 @@ fn initial_camera_frames_the_engine_in_the_clear_span() {
             }
         }
     }
-}
-
-#[test]
-fn fill_presets_span_the_particle_range() {
-    let counts: Vec<usize> = CONCENTRATION_PRESETS
-        .iter()
-        .map(|&concentration| {
-            ConnectedChambers::with_concentration(concentration)
-                .particles
-                .len()
-        })
-        .collect();
-    assert_eq!(counts.first(), Some(&MIN_PARTICLES));
-    assert_eq!(counts.last(), Some(&MAX_PARTICLES));
-    assert!(counts.windows(2).all(|pair| pair[0] < pair[1]));
 }

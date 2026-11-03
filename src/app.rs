@@ -11,10 +11,16 @@
 //! warning when physics time is dropped.
 //!
 //! In first person, the frame turns the figure's head with the captured
-//! mouse instead, draws the scene from its eyes with only a crosshair over
-//! it, and opens the menu on Esc.
+//! mouse instead, and draws the scene from its eyes with only a crosshair
+//! over it.
+//!
+//! In either view Esc opens the menu (see `menu`), which takes the mouse
+//! while the scene runs on behind it.
 
-use macroquad::miniquad::date;
+use macroquad::miniquad::{
+    date,
+    window, //
+};
 use std::f32::consts::TAU;
 
 use macroquad::prelude::{
@@ -56,6 +62,7 @@ use crate::graphics::cartridge;
 use crate::graphics::table;
 use crate::graphics::valves::valve_wheels;
 use crate::graphics::{
+    Dissolve,
     Scene,
     Scenery, //
 };
@@ -63,11 +70,7 @@ use crate::sim::engine::ConnectedChambers;
 use crate::sim::geometry::ChamberGeometry;
 use crate::sim::pistons::FORWARD;
 use crate::sim::reservoir::ReservoirSide;
-use crate::sim::units::{
-    DEFAULT_CONCENTRATION,
-    MAX_CONCENTRATION,
-    MIN_CONCENTRATION, //
-};
+use crate::sim::units::DEFAULT_CONCENTRATION;
 use crate::ui::camera::{
     OrbitCamera,
     Pointer, //
@@ -96,11 +99,15 @@ use crate::ui::draw_target::{
 use crate::ui::drawer::{
     self,
     Edge,
-    Slide, //
+    Slide,
+    TabLook, //
 };
 use crate::ui::energy_strip;
 use crate::ui::figure::{self, Drag};
-use crate::ui::first_person::{self, Choice, Walker};
+use crate::ui::first_person::{
+    self,
+    Walker, //
+};
 use crate::ui::fonts;
 use crate::ui::frame_stats::{
     FrameStats,
@@ -130,7 +137,13 @@ use crate::ui::layout::{
     scene_left,
     scene_span, //
 };
+use crate::ui::menu::{
+    Item,
+    Menu,
+    Outcome, //
+};
 use crate::ui::motion;
+use crate::ui::page;
 use crate::ui::panel::{
     EnginePanel,
     PanelPointer, //
@@ -176,14 +189,6 @@ const BACKING_HEIGHT_SHARE: f32 = 1.35;
 const WARNING_COLOR: Color = Color::from_rgba(255, 130, 110, 255);
 /// Clock resolution used for the startup seed, in ticks per second.
 const SEED_TICKS_PER_SECOND: f64 = 1.0e6;
-/// Fills chosen with keys 1 to 5: 256, 512, 1,024, 1,536 and 2,048 particles.
-const CONCENTRATION_PRESETS: [f32; 5] = [
-    MIN_CONCENTRATION,
-    0.25,
-    DEFAULT_CONCENTRATION,
-    0.75,
-    MAX_CONCENTRATION,
-];
 /// Longest frame time the camera keys act over, so a stalled frame does
 /// not swing the view.
 const MAX_CAMERA_DT: f32 = 0.1;
@@ -194,12 +199,15 @@ const MAX_CAMERA_DT: f32 = 0.1;
 const SLOW_MOTION_FACTOR: f32 = 0.25;
 /// How many particles tracers follow: enough to catch both cylinders and the
 /// opening, few enough to follow by eye.
-const FOLLOWED_PARTICLES: usize = 5;
+const FOLLOWED_PARTICLES: usize = 6;
 /// Longest frame time the animations step over, so a stalled frame does
 /// not skip one.
 const MAX_ANIMATION_DT: f32 = 0.1;
 /// Seconds the labels take to grow out of their dots or shrink into them.
 const LABELS_SECONDS: f32 = 0.3;
+/// Seconds after the regenerator is taken out before the cartridge's label
+/// may show: its trip back to the table, and a short pause once it lands.
+const CARTRIDGE_TAG_DELAY: f32 = cartridge::TRIP_SECONDS + 0.5;
 /// Seconds a stuck drawer's glow takes to fade in or out.
 const GLOW_SECONDS: f32 = 0.4;
 /// Seconds the keys list takes to grow out of the Keys toggle or shrink
@@ -207,21 +215,20 @@ const GLOW_SECONDS: f32 = 0.4;
 const KEYS_SECONDS: f32 = 0.2;
 /// Seconds the Demos menu takes to drop all its items or fold them back.
 const MENU_SECONDS: f32 = 0.3;
-/// Seconds a demo's banner takes to sweep in from the window's right edge,
-/// bounce and all.
-const BANNER_SWEEP_SECONDS: f32 = 0.5;
-/// How far the banner overshoots its place (see `motion::bounce`).
-const BANNER_OVERSHOOT: f32 = 1.2;
-/// Seconds into the sweep when the banner's words start to fade in.
+/// Seconds into the banner's slide when its words start to fade in.
 const BANNER_WORDS_DELAY: f32 = 0.25;
+/// The banner's tab's word.
+const BANNER_TAB: &str = "Demo";
 /// Seconds the banner's words take to fade in.
 const BANNER_FADE_SECONDS: f32 = 0.4;
-/// Seconds the view takes to dissolve into first person or back out.
-const FIRST_PERSON_DISSOLVE_SECONDS: f64 = 0.75;
-/// Side of the dither's cells for that dissolve, in points: a quarter
-/// chunkier than a switch of scenery's.
-const FIRST_PERSON_DITHER_CELL: f32 = 2.5;
-/// The key that opens the first-person menu.
+/// How the view dissolves into first person or back out: a little slower
+/// and chunkier than a switch of scenery, rippling in waves.
+const FIRST_PERSON_DISSOLVE: Dissolve = Dissolve {
+    seconds: 0.80,
+    cell: 2.5,
+    waves: true,
+};
+/// The key that opens the menu.
 const MENU_KEY: KeyCode = KeyCode::Escape;
 /// Extra zoom-out so the cylinders, crank and flywheel all fit the first view.
 const CAMERA_FRAMING_MARGIN: f32 = 1.42;
@@ -266,6 +273,8 @@ struct App {
     drag: Option<Drag>,
     /// The figure standing on the table, while the view is its own.
     walker: Option<Walker>,
+    /// The menu Esc opens.
+    menu: Menu,
     /// The crank, valve, button or cartridge held with the mouse, if any.
     grab: Option<Grab>,
     /// The simulation is paused.
@@ -284,10 +293,20 @@ struct App {
     /// The demo set up last, until a slider or a new fill changes its
     /// settings.
     demo: Option<Scenario>,
-    /// Seconds since the demo was set up, which sweep its banner in.
+    /// Seconds since the demo was set up, which fade its banner's words in.
     demo_age: f32,
-    /// How far the labels have grown out of their dots, from 0 to 1.
-    labels_grown: f32,
+    /// The demo's banner is open; its tab at the window's right edge opens
+    /// and closes it, as the other drawers' do.
+    show_banner: bool,
+    /// The banner's slide out of the right edge.
+    banner_slide: Slide,
+    /// The banner's card as last drawn, open, if there is a demo.
+    banner_card: Option<Rect>,
+    /// How far each label has grown out of its dot, from 0 to 1, by key.
+    tag_grown: Vec<(&'static str, f32)>,
+    /// Seconds since the regenerator was last taken out, which the
+    /// cartridge's label waits for (see `CARTRIDGE_TAG_DELAY`).
+    cartridge_out: f32,
     /// How far each label has been moved aside to clear the others, eased.
     tag_shifts: scene_labels::Shifts,
     /// How far the keys list has grown out of its toggle, from 0 to 1.
@@ -302,6 +321,8 @@ struct App {
     panel_glow: f32,
     /// The same for the slider column.
     sliders_glow: f32,
+    /// The same for the demo's banner.
+    banner_glow: f32,
     /// The sky with a cloud to stand on, or the dark grid.
     scenery: Scenery,
     /// When Start shows.
@@ -337,8 +358,10 @@ impl App {
         Self {
             panel: EnginePanel::new(),
             panel_layer: CachedLayer::new(),
-            show_panel: true,
-            show_sliders: true,
+            // The readings and the settings start tucked away, so the engine
+            // has the window; their tabs bring them out.
+            show_panel: false,
+            show_sliders: false,
             hide_all: false,
             camera: initial_camera(simulation.geometry()),
             scene: Scene::new(&simulation),
@@ -351,18 +374,25 @@ impl App {
             slow: false,
             tracers: false,
             show_keys: false,
-            show_labels: true,
+            // The labels start off: each shows while its part is under the
+            // pointer, and Labels shows them all.
+            show_labels: false,
             show_demos: false,
             demo: Some(FIRST_DEMO),
             demo_age: 0.0,
-            labels_grown: 1.0,
+            show_banner: true,
+            banner_slide: Slide::new(true),
+            banner_card: None,
+            tag_grown: Vec::new(),
+            cartridge_out: CARTRIDGE_TAG_DELAY,
             tag_shifts: scene_labels::Shifts::default(),
             keys_grown: 0.0,
             menu_dropped: 0.0,
-            panel_slide: Slide::new(true),
-            sliders_slide: Slide::new(true),
-            panel_glow: 1.0,
-            sliders_glow: 1.0,
+            panel_slide: Slide::new(false),
+            sliders_slide: Slide::new(false),
+            panel_glow: 0.0,
+            banner_glow: 0.0,
+            sliders_glow: 0.0,
             scenery: Scenery::default(),
             start_prompt: StartPrompt::new(),
             frame_stats: FrameStats::new(),
@@ -370,6 +400,7 @@ impl App {
             grab: None,
             drag: None,
             walker: None,
+            menu: Menu::default(),
             simulation,
         }
     }
@@ -404,6 +435,25 @@ impl App {
                 drawer::slide_distance(sliders, Edge::Right, width),
             ),
         )
+    }
+
+    /// Opens or closes the demo's banner when its tab is clicked at
+    /// `pointer`, and returns whether the pointer is over the tab or the
+    /// shown banner, where it should not turn the camera.
+    fn use_banner_tab(&mut self, pointer: Vec2) -> bool {
+        let width = screen_width();
+        let Some(card) = self
+            .banner_card
+            .filter(|_| self.demo.is_some() && !self.hide_all)
+        else {
+            return false;
+        };
+        let on_tab = drawer::tab(card, Edge::Right, width).contains(pointer);
+        if on_tab && is_mouse_button_pressed(MouseButton::Left) {
+            self.show_banner = !self.show_banner;
+        }
+        let on_card = self.banner_slide.shown() && card.contains(pointer);
+        on_tab || on_card
     }
 
     /// Whether `pointer` is over a drawer that is all the way out, where
@@ -469,8 +519,23 @@ impl App {
     /// Runs one frame: input, simulation, camera and drawing.
     fn frame(&mut self) {
         let keys = KeyCommands::read();
+        // Esc opens the menu; while it is open, it has the mouse.
+        if self.menu.open {
+            self.use_menu();
+        } else if is_key_pressed(MENU_KEY) {
+            self.open_menu();
+        }
+        self.menu.animate(get_frame_time().min(MAX_ANIMATION_DT));
         if self.walker.is_some() {
             self.first_person_frame(keys);
+            return;
+        }
+        if self.menu.open {
+            // The scene runs on behind it.
+            let dt = get_frame_time().min(MAX_ANIMATION_DT);
+            self.animate(dt);
+            self.step();
+            self.draw();
             return;
         }
         let wheel = wheel_pixels();
@@ -486,8 +551,11 @@ impl App {
                 pressed: is_mouse_button_pressed(MouseButton::Left),
                 down: is_mouse_button_down(MouseButton::Left),
             });
-        let over_controls =
-            self.controls.blocks_camera() || panel_blocks || self.over_drawer(pointer);
+        let over_banner = self.use_banner_tab(pointer);
+        let over_controls = self.controls.blocks_camera()
+            || panel_blocks
+            || self.over_drawer(pointer)
+            || over_banner;
         let button = (
             is_mouse_button_down(MouseButton::Left),
             is_mouse_button_pressed(MouseButton::Left),
@@ -513,47 +581,78 @@ impl App {
     }
 
     /// Runs one frame in first person: the head turns with the captured
-    /// mouse, or the menu takes it while open; the keys still act, and the
-    /// engine runs on.
+    /// mouse and the keys act as ever, unless the menu is open; the engine
+    /// runs on either way.
     fn first_person_frame(&mut self, keys: KeyCommands) {
         let Some(mut walker) = self.walker else {
             return;
         };
         let dt = get_frame_time().min(MAX_ANIMATION_DT);
         let pointer = Vec2::from(mouse_position());
-        let (width, height) = (screen_width(), screen_height().max(1.0));
-        if walker.menu {
-            if is_mouse_button_pressed(MouseButton::Left) {
-                match first_person::menu_choice(width, height, pointer) {
-                    Some(Choice::Resume) => {
-                        walker.close_menu();
-                        capture_mouse(true);
-                    }
-                    Some(Choice::Exit) => {
-                        self.leave_first_person();
-                        return;
-                    }
-                    None => {}
-                }
-            }
-        } else if is_key_pressed(MENU_KEY) {
-            walker.open_menu();
-            capture_mouse(false);
-        } else {
-            walker.look(pointer);
+        let size = vec2(screen_width(), screen_height().max(1.0));
+        if !self.menu.open {
+            walker.look(pointer, self.menu.sensitivity);
+            self.apply(keys, ControlEvents::default());
+            // In the browser, a click captures the mouse again if it was
+            // let go (see `use_menu`).
+            page::arm_capture(true);
         }
         self.walker = Some(walker);
-        self.apply(keys, ControlEvents::default());
         self.animate(dt);
         self.step();
         let camera = walker.camera();
         self.render_scene(&camera);
         for pen in [&mut Pen::warm(), &mut Pen::screen()] {
-            first_person::draw_view(pen, width, height);
-            if walker.menu {
-                first_person::draw_menu(pen, width, height, pointer);
-            }
+            first_person::draw_view(pen, size.x, size.y);
+            self.menu.draw(pen, size, pointer, true);
         }
+    }
+
+    /// Opens the menu; in first person, lets the mouse go.
+    fn open_menu(&mut self) {
+        self.menu.open();
+        if let Some(walker) = self.walker.as_mut() {
+            walker.release();
+            capture_mouse(false);
+        }
+    }
+
+    /// Takes the mouse for the open menu this frame and carries out what is
+    /// pressed in it. Esc closes it too.
+    fn use_menu(&mut self) {
+        let first_person = self.walker.is_some();
+        let pointer = Vec2::from(mouse_position());
+        let size = vec2(screen_width(), screen_height().max(1.0));
+        let button = (
+            is_mouse_button_down(MouseButton::Left),
+            is_mouse_button_pressed(MouseButton::Left),
+        );
+        let outcome = if is_key_pressed(MENU_KEY) {
+            Some(Outcome::Resume)
+        } else {
+            self.menu.handle(pointer, button, size, first_person)
+        };
+        match outcome {
+            Some(Outcome::ExitFirstPerson) => {
+                self.menu.close();
+                self.leave_first_person();
+            }
+            Some(Outcome::Resume) => {
+                self.menu.close();
+                if first_person {
+                    capture_mouse(true);
+                }
+            }
+            Some(Outcome::ExitSimulation) => window::order_quit(),
+            None => {}
+        }
+        // In the browser, a press on Resume must capture the mouse from the
+        // page's own handler of it (see `page`); so must any click on the
+        // view in first person with the menu closed, in case the mouse was
+        // let go (Esc closing the menu cannot capture it).
+        let over_resume =
+            self.menu.item_at(size.x, size.y, first_person, pointer) == Some(Item::Resume);
+        page::arm_capture(self.walker.is_some() && (!self.menu.open || over_resume));
     }
 
     /// Picks up the figure pressed in its button at `pointer`, swings it
@@ -578,6 +677,9 @@ impl App {
         drag.follow(pointer, dt);
         let over = self.over_table(pointer);
         self.scene.set_highlight(over && down);
+        // In the browser, the release must capture the mouse from the
+        // page's own handler of it (see `page`).
+        page::arm_capture(over && down);
         if down {
             self.drag = Some(drag);
         } else {
@@ -606,17 +708,25 @@ impl App {
         let shape = BlockShape::new(self.simulation.geometry());
         self.walker = Some(Walker::standing(shape));
         self.grab = None;
+        // The keys list and the Demos menu belong to the orbit view; they
+        // are put away rather than found still open on the way back.
+        self.show_keys = false;
+        self.show_demos = false;
         self.scene.set_highlight(false);
-        self.scene
-            .dissolve(FIRST_PERSON_DISSOLVE_SECONDS, FIRST_PERSON_DITHER_CELL);
+        self.scene.dissolve(FIRST_PERSON_DISSOLVE);
+        page::set_first_person(true);
+        page::arm_capture(false);
         capture_mouse(true);
     }
 
     /// Dissolves back to the orbit view as it was left, and frees the mouse.
     fn leave_first_person(&mut self) {
         self.walker = None;
-        self.scene
-            .dissolve(FIRST_PERSON_DISSOLVE_SECONDS, FIRST_PERSON_DITHER_CELL);
+        // Told first, so the page does not take the mouse let go below for
+        // a wish to open the menu.
+        page::set_first_person(false);
+        page::arm_capture(false);
+        self.scene.dissolve(FIRST_PERSON_DISSOLVE);
         capture_mouse(false);
     }
 
@@ -690,28 +800,18 @@ impl App {
         if keys.camera_reset {
             self.camera.reset();
         }
-        // E flips the switch as a click would.
-        let regenerator = events.regenerator.or_else(|| {
-            keys.regenerator
-                .then(|| !self.simulation.regenerator().is_enabled())
-        });
+        // E puts the regenerator's cartridge in or takes it out.
+        let regenerator = keys
+            .regenerator
+            .then(|| !self.simulation.regenerator().is_enabled());
         if let Some(on) = regenerator {
             self.simulation.set_regenerator(on);
-            self.controls.set_regenerator(on);
         }
         // A new fill, temperature or regenerator ends the demo, whose banner
         // would no longer be true.
         let changed = [events.concentration, events.hot_kelvin, events.cold_kelvin];
-        if keys.fill_preset.is_some()
-            || changed.iter().any(Option::is_some)
-            || regenerator.is_some()
-        {
+        if changed.iter().any(Option::is_some) || regenerator.is_some() {
             self.demo = None;
-        }
-        if let Some(preset) = keys.fill_preset {
-            let concentration = CONCENTRATION_PRESETS[preset];
-            self.simulation.set_concentration(concentration);
-            self.controls.set_concentration(concentration);
         }
         if let Some(concentration) = events.concentration {
             self.simulation.set_concentration(concentration);
@@ -745,7 +845,7 @@ impl App {
         let shape = BlockShape::new(geometry);
         let wheels = valve_wheels(shape);
         if self.grab.is_none() && pressed && !over_controls {
-            let [pause, tracers] = button_boxes(shape);
+            let [reset, tracers] = button_boxes(shape);
             let cartridge = if self.simulation.regenerator().is_enabled() {
                 cartridge::seat(shape)
             } else {
@@ -755,7 +855,7 @@ impl App {
                 (Handle::Crank, crank.handle(pistons.angle())),
                 (Handle::Valve(ReservoirSide::Hot), wheels[0].center),
                 (Handle::Valve(ReservoirSide::Cold), wheels[1].center),
-                (Handle::PauseButton, pause.dome_top()),
+                (Handle::ResetButton, reset.dome_top()),
                 (Handle::TracersButton, tracers.dome_top()),
                 (Handle::Cartridge, cartridge),
             ];
@@ -805,22 +905,24 @@ impl App {
             }
             // Pressed once when grabbed; held, they only keep the camera
             // still.
-            Handle::PauseButton | Handle::TracersButton | Handle::Cartridge => {}
+            Handle::ResetButton | Handle::TracersButton | Handle::Cartridge => {}
         }
         self.grab = Some(grab);
     }
 
-    /// Does what pressing `handle` does: a button flips its switch, as its
-    /// key would, and the cartridge puts the regenerator in or takes it
-    /// out, as its switch would.
+    /// Does what pressing `handle` does: Reset refills the gas and Tracers
+    /// turns the tracers on or off, as their keys would, and the cartridge
+    /// puts the regenerator in or takes it out, as E would.
     fn press(&mut self, handle: Handle) {
         match handle {
-            Handle::PauseButton => self.paused = !self.paused,
+            Handle::ResetButton => {
+                self.simulation.reset();
+                self.controls.press(Action::ResetGas);
+            }
             Handle::TracersButton => self.toggle_tracers(),
             Handle::Cartridge => {
                 let on = !self.simulation.regenerator().is_enabled();
                 self.simulation.set_regenerator(on);
-                self.controls.set_regenerator(on);
                 // The demo's banner would no longer be true.
                 self.demo = None;
             }
@@ -847,11 +949,11 @@ impl App {
         self.simulation.set_regenerator(scenario.regenerator());
         self.simulation.reset();
         self.controls.set_kelvin(hot_kelvin, cold_kelvin);
-        self.controls.set_regenerator(scenario.regenerator());
         self.paused = false;
         self.show_demos = false;
         self.demo = Some(scenario);
         self.demo_age = 0.0;
+        self.show_banner = true;
     }
 
     /// Moves the overlays' animations on by `dt` seconds of wall time: the
@@ -889,12 +991,69 @@ impl App {
         );
         self.panel_glow = motion::advance(self.panel_glow, stuck.0, dt, GLOW_SECONDS);
         self.sliders_glow = motion::advance(self.sliders_glow, stuck.1, dt, GLOW_SECONDS);
-        let labels = self.show_labels && !self.show_demos;
-        self.labels_grown = motion::advance(self.labels_grown, labels, dt, LABELS_SECONDS);
+        self.cartridge_out = if self.simulation.regenerator().is_enabled() {
+            0.0
+        } else {
+            self.cartridge_out + dt
+        };
+        self.grow_labels(pointer, dt);
         self.keys_grown = motion::advance(self.keys_grown, self.show_keys, dt, KEYS_SECONDS);
         self.menu_dropped = motion::advance(self.menu_dropped, self.show_demos, dt, MENU_SECONDS);
         self.demo_age += dt;
         self.tag_shifts.tick(dt);
+        let banner = self.banner_card.filter(|_| self.demo.is_some() && shown);
+        let (on_tab, on_card) = banner.map_or((false, false), |card| {
+            (
+                drawer::tab(card, Edge::Right, width).contains(pointer),
+                drawer::reach(card, Edge::Right, width).contains(pointer),
+            )
+        });
+        self.banner_slide
+            .update(self.show_banner, on_tab, on_card, held, dt);
+        let stuck = self.show_banner && self.banner_slide.settled_out();
+        self.banner_glow = motion::advance(self.banner_glow, stuck, dt, GLOW_SECONDS);
+    }
+
+    /// How far the label keyed `key` has grown out of its dot.
+    fn tag_growth(&self, key: &str) -> f32 {
+        self.tag_grown
+            .iter()
+            .find(|(seen, _)| *seen == key)
+            .map_or(0.0, |&(_, grown)| grown)
+    }
+
+    /// Grows each label out of its dot, or shrinks it back, over `dt`
+    /// seconds: all of them while Labels is on, and otherwise the label of
+    /// the part under `pointer`, while the pointer is free over the scene.
+    /// The Demos menu puts them all away.
+    fn grow_labels(&mut self, pointer: Vec2, dt: f32) {
+        let tags = scene_labels::tags(&self.simulation);
+        let free = self.walker.is_none()
+            && !self.menu.open
+            && self.drag.is_none()
+            && self.grab.is_none()
+            && !self.hide_all
+            && !self.controls.blocks_camera()
+            && !self.over_drawer(pointer);
+        let size = vec2(screen_width(), screen_height().max(1.0));
+        let hovered = if free {
+            scene_labels::hovered(&tags, self.camera.camera().matrix(), size, pointer)
+        } else {
+            vec![false; tags.len()]
+        };
+        self.tag_grown = tags
+            .iter()
+            .zip(hovered)
+            .map(|(tag, hovered)| {
+                let shown = (self.show_labels || hovered) && !self.show_demos;
+                // The cartridge's tag waits until it is back on the table.
+                let landed = tag.key != scene_labels::CARTRIDGE_KEY
+                    || self.cartridge_out >= CARTRIDGE_TAG_DELAY;
+                let grown = self.tag_growth(tag.key);
+                let shown = shown && landed;
+                (tag.key, motion::advance(grown, shown, dt, LABELS_SECONDS))
+            })
+            .collect();
     }
 
     /// Steps the simulation by this frame's time and updates what follows
@@ -940,6 +1099,13 @@ impl App {
         let view = camera.matrix();
         self.draw_overlay(&mut Pen::warm(), area, view, panel_stale);
         self.draw_overlay(&mut Pen::screen(), area, view, panel_stale);
+        if self.menu.visible() {
+            let pointer = Vec2::from(mouse_position());
+            let size = vec2(area.window_width, area.height);
+            for pen in [&mut Pen::warm(), &mut Pen::screen()] {
+                self.menu.draw(pen, size, pointer, false);
+            }
+        }
     }
 
     /// Draws the scene seen from `camera`, the valves, buttons and table as
@@ -950,9 +1116,10 @@ impl App {
             valve_turn(ReservoirSide::Cold, self.settings.1),
         ));
         let held = |handle| self.grab.is_some_and(|grab| grab.handle == handle);
+        self.scene.set_paused(self.paused);
         self.scene.set_switches(DomeStates {
-            on: [self.paused, self.tracers],
-            held: [held(Handle::PauseButton), held(Handle::TracersButton)],
+            on: [false, self.tracers],
+            held: [held(Handle::ResetButton), held(Handle::TracersButton)],
         });
         self.scene.render(&self.simulation, camera, self.scenery);
     }
@@ -989,11 +1156,15 @@ impl App {
         let in_column = strip.filter(|card| card.x == column.x);
         let banner_bottom = in_column.map_or(floor, |card| card.y - STACK_GAP);
         let banner = demo.map(|demo| demos::banner(pen, width, demo, start, banner_bottom));
-        if self.labels_grown > 0.0 && shown {
-            let cards: Vec<Rect> = banner.into_iter().chain(strip).collect();
-            let grown = motion::smooth(self.labels_grown);
+        let grown: Vec<f32> = scene_labels::tags(&self.simulation)
+            .iter()
+            .map(|tag| motion::smooth(self.tag_growth(tag.key)))
+            .collect();
+        if grown.iter().any(|&grown| grown > 0.0) && shown {
+            let open_banner = banner.filter(|_| self.banner_slide.shown());
+            let cards: Vec<Rect> = open_banner.into_iter().chain(strip).collect();
             let (simulation, shifts) = (&self.simulation, &mut self.tag_shifts);
-            scene_labels::draw(pen, simulation, view, area, &cards, grown, shifts);
+            scene_labels::draw(pen, simulation, view, area, &cards, &grown, shifts);
         }
         let (panel_shift, sliders_shift) = self.drawer_shifts(width, area.height);
         if let Some(shift) = panel_shift.filter(|_| shown) {
@@ -1048,14 +1219,33 @@ impl App {
             backing(pen, label_right - width, label_y, width, size);
         }
         pen.text_right(BUILD_LABEL, label_right, label_y, size, BUILD_LABEL_COLOR);
-        if let Some(demo) = self.demo {
-            // Like a game's text box, it sweeps in from the right with a
-            // slight bounce, then its words fade in.
-            let age = self.demo_age;
-            let swept = motion::bounce(age / BANNER_SWEEP_SECONDS, BANNER_OVERSHOOT);
-            let shift = (1.0 - swept) * (width - column.x);
-            let fade = motion::smooth((age - BANNER_WORDS_DELAY) / BANNER_FADE_SECONDS);
-            demos::draw_banner(pen, width, demo, start, fade, banner_bottom, shift);
+        if let (Some(demo), Some(card)) = (self.demo, banner) {
+            // A drawer at the right edge: it slides out with its words
+            // fading in, and its tab there closes it or brings it back.
+            if !pen.is_warming() {
+                self.banner_card = Some(card);
+            }
+            let distance = drawer::slide_distance(card, Edge::Right, width);
+            let tab = drawer::tab(card, Edge::Right, width);
+            let shift = self.banner_slide.shift(Edge::Right, distance);
+            if let Some(shift) = shift {
+                let placed = Rect {
+                    x: card.x + shift,
+                    ..card
+                };
+                let joined = (shift == 0.0).then_some(tab);
+                drawer::draw_card(pen, placed, Edge::Right, joined);
+                let fade =
+                    motion::smooth((self.demo_age - BANNER_WORDS_DELAY) / BANNER_FADE_SECONDS);
+                demos::draw_banner(pen, width, demo, start, fade, banner_bottom, shift);
+            }
+            let look = TabLook {
+                glow: motion::smooth(self.banner_glow),
+                joined: (shift == Some(0.0)).then_some(card),
+            };
+            drawer::draw_tab(pen, tab, Edge::Right, width, BANNER_TAB, "", look);
+        } else if !pen.is_warming() {
+            self.banner_card = None;
         }
         self.draw_readout(pen, &readout, column, readout_bottom);
         // The keys list grows down out of the Keys toggle.

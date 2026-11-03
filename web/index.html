@@ -37,10 +37,6 @@
     <figure class="engine" data-engaged="false">
       <div class="engine-frame">
         <canvas id="glcanvas" tabindex="0" aria-label="Stirling engine simulation"></canvas>
-        <button class="engine-cover" type="button">
-          <span class="engine-cover-main">Click to use the engine</span>
-          <span class="engine-cover-sub">Then press Space to start it</span>
-        </button>
         <div class="engine-narrow" hidden>
           <p>The engine needs a wider screen, like a laptop or desktop. Everything below works on any
             screen.</p>
@@ -48,8 +44,8 @@
         </div>
       </div>
       <figcaption>
-        <span>While the engine is selected, the mouse wheel zooms the view. Press Esc or click outside
-          the engine to scroll the page.</span>
+        <span>Click the engine to use its keys and to zoom with the mouse wheel; click outside it to
+          scroll the page. Esc opens the engine's menu.</span>
         <a href="engine.html" target="_blank" rel="noopener">Open the engine in its own window</a>
       </figcaption>
     </figure>
@@ -635,6 +631,7 @@
   </footer>
 
   <script src="gl.js"></script>
+  <script src="bridge.js"></script>
   <script src="page.js"></script>
 </body>
 

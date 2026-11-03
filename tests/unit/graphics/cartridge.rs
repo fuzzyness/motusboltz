@@ -54,3 +54,20 @@ fn it_follows_the_regenerator_over_time() {
     assert!(cartridge.seated());
     assert!(Cartridge::build(shape, true).seated());
 }
+
+/// Seated, it fills the opening's length through the shared wall, inside
+/// the opening's radius: the same cartridge as on the table.
+#[test]
+fn seated_it_fills_the_opening() {
+    let shape = BlockShape::new(DEFAULT_GEOMETRY);
+    let wall = DEFAULT_GEOMETRY.shared_wall_thickness();
+    assert!((THICKNESS * shape.bore - wall).abs() < 1e-4);
+    let (center, turn) = pose(shape, 1.0);
+    let built = build(shape);
+    for vertex in &built.vertices {
+        let placed = center + turn * vertex.position;
+        assert!(placed.x.abs() <= wall / 2.0 + 1e-4, "{placed}");
+        let from_axis = (placed - center).with_x(0.0).length();
+        assert!(from_axis < shape.opening, "{placed}");
+    }
+}

@@ -1,28 +1,47 @@
 //! The regenerator's cartridge: a short steel ring holding a grid of wire
 //! mesh, lying on the table beside the hot cylinder while the regenerator
-//! is out.
+//! is out, and seated in the opening, as thick as the shared wall, while
+//! it is in.
 //!
 //! Put the regenerator in and the cartridge lifts, arcs over the gas valve
 //! to the front of the opening, turns to face along the shaft on the way,
-//! and slides into the opening; once it is seated, the screens drawn there
-//! take its place. Take it out and it flies back the same way. Drawing
-//! only: what a press does is the app's.
+//! and slides into the opening. Take it out and it flies back the same
+//! way. Seated, it stands behind the gas in the cold cylinder from most
+//! views, so after the gas is drawn it is drawn again faintly over it,
+//! like a ghost seen through it. Drawing only: what a press does is the
+//! app's.
 
 use std::f32::consts::{
     FRAC_PI_2,
     PI, //
 };
 
+use macroquad::miniquad::{
+    BlendFactor,
+    BlendState,
+    BlendValue,
+    Equation, //
+};
 use macroquad::models::{
     Mesh,
-    Vertex, //
+    Vertex,
+    draw_mesh, //
 };
 use macroquad::prelude::{
     Camera3D,
     Color,
+    Comparison,
     Material,
+    MaterialParams,
+    PipelineParams,
     Quat,
+    ShaderSource,
+    UniformDesc,
+    UniformType,
     Vec3,
+    gl_use_default_material,
+    gl_use_material,
+    load_material,
     vec3, //
 };
 
@@ -46,8 +65,39 @@ use super::{
 
 /// The cartridge's radius against the opening's, so it slides in.
 const FIT: f32 = 0.97;
-/// Thickness of the cartridge, in bore radii.
+/// Thickness of the cartridge, in bore radii: the shared wall's, so it
+/// fills the opening's length when seated.
 const THICKNESS: f32 = 0.2;
+/// Opacity of the seated cartridge drawn again over the gas.
+const GHOST_OPACITY: f32 = 0.3;
+
+/// Vertex shader of the ghost: the vertex colors, placed as usual.
+const GHOST_VERTEX: &str = r#"#version 100
+attribute vec3 position;
+attribute vec2 texcoord;
+attribute vec4 color0;
+
+varying lowp vec4 color;
+
+uniform mat4 Model;
+uniform mat4 Projection;
+
+void main() {
+    color = color0 / 255.0;
+    gl_Position = Projection * Model * vec4(position, 1.0);
+}"#;
+
+/// Fragment shader of the ghost: the vertex color at the ghost's opacity.
+const GHOST_FRAGMENT: &str = r#"#version 100
+precision mediump float;
+
+varying lowp vec4 color;
+
+uniform float Opacity;
+
+void main() {
+    gl_FragColor = vec4(color.rgb, Opacity);
+}"#;
 /// Width of the steel ring, in bore radii.
 const RING_WIDTH: f32 = 0.06;
 /// Wires across the cartridge each way.
@@ -71,7 +121,7 @@ const ARC_HEIGHT: f32 = 1.6;
 /// slides it in.
 const FLIGHT_SHARE: f32 = 0.65;
 /// Seconds the whole trip takes.
-const TRIP_SECONDS: f32 = 1.2;
+pub const TRIP_SECONDS: f32 = 1.2;
 /// The steel ring.
 const RING_STEEL: Color = finish(176, 184, 198, 0.75);
 /// The wire mesh.
@@ -169,6 +219,8 @@ pub struct Cartridge {
     shape: BlockShape,
     /// The lit-metal material, if it can be built.
     material: Option<Material>,
+    /// The ghost's material, if it can be built.
+    ghost: Option<Material>,
 }
 
 impl Cartridge {
@@ -177,6 +229,7 @@ impl Cartridge {
     pub fn new(shape: BlockShape, seated: bool) -> Self {
         let mut cartridge = Self::build(shape, seated);
         cartridge.material = load_metal();
+        cartridge.ghost = load_ghost();
         if cartridge.material.is_none() {
             // Drawn in plain colors, alpha means transparency: make it solid.
             for vertex in cartridge
@@ -210,11 +263,11 @@ impl Cartridge {
             last_seconds: None,
             shape,
             material: None,
+            ghost: None,
         }
     }
 
-    /// Whether it is all the way into the opening, where the screens show
-    /// instead.
+    /// Whether it is all the way into the opening.
     pub fn seated(&self) -> bool {
         self.progress >= 1.0
     }
@@ -231,11 +284,8 @@ impl Cartridge {
         self.progress += (target - self.progress).clamp(-step, step);
     }
 
-    /// Draws it seen from `camera`, unless it is seated.
+    /// Draws it seen from `camera`, on the table, on its way or seated.
     pub fn draw(&mut self, camera: &Camera3D) {
-        if self.seated() {
-            return;
-        }
         let (center, turn) = pose(self.shape, self.progress);
         for (vertex, built) in self.mesh.vertices.iter_mut().zip(&self.built) {
             vertex.position = center + turn * built.position;
@@ -244,6 +294,43 @@ impl Cartridge {
         let light = key_light(camera.position);
         draw_lit([&self.mesh], self.material.as_ref(), camera, light);
     }
+
+    /// Draws it again, faintly, over everything drawn so far, as posed by
+    /// the last `draw`, if it is seated in the opening.
+    pub fn draw_ghost(&self) {
+        let Some(material) = self.ghost.as_ref().filter(|_| self.seated()) else {
+            return;
+        };
+        material.set_uniform("Opacity", GHOST_OPACITY);
+        gl_use_material(material);
+        draw_mesh(&self.mesh);
+        gl_use_default_material();
+    }
+}
+
+/// The ghost's material, blended over everything and hidden by nothing, or
+/// `None` if its shader cannot be built.
+fn load_ghost() -> Option<Material> {
+    let source = ShaderSource::Glsl {
+        vertex: GHOST_VERTEX,
+        fragment: GHOST_FRAGMENT,
+    };
+    let blend = BlendState::new(
+        Equation::Add,
+        BlendFactor::Value(BlendValue::SourceAlpha),
+        BlendFactor::OneMinusValue(BlendValue::SourceAlpha),
+    );
+    let params = MaterialParams {
+        pipeline_params: PipelineParams {
+            depth_test: Comparison::Always,
+            depth_write: false,
+            color_blend: Some(blend),
+            ..Default::default()
+        },
+        uniforms: vec![UniformDesc::new("Opacity", UniformType::Float1)],
+        ..Default::default()
+    };
+    load_material(source, params).ok()
 }
 
 #[cfg(test)]

@@ -26,6 +26,7 @@ use macroquad::prelude::{
     Vec2,
     Vec3,
     Vec4,
+    vec2,
     vec3, //
 };
 
@@ -284,6 +285,20 @@ fn interior(color: Color) -> Color {
         a: INTERIOR_SHADE as f32 / 255.0,
         ..color
     }
+}
+
+/// Whether `point`, seen from a camera at `eye`, lies in line with the
+/// block's window, in front of it or behind it, where the window is cut
+/// toward that camera: inside the window's outline, widened by `margin`
+/// each side, measured across the view and up.
+pub(super) fn in_window(shape: BlockShape, eye: Vec3, point: Vec3, margin: f32) -> bool {
+    let normal = cut_normal(eye);
+    let [half_width, middle, half_height, corner] = shape.window();
+    let half_width = half_width + margin;
+    let across = point.dot(vec3(-normal.z, 0.0, normal.x));
+    let inset = vec2(across.abs(), (point.y - middle).abs())
+        - vec2(half_width - corner, half_height - corner);
+    inset.max(Vec2::ZERO).length() + inset.x.max(inset.y).min(0.0) - corner < 0.0
 }
 
 /// The horizontal direction from the block's middle toward the camera; the

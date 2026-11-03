@@ -1,4 +1,4 @@
-//! Tests for the Pause and Tracers buttons, `src/graphics/buttons.rs`.
+//! Tests for the Reset and Tracers buttons, `src/graphics/buttons.rs`.
 
 use super::*;
 use crate::graphics::outline::tests::outside_block;
@@ -84,7 +84,7 @@ fn a_dome_sinks_while_held_and_glows_while_on() {
 /// Every name is engraved, letter by letter.
 #[test]
 fn every_letter_of_both_names_has_strokes() {
-    for switch in [Switch::Pause, Switch::Tracers] {
+    for switch in [Switch::Reset, Switch::Tracers] {
         for glyph in name(switch).chars() {
             assert!(!letter(glyph).is_empty(), "{glyph}");
         }

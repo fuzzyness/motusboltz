@@ -17,7 +17,7 @@ use crate::ui::input::CameraKeys;
 
 /// Where the camera starts, from the point it turns around, before the
 /// view's scale.
-const INITIAL_OFFSET: Vec3 = Vec3::new(8.4, 5.6, 8.4);
+const INITIAL_OFFSET: Vec3 = Vec3::new(8.4, 4.0, 8.4);
 /// The point the camera turns around.
 ///
 /// It is above the block's middle, halfway up the whole engine from the
@@ -39,15 +39,26 @@ const FAR: f32 = 400.0;
 const ORBIT_SENSITIVITY: f32 = 0.005;
 /// How far short of straight up or down the camera stops, in radians.
 const POLE_MARGIN: f32 = 0.01;
-/// Steepest pitch, up or down.
+/// Steepest pitch, looking down.
 const MAX_PITCH: f32 = FRAC_PI_2 - POLE_MARGIN;
+/// Lowest pitch, a little under level: the camera never goes down under
+/// the table or the cloud, out of the world.
+const MIN_PITCH: f32 = -0.1;
+/// Farthest pan across the view either way, before the view's scale, so
+/// the engine never leaves the world's middle.
+const MAX_PAN_ACROSS: f32 = 6.0;
+/// Farthest pan up, before the view's scale.
+const MAX_PAN_UP: f32 = 5.0;
+/// Farthest pan down, before the view's scale: not far, or the camera
+/// would sink under the table.
+const MAX_PAN_DOWN: f32 = 2.0;
 
 /// Zoom per pixel of wheel scroll, as a fraction of the distance.
 const ZOOM_SENSITIVITY: f32 = 0.005;
 /// Nearest distance to the orbit center, before the view's scale.
 const MIN_DISTANCE: f32 = 4.0;
 /// Farthest distance to the orbit center, before the view's scale.
-const MAX_DISTANCE: f32 = 25.0;
+const MAX_DISTANCE: f32 = 31.25;
 
 /// Keyboard orbit speed, in radians per second.
 const KEY_ORBIT_SPEED: f32 = 1.2;
@@ -171,16 +182,16 @@ impl OrbitCamera {
     /// with - and =, at rates independent of the frame rate.
     fn apply_keys(&mut self, keys: CameraKeys, dt: f32) {
         self.yaw += keys.orbit.x * KEY_ORBIT_SPEED * dt;
-        self.pitch =
-            (self.pitch + keys.orbit.y * KEY_ORBIT_SPEED * dt).clamp(-MAX_PITCH, MAX_PITCH);
+        self.pitch = (self.pitch + keys.orbit.y * KEY_ORBIT_SPEED * dt).clamp(MIN_PITCH, MAX_PITCH);
         self.pan_offset += keys.pan * self.visible_height() * KEY_PAN_SPEED * dt;
+        self.keep_pan_in_bounds();
         self.zoom_by(-keys.zoom * KEY_ZOOM_RATE * dt);
     }
 
     /// Turns the camera for a mouse drag of `delta` pixels.
     fn orbit_by(&mut self, delta: Vec2) {
         self.yaw -= delta.x * ORBIT_SENSITIVITY;
-        self.pitch = (self.pitch - delta.y * ORBIT_SENSITIVITY).clamp(-MAX_PITCH, MAX_PITCH);
+        self.pitch = (self.pitch - delta.y * ORBIT_SENSITIVITY).clamp(MIN_PITCH, MAX_PITCH);
     }
 
     /// Moves the view with a mouse drag of `delta` pixels in a view
@@ -190,6 +201,20 @@ impl OrbitCamera {
         // Stored in camera-plane coordinates rather than moving the orbit
         // pivot; the basis rotates with the camera.
         self.pan_offset += vec2(-delta.x, delta.y) * world_units_per_pixel;
+        self.keep_pan_in_bounds();
+    }
+
+    /// Holds the pan within the world's middle (see `MAX_PAN_ACROSS`).
+    fn keep_pan_in_bounds(&mut self) {
+        let scale = self.view_scale;
+        self.pan_offset = vec2(
+            self.pan_offset
+                .x
+                .clamp(-MAX_PAN_ACROSS * scale, MAX_PAN_ACROSS * scale),
+            self.pan_offset
+                .y
+                .clamp(-MAX_PAN_DOWN * scale, MAX_PAN_UP * scale),
+        );
     }
 
     /// Scales the distance by e to the power `amount`, within the limits.

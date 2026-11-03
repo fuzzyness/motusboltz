@@ -16,11 +16,7 @@ use crate::sim::reservoir::{
     MAX_HOT_KELVIN,
     MIN_COLD_KELVIN, //
 };
-use crate::ui::controls::{
-    BACKING,
-    BACKING_RADIUS,
-    slider_column, //
-};
+use crate::ui::controls::slider_column;
 use crate::ui::motion::faded;
 use crate::ui::panel::{
     QUIET,
@@ -231,9 +227,10 @@ pub fn banner(pen: &Pen, width: f32, scenario: Scenario, start: bool, bottom: f3
     )
 }
 
-/// Draws the banner for `scenario` in a window `width` points wide, ending
-/// with the prompt while `start` is offered, its words faded in to `fade`,
-/// standing on `bottom`, moved `shift` points right of its place.
+/// Draws the banner's words for `scenario` in a window `width` points
+/// wide, ending with the prompt while `start` is offered, faded in to
+/// `fade`, standing on `bottom`, moved `shift` points right of its place.
+/// Its card is the app's to draw, as a drawer's (see `drawer`).
 pub fn draw_banner(
     pen: &mut Pen,
     width: f32,
@@ -250,7 +247,6 @@ pub fn draw_banner(
         x: placed.x + shift,
         ..placed
     };
-    pen.round_rect(card, BACKING_RADIUS, BACKING);
     let (left, right) = (card.x + PADDING, card.right() - PADDING);
     let mut y = card.y + PADDING + pen.text_height("H", TEXT_SIZE);
     pen.strong(scenario.title(), left, y, TEXT_SIZE, faded(TEXT, fade));

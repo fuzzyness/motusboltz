@@ -74,12 +74,6 @@ fn command_keys_map_to_their_commands() {
     assert!(KeyCommands::from_pressed(only(&[KeyCode::C])).sliders);
     assert!(KeyCommands::from_pressed(only(&[KeyCode::U])).hide_all);
     assert!(KeyCommands::from_pressed(only(&[KeyCode::E])).regenerator);
-    for (index, key) in FILL_KEYS.into_iter().enumerate() {
-        assert_eq!(
-            KeyCommands::from_pressed(only(&[key])).fill_preset,
-            Some(index)
-        );
-    }
     // The camera keys are not commands: A and D no longer start the engine
     // or toggle details.
     for (key, _) in CAMERA_DIRECTION_KEYS {
@@ -99,7 +93,7 @@ fn shortcuts_list_the_bindings_in_ascii_without_the_hidden_kick() {
     }
     let listed: Vec<&str> = SHORTCUTS.iter().map(|&(keys, _)| keys).collect();
     for keys in [
-        "Space", "L", "F", "T", "1 to 5", "E", "M", "N", "I", "G", "C", "U", "H", "R",
+        "Space", "L", "F", "T", "Esc", "E", "M", "N", "I", "G", "C", "U", "H", "R",
     ] {
         assert!(listed.contains(&keys), "{keys} missing from the list");
     }

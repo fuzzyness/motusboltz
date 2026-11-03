@@ -25,6 +25,7 @@ use crate::sim::gas::{
     sample_normal_speed, //
 };
 use crate::sim::geometry::ChamberGeometry;
+#[cfg(test)]
 use crate::sim::units::KELVIN_PER_UNIT;
 
 /// Screens in the stack, spread evenly through the wall between the bores.
@@ -41,7 +42,8 @@ pub const SCREEN_COUNT: usize = 16;
 /// the same at every fill, since the gas passing through them scales too.
 const HEAT_CAPACITY_PER_PARTICLE: f64 = 0.5;
 
-/// One screen, for drawing.
+/// One screen, as the tests look at it.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Screen {
     /// Horizontal position of the screen's plane.
@@ -136,6 +138,7 @@ impl Regenerator {
 
     /// Each screen's position and temperature, from the hot side to the
     /// cold side.
+    #[cfg(test)]
     pub fn screens(&self) -> impl Iterator<Item = Screen> + '_ {
         self.positions
             .iter()

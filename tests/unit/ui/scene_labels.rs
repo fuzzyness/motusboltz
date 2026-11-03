@@ -110,7 +110,7 @@ fn the_parts_to_press_have_tags() {
         tags(engine).iter().map(|tag| tag.name).collect()
     };
     let out = names(&engine);
-    assert!(out.contains(&"Pause") && out.contains(&"Tracers"));
+    assert!(out.contains(&"Reset") && out.contains(&"Tracers"));
     assert_eq!(out.iter().filter(|name| **name == "Regenerator").count(), 1);
     engine.set_regenerator(true);
     let inside = names(&engine);
@@ -136,4 +136,121 @@ fn a_crowded_tag_glides_aside() {
     }
     assert!(shifts.current("Tracers").unwrap().distance(target) < 0.1);
     assert_eq!(shifts.ease("Pause", target), target);
+}
+
+/// A point that should count as over `spot`, seen from `eye`: a ball's
+/// middle, a wall's outline away from the other cylinder, a bore's middle.
+fn inside(spot: Spot, eye: Vec3) -> Vec3 {
+    match spot {
+        Spot::Ball { center, .. } => center,
+        Spot::Rim {
+            axis,
+            inner,
+            outer,
+            low,
+            high,
+            side,
+        } => {
+            let looking = (vec2(axis.x, axis.y) - vec2(eye.x, eye.z)).normalize();
+            let across = vec2(-looking.y, looking.x);
+            let across = if across.x * side >= 0.0 {
+                across
+            } else {
+                -across
+            };
+            let edge = vec2(axis.x, axis.y) + across * (inner + outer) / 2.0;
+            vec3(edge.x, (low + high) / 2.0, edge.y)
+        }
+        Spot::Bore {
+            axis, low, high, ..
+        } => vec3(axis.x, (low + high) / 2.0, axis.y),
+    }
+}
+
+/// Over each of a part's spots, its tag and no other is under the pointer,
+/// and nothing is far from the engine; the hand crank and both valves
+/// have tags, and the gas has a leader to each bore.
+#[test]
+fn one_tag_is_under_the_pointer_over_its_part() {
+    let engine = engine();
+    let tags = tags(&engine);
+    for name in ["Hand crank", "Gas valve", "Nitrogen valve"] {
+        assert!(tags.iter().any(|tag| tag.name == name), "{name}");
+    }
+    assert!(tags[0].also.is_some() && tags[0].spots.len() == 2);
+    let (width, height) = (1440.0, 900.0);
+    let (matrix, size) = (matrix(width, height), vec2(width, height));
+    let eye = initial_camera(DEFAULT_GEOMETRY).camera().position;
+    for (index, tag) in tags.iter().enumerate() {
+        for spot in &tag.spots {
+            let point = project(matrix, size, inside(*spot, eye)).unwrap();
+            let over = hovered(&tags, matrix, size, point);
+            let winner: Vec<_> = tags
+                .iter()
+                .zip(&over)
+                .filter(|(_, o)| **o)
+                .map(|(t, _)| t.name)
+                .collect();
+            assert!(over[index], "{} at {point}: {winner:?}", tag.name);
+            assert_eq!(over.iter().filter(|&&over| over).count(), 1);
+        }
+    }
+    let corner = vec2(2.0, 2.0);
+    assert!(
+        hovered(&tags, matrix, size, corner)
+            .iter()
+            .all(|&over| !over)
+    );
+}
+
+/// The opening, between the bores, shows its own tag only; the walls'
+/// tags wait for the pointer near their outlines.
+#[test]
+fn the_opening_and_the_walls_keep_apart() {
+    let engine = engine();
+    let tags = tags(&engine);
+    let (width, height) = (1440.0, 900.0);
+    let (matrix, size) = (matrix(width, height), vec2(width, height));
+    let opening = tags.iter().position(|tag| tag.name == "Opening").unwrap();
+    let over = hovered(
+        &tags,
+        matrix,
+        size,
+        project(matrix, size, tags[opening].anchor).unwrap(),
+    );
+    assert!(over[opening] && over.iter().filter(|&&over| over).count() == 1);
+    // Halfway between a wall's outline and its axis is the gas, not the
+    // wall.
+    let geometry = engine.geometry();
+    let halfway = vec3(
+        geometry.hot_center_x() - geometry.cylinder_radius / 2.0,
+        0.0,
+        0.0,
+    );
+    let over = hovered(&tags, matrix, size, project(matrix, size, halfway).unwrap());
+    assert!(over[0] && !over[1], "{over:?}");
+}
+
+/// Every tag has its own key, and the opening's keeps its key when the
+/// regenerator goes in and the tag takes the name the cartridge's had, so
+/// one never takes over the other's growth or place.
+#[test]
+fn each_tag_keeps_its_own_key() {
+    let mut engine = engine();
+    let keys = |engine: &ConnectedChambers| -> Vec<&str> {
+        tags(engine).iter().map(|tag| tag.key).collect()
+    };
+    let out = keys(&engine);
+    let mut unique = out.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), out.len());
+    assert!(out.contains(&CARTRIDGE_KEY));
+    engine.set_regenerator(true);
+    let opening = tags(&engine)
+        .into_iter()
+        .find(|tag| tag.name == "Regenerator")
+        .unwrap();
+    assert_eq!(opening.key, "opening");
+    assert!(!keys(&engine).contains(&CARTRIDGE_KEY));
 }

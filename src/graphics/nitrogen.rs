@@ -25,11 +25,15 @@ use macroquad::prelude::{
     Camera3D,
     Color,
     Material,
-    Vec3, //
+    UniformType,
+    Vec3,
+    Vec4, //
 };
 
 use super::block::{
     BlockShape,
+    cut_normal,
+    in_window,
     key_light, //
 };
 use super::chamber::append_tube;
@@ -53,7 +57,7 @@ use super::{
     DRAW_CALL_INDEX_CAPACITY,
     DRAW_CALL_VERTEX_CAPACITY,
     draw_lit,
-    load_clear, //
+    load_clear_with, //
 };
 use crate::sim::reservoir::{
     MAX_COLD_KELVIN,
@@ -106,7 +110,11 @@ const BUBBLE_OPACITY: f32 = 0.9;
 const SALT_BUBBLE: u32 = 21;
 /// Fragment shader for the glass and the liquid: lit like the block, with
 /// a glint, and more opaque toward their edges, where the eye looks
-/// through more of them, as glass and water are.
+/// through more of them, as glass and water are. Wherever the coil lines up
+/// with the block's window, in front of the cut or behind it, it is left
+/// out, so it never crosses the view into the cold cylinder: only the
+/// parts beside the window show, as the low burner only shows below it
+/// (see the block's shader, whose window this repeats).
 const CLEAR_FRAGMENT: &str = r#"#version 100
 precision mediump float;
 
@@ -118,8 +126,16 @@ varying vec3 surface_normal;
 uniform sampler2D Texture;
 uniform vec3 Eye;
 uniform vec3 Light;
+uniform vec3 CutNormal;
+uniform vec4 Window;
 
 void main() {
+    float across = dot(world, vec3(-CutNormal.z, 0.0, CutNormal.x));
+    vec2 corner = abs(vec2(across, world.y - Window.y)) - (Window.xz - Window.w);
+    float cut = length(max(corner, 0.0)) + min(max(corner.x, corner.y), 0.0) - Window.w;
+    if (cut < 0.0) {
+        discard;
+    }
     vec3 toward_eye = normalize(Eye - world);
     vec3 n = normalize(surface_normal);
     n = dot(n, toward_eye) < 0.0 ? -n : n;
@@ -131,6 +147,10 @@ void main() {
     float alpha = clamp(color.a * (0.7 + 0.6 * edge) + 0.5 * shine, 0.0, 1.0);
     gl_FragColor = vec4(lit, alpha) * texture2D(Texture, uv);
 }"#;
+/// How much wider than the block's window the stretch of coil left out is,
+/// each side, in bore radii: the cylinders' sides show the gas a little
+/// past the window's edge.
+const WINDOW_MARGIN: f32 = 0.4;
 /// Reach of the frost on the floor around the coil, in radii of the
 /// coil's path.
 const FROST_REACH: f32 = 1.7;
@@ -260,6 +280,9 @@ pub struct Nitrogen {
     mist: Sprites,
     /// The see-through material, once tried.
     clear: Clear,
+    /// The block it winds around, for cutting it away with the block's
+    /// window.
+    shape: BlockShape,
     /// The clock at the last build, if there was one.
     last_seconds: Option<f64>,
     /// How far the liquid has flowed, in coil lengths; it runs faster the
@@ -328,6 +351,7 @@ impl Nitrogen {
             bubbles: Sprites::new(),
             mist: Sprites::new(),
             clear: Clear::Untried,
+            shape,
             last_seconds: None,
             flowed: 0.0,
             smoked: 0.0,
@@ -340,11 +364,20 @@ impl Nitrogen {
     /// from `camera`; call it after everything solid.
     pub fn draw_coil(&mut self, camera: &Camera3D) {
         if let Clear::Untried = self.clear {
-            self.clear = load_clear(CLEAR_FRAGMENT).map_or(Clear::Unavailable, Clear::Ready);
+            let cut = [
+                ("CutNormal", UniformType::Float3),
+                ("Window", UniformType::Float4),
+            ];
+            self.clear =
+                load_clear_with(CLEAR_FRAGMENT, &cut).map_or(Clear::Unavailable, Clear::Ready);
         }
         let Clear::Ready(material) = &self.clear else {
             return;
         };
+        let [half_width, middle, half_height, corner] = self.shape.window();
+        let half_width = half_width + WINDOW_MARGIN * self.unit;
+        material.set_uniform("CutNormal", cut_normal(camera.position));
+        material.set_uniform("Window", Vec4::new(half_width, middle, half_height, corner));
         let light = key_light(camera.position);
         draw_lit([&self.liquid, &self.glass], Some(material), camera, light);
     }
@@ -356,8 +389,8 @@ impl Nitrogen {
     }
 
     /// Fills the coil and builds the bubbles and mist for `cold` (see
-    /// `cold_level`) at `seconds` on the clock, facing the camera.
-    pub fn build(&mut self, cold: f32, seconds: f64, facing: Facing) {
+    /// `cold_level`) at `seconds` on the clock, facing the camera at `eye`.
+    pub fn build(&mut self, cold: f32, seconds: f64, facing: Facing, eye: Vec3) {
         // The flow and the smoke run on their own clocks, whose pace follows
         // the setting, so a change of setting speeds or slows them without
         // making them jump.
@@ -370,7 +403,7 @@ impl Nitrogen {
             self.smoked += step * puff_rate(cold) as f64;
         }
         self.build_tubes(cold);
-        self.build_bubbles(cold, facing);
+        self.build_bubbles(cold, facing, eye);
         self.build_mist(cold, facing);
     }
 
@@ -443,8 +476,10 @@ impl Nitrogen {
         (a.point.lerp(b.point, share), a.outward)
     }
 
-    /// Builds the bubbles riding along the liquid at `cold`.
-    fn build_bubbles(&mut self, cold: f32, facing: Facing) {
+    /// Builds the bubbles riding along the liquid at `cold`, leaving out
+    /// those where the coil lines up with the block's window, seen from the
+    /// camera at `eye`.
+    fn build_bubbles(&mut self, cold: f32, facing: Facing, eye: Vec3) {
         self.bubbles.clear();
         if cold <= 0.0 {
             return;
@@ -456,6 +491,12 @@ impl Nitrogen {
             let along =
                 (self.flowed + unit_hash(bubble, SALT_BUBBLE) as f64).rem_euclid(1.0) as f32;
             let (point, _) = self.point_along(along);
+            if in_window(self.shape, eye, point, WINDOW_MARGIN * self.unit) {
+                continue;
+            }
+            // Drawn just in front of the glass, which hides what is behind
+            // it, but where it shows through the tube.
+            let point = point - facing.forward * TUBE_RADIUS * self.unit;
             let color = with_alpha(
                 BUBBLE_COLOR,
                 BUBBLE_OPACITY * smoothstep(0.0, FIRST_SHARE, cold),

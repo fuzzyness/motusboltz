@@ -341,29 +341,6 @@ kbd + kbd {
 	border-color: #3a5878;
 }
 
-/* Until clicked, a cover keeps the wheel and keys for the page and says how
-   to take control. */
-.engine-cover {
-	position: absolute;
-	inset: 0;
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	justify-content: center;
-	gap: 0.6rem;
-	width: 100%;
-	border: 0;
-	background: rgb(12 18 30 / 0.42);
-	color: var(--instrument-ink);
-	font: inherit;
-	cursor: pointer;
-}
-
-.engine[data-engaged="true"] .engine-cover,
-.engine-cover[hidden] {
-	display: none;
-}
-
 /* Too narrow for the engine: a shorter frame holding only the notice, and
    no instructions for an engine that is not there. */
 .engine.is-narrow .engine-frame {
@@ -372,28 +349,6 @@ kbd + kbd {
 
 .engine.is-narrow figcaption span {
 	display: none;
-}
-
-.engine-cover-main {
-	padding: 0.7rem 1.4rem;
-	border-radius: 999px;
-	background: #f2f5f8;
-	color: #16202c;
-	font-weight: 600;
-	box-shadow: 0 6px 24px rgb(0 0 0 / 0.35);
-}
-
-.engine-cover:hover .engine-cover-main {
-	background: #ffffff;
-}
-
-.engine-cover:focus-visible {
-	outline-offset: -4px;
-}
-
-.engine-cover-sub {
-	font-size: 0.95rem;
-	text-shadow: 0 1px 6px rgb(0 0 0 / 0.6);
 }
 
 .engine-narrow {

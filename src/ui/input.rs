@@ -42,14 +42,6 @@ const REGENERATOR_KEY: KeyCode = KeyCode::E;
 ///
 /// It is left out of the help text on purpose; it exists for testing.
 const KICK_KEY: KeyCode = KeyCode::K;
-/// Keys 1 to 5 choose the fill presets, in order.
-const FILL_KEYS: [KeyCode; 5] = [
-    KeyCode::Key1,
-    KeyCode::Key2,
-    KeyCode::Key3,
-    KeyCode::Key4,
-    KeyCode::Key5,
-];
 /// Either Shift key turns the camera keys from orbiting into moving.
 const SHIFT_KEYS: [KeyCode; 2] = [KeyCode::LeftShift, KeyCode::RightShift];
 /// Camera direction up.
@@ -80,11 +72,11 @@ const ZOOM_OUT_KEYS: [KeyCode; 2] = [KeyCode::Minus, KeyCode::KpSubtract];
 ///
 /// The hidden kick is left out.
 pub const SHORTCUTS: [(&str, &str); 19] = [
+    ("Esc", "Menu"),
     ("Space", "Start, pause or resume"),
     ("L", "Slow motion"),
     ("F", "Follow particles (tracers)"),
     ("T", "Reset with fresh gas"),
-    ("1 to 5", "Less or more helium"),
     ("E", "Regenerator in or out"),
     ("M", "Demos: ready-made settings"),
     ("N", "Show or hide the labels"),
@@ -150,8 +142,6 @@ pub struct KeyCommands {
     pub regenerator: bool,
     /// Kick the flywheel.
     pub kick: bool,
-    /// Index of the fill preset chosen with keys 1 to 5.
-    pub fill_preset: Option<usize>,
 }
 
 impl KeyCommands {
@@ -178,7 +168,6 @@ impl KeyCommands {
             labels: pressed(LABELS_KEY),
             regenerator: pressed(REGENERATOR_KEY),
             kick: pressed(KICK_KEY),
-            fill_preset: FILL_KEYS.into_iter().position(&pressed),
         }
     }
 }

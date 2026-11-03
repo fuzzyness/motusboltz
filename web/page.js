@@ -1,5 +1,5 @@
-// The page around the engine: the cover that hands the mouse and keys to the
-// engine on a click, and the Gibbs free energy calculator. Everything is
+// The page around the engine: handing the wheel and keys to the engine on a
+// click, and the Gibbs free energy calculator. Everything is
 // inside a function because gl.js already declares globals such as `canvas`.
 (() => {
 	"use strict";
@@ -14,20 +14,25 @@
 	const figure = document.querySelector(".engine");
 	const frame = figure.querySelector(".engine-frame");
 	const engineCanvas = document.getElementById("glcanvas");
-	const cover = figure.querySelector(".engine-cover");
 	const narrow = figure.querySelector(".engine-narrow");
 
 	function setEngaged(engaged) {
 		figure.dataset.engaged = String(engaged);
 	}
 
-	// A click on the cover hands the wheel and keys to the engine; Esc or a
-	// click anywhere else gives them back to the page.
-	cover.addEventListener("click", () => {
-		setEngaged(true);
-		engineCanvas.focus({ preventScroll: true });
-	});
+	// A click on the engine hands the keys and wheel to it; a click anywhere
+	// else gives them back to the page. Esc stays with the engine, whose
+	// menu it opens.
+	engineCanvas.addEventListener("focus", () => setEngaged(true));
 	engineCanvas.addEventListener("blur", () => setEngaged(false));
+	// Until then, the wheel scrolls the page: keep it from the engine, whose
+	// own handler (added later, by gl.js) would stop the scroll.
+	engineCanvas.addEventListener("wheel", (event) => {
+		if (document.activeElement !== engineCanvas) {
+			event.stopImmediatePropagation();
+		}
+	});
+	motusboltzBridge(engineCanvas, null);
 
 	// A right drag pans the view. Keep the browser's menu from opening on
 	// it, and hand a release made outside the canvas on to it, so a drag
@@ -36,11 +41,6 @@
 	window.addEventListener("mouseup", (event) => {
 		if (event.target !== engineCanvas) {
 			engineCanvas.dispatchEvent(new MouseEvent("mouseup", event));
-		}
-	});
-	engineCanvas.addEventListener("keydown", (event) => {
-		if (event.key === "Escape") {
-			engineCanvas.blur();
 		}
 	});
 
@@ -58,7 +58,6 @@
 	function loadEngine() {
 		figure.classList.remove("is-narrow");
 		narrow.hidden = true;
-		cover.hidden = false;
 		load(WASM_PATH);
 	}
 
@@ -66,7 +65,6 @@
 		loadEngine();
 	} else {
 		figure.classList.add("is-narrow");
-		cover.hidden = true;
 		narrow.hidden = false;
 		narrow.querySelector(".engine-load").addEventListener("click", loadEngine, { once: true });
 	}

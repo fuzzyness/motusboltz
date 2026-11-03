@@ -1,14 +1,14 @@
-//! The Pause and Tracers buttons: two small metal boxes on the table
+//! The Reset and Tracers buttons: two small metal boxes on the table
 //! beside the cold side, each with a big domed push button.
 //!
 //! Each box is nearly square, of brushed steel with rounded corners, a lid
 //! on a base with a thin seam between them, and a screw hole in each corner
 //! of the lid. A thick glossy black collar on top holds a see-through dome,
-//! red for Pause and green for Tracers, and the lid's side is engraved with
+//! red for Reset and green for Tracers, and the lid's side is engraved with
 //! its name. The boxes lie at their own angles, as if tossed there, out of
 //! the way of the engine seen head on. A dome sinks while it is held down,
-//! or for a moment when its switch flips by key or on screen, and glows
-//! while its switch is on. Drawing only: what a press does is the app's.
+//! or for a moment when what it does is done by key or on screen, and
+//! Tracers glows while the tracers are on. Drawing only: what a press does is the app's.
 
 use std::f32::consts::FRAC_PI_2;
 
@@ -76,11 +76,11 @@ void main() {
     gl_FragColor = vec4(lit, alpha);
 }"#;
 
-/// What a button switches.
+/// What a button does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Switch {
-    /// Pauses the simulation.
-    Pause,
+    /// Refills the engine with fresh gas.
+    Reset,
     /// Shows the tracers.
     Tracers,
 }
@@ -153,8 +153,8 @@ const COLLAR_BLACK: Color = finish(20, 20, 24, 0.95);
 const HOLE_DARK: Color = finish(48, 52, 60, 0.1);
 /// The engraved letters.
 const ENGRAVED: Color = finish(58, 62, 72, 0.15);
-/// The Pause dome's red; alpha is its opacity.
-const PAUSE_RED: Color = Color::new(0.95, 0.1, 0.08, 0.72);
+/// The Reset dome's red; alpha is its opacity.
+const RESET_RED: Color = Color::new(0.95, 0.1, 0.08, 0.72);
 /// The Tracers dome's green; alpha is its opacity.
 const TRACERS_GREEN: Color = Color::new(0.12, 0.85, 0.3, 0.72);
 
@@ -195,11 +195,11 @@ impl ButtonBox {
 /// the front, turn), in bore radii and radians: one ahead of the other,
 /// each turned its own way, the engraved sides toward the usual view.
 const PLACES: [(Switch, f32, f32, f32); 2] = [
-    (Switch::Pause, 1.45, 0.55, 0.45),
+    (Switch::Reset, 1.45, 0.55, 0.45),
     (Switch::Tracers, 2.05, -0.95, 1.15),
 ];
 
-/// Both boxes, Pause first, beside the cold end of a block of `shape`.
+/// Both boxes, Reset first, beside the cold end of a block of `shape`.
 pub fn button_boxes(shape: BlockShape) -> [ButtonBox; 2] {
     let end = shape.offset + shape.outer;
     PLACES.map(|(switch, out, ahead, yaw)| ButtonBox {
@@ -282,7 +282,7 @@ fn letter(glyph: char) -> &'static [Stroke] {
 /// The name engraved on a box.
 fn name(switch: Switch) -> &'static str {
     match switch {
-        Switch::Pause => "PAUSE",
+        Switch::Reset => "RESET",
         Switch::Tracers => "TRACERS",
     }
 }
@@ -290,7 +290,7 @@ fn name(switch: Switch) -> &'static str {
 /// The color of a box's dome.
 fn dome_color(switch: Switch) -> Color {
     match switch {
-        Switch::Pause => PAUSE_RED,
+        Switch::Reset => RESET_RED,
         Switch::Tracers => TRACERS_GREEN,
     }
 }
@@ -486,8 +486,8 @@ pub struct Buttons {
     unit: f32,
 }
 
-/// Whether each switch is on and whether its dome is held down with the
-/// mouse, Pause first.
+/// Whether each button's switch is on and whether its dome is held down
+/// with the mouse, Reset first (Reset is never on).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DomeStates {
     /// Whether each switch is on.

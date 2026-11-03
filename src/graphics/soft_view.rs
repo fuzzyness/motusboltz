@@ -57,7 +57,8 @@ void main() {
     uv = texcoord;
 }"#;
 
-/// Fragment shader that copies the view as it is, fully opaque.
+/// Fragment shader that copies the view as it is, fully opaque, or bent
+/// into waves by `Warp` (see `bent`).
 ///
 /// Blending inside the view leaves its alpha below 1 in places, which must
 /// not show the screen through.
@@ -67,10 +68,29 @@ precision mediump float;
 varying lowp vec2 uv;
 
 uniform sampler2D Texture;
+uniform float Warp;
+uniform float Time;
+
+// Bent by `Warp` (0 for none, 1 for the most) into waves that ripple with
+// `Time`, as through heat haze.
+vec2 bent(vec2 at) {
+    return at + Warp * vec2(0.012 * sin(at.y * 16.0 + Time * 6.0),
+                            0.008 * sin(at.x * 11.0 + Time * 5.0));
+}
 
 void main() {
-    gl_FragColor = vec4(texture2D(Texture, uv).rgb, 1.0);
+    gl_FragColor = vec4(texture2D(Texture, bent(uv)).rgb, 1.0);
 }"#;
+
+/// How strongly the view is bent into waves as it is laid on the screen,
+/// and the clock the waves ripple by.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Wave {
+    /// From 0 (straight) to 1 (the most).
+    pub strength: f32,
+    /// Seconds on a clock, kept small so the shader's floats stay precise.
+    pub time: f32,
+}
 
 /// Side of a dither cell for a switch of scenery, in screen points.
 pub const DITHER_CELL: f32 = 2.0;
@@ -90,6 +110,15 @@ varying lowp vec2 uv;
 uniform sampler2D Texture;
 uniform float Shown;
 uniform float Cell;
+uniform float Warp;
+uniform float Time;
+
+// Bent by `Warp` (0 for none, 1 for the most) into waves that ripple with
+// `Time`, as through heat haze.
+vec2 bent(vec2 at) {
+    return at + Warp * vec2(0.012 * sin(at.y * 16.0 + Time * 6.0),
+                            0.008 * sin(at.x * 11.0 + Time * 5.0));
+}
 
 float bayer2(vec2 cell) {
     vec2 corner = mod(floor(cell), 2.0);
@@ -102,7 +131,7 @@ void main() {
     if (threshold >= Shown) {
         discard;
     }
-    gl_FragColor = vec4(texture2D(Texture, uv).rgb, 1.0);
+    gl_FragColor = vec4(texture2D(Texture, bent(uv)).rgb, 1.0);
 }"#;
 
 /// The view's size in pixels for a `width` by `height` window in screen
@@ -156,6 +185,10 @@ impl SoftView {
                         depth_test: Comparison::Always,
                         ..Default::default()
                     },
+                    uniforms: vec![
+                        UniformDesc::new("Warp", UniformType::Float1),
+                        UniformDesc::new("Time", UniformType::Float1),
+                    ],
                     ..Default::default()
                 },
             )
@@ -185,23 +218,34 @@ impl SoftView {
         camera
     }
 
-    /// Scales the view up over the whole `width` by `height` window.
+    /// Scales the view up over the whole `width` by `height` window, bent
+    /// into waves by `wave` (see `Wave`).
     ///
     /// The screen camera must be set.
-    pub fn present(&self, width: f32, height: f32) {
+    pub fn present(&self, width: f32, height: f32, wave: Wave) {
         let (Some(Some(copy)), Some((target, _))) = (&self.copy, &self.target) else {
             return;
         };
+        copy.set_uniform("Warp", wave.strength);
+        copy.set_uniform("Time", wave.time);
         Self::cover(copy, target, width, height);
     }
 
     /// Lays the view, as last drawn, over a `width` by `height` window at
     /// `dpi` through the dither of cells `cell` points wide, keeping a
-    /// `shown` share of it, from 0 to 1.
+    /// `shown` share of it, from 0 to 1, and bent by `wave`.
     ///
     /// Nothing is drawn where the dither shader cannot be built. The screen
     /// camera must be set.
-    pub fn present_dithered(&mut self, width: f32, height: f32, dpi: f32, cell: f32, shown: f32) {
+    pub fn present_dithered(
+        &mut self,
+        width: f32,
+        height: f32,
+        dpi: f32,
+        cell: f32,
+        shown: f32,
+        wave: Wave,
+    ) {
         let dither = self.dither.get_or_insert_with(|| {
             load_material(
                 ShaderSource::Glsl {
@@ -216,6 +260,8 @@ impl SoftView {
                     uniforms: vec![
                         UniformDesc::new("Shown", UniformType::Float1),
                         UniformDesc::new("Cell", UniformType::Float1),
+                        UniformDesc::new("Warp", UniformType::Float1),
+                        UniformDesc::new("Time", UniformType::Float1),
                     ],
                     ..Default::default()
                 },
@@ -227,6 +273,8 @@ impl SoftView {
         };
         dither.set_uniform("Shown", shown);
         dither.set_uniform("Cell", cell * dpi);
+        dither.set_uniform("Warp", wave.strength);
+        dither.set_uniform("Time", wave.time);
         Self::cover(dither, target, width, height);
     }
 

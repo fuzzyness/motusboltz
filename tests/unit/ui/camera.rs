@@ -137,3 +137,17 @@ fn keys_work_while_the_pointer_is_over_the_panel() {
     );
     assert!(camera.yaw > yaw);
 }
+
+/// The camera keeps to the world: it never dips far under level, and its
+/// pan stays near the engine however far it is dragged.
+#[test]
+fn the_camera_stays_in_the_world() {
+    let mut camera = OrbitCamera::with_scale(2.0);
+    camera.orbit_by(vec2(0.0, 100_000.0));
+    assert!((camera.pitch - MIN_PITCH).abs() < 1e-6);
+    camera.pan_by(vec2(1.0e6, -1.0e6), 900.0);
+    assert!(camera.pan_offset.x.abs() <= MAX_PAN_ACROSS * 2.0 + 1e-3);
+    assert!(camera.pan_offset.y <= MAX_PAN_UP * 2.0 + 1e-3);
+    camera.pan_by(vec2(0.0, 1.0e6), 900.0);
+    assert!(camera.pan_offset.y >= -MAX_PAN_DOWN * 2.0 - 1e-3);
+}
