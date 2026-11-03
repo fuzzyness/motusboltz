@@ -1,4 +1,4 @@
-//! A faint grid on the floor under the engine, built once.
+//! A faint grid on the floor under the engine's table, built once.
 //!
 //! The grid keeps the engine from floating in a void and makes turning the
 //! camera easier to follow.
@@ -20,20 +20,20 @@ use super::{
 };
 
 /// Half the grid's width, in model units.
-const GRID_HALF_WIDTH: f32 = 24.0;
+const GRID_HALF_WIDTH: f32 = 60.0;
 /// Distance between lines.
-const GRID_SPACING: f32 = 1.0;
+const GRID_SPACING: f32 = 4.0;
 /// Width of a line.
-const LINE_WIDTH: f32 = 0.035;
+const LINE_WIDTH: f32 = 0.12;
 /// Length of the pieces each line is built from; the fade is computed at
 /// their ends, so the grid fits one draw call.
-const PIECE_LENGTH: f32 = 2.0;
-/// Just below the block's underside, so the two never fight for depth.
+const PIECE_LENGTH: f32 = 3.0;
+/// Just below the table's feet, so the two never fight for depth.
 const BELOW_BLOCK: f32 = 0.005;
 /// Color of the lines, a quiet blue-gray.
-const GRID_COLOR: Color = Color::from_rgba(96, 120, 150, 255);
+const GRID_COLOR: Color = Color::from_rgba(108, 134, 166, 255);
 /// Opacity of the lines in the middle, fading to nothing at the edge.
-const GRID_OPACITY: f32 = 0.45;
+const GRID_OPACITY: f32 = 0.5;
 
 /// The floor grid.
 pub struct FloorGrid {

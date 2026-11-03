@@ -34,7 +34,9 @@ use macroquad::prelude::{
     vec3, //
 };
 
+use super::block::BlockShape;
 use super::levels::ReservoirLevels;
+use super::table::ground;
 use crate::sim::geometry::ChamberGeometry;
 
 /// Vertex shader for the full-window quad.
@@ -207,7 +209,8 @@ impl Scenery {
     }
 }
 
-/// How far below the floor the sea of clouds lies, in bore radii.
+/// How far below the floor the table stands on the sea of clouds lies,
+/// in bore radii.
 const SEA_DEPTH: f32 = 7.0;
 
 /// Strength of the hot glow at full heat.
@@ -337,7 +340,8 @@ impl Backdrop {
             material.set_uniform("Eye", camera.position);
             // Wrapped, so the clouds stay smooth however long it runs.
             material.set_uniform("Time", (seconds % 100_000.0) as f32);
-            material.set_uniform("Sea", floor - SEA_DEPTH * self.geometry.cylinder_radius);
+            let ground = ground(BlockShape::new(self.geometry));
+            material.set_uniform("Sea", ground - SEA_DEPTH * self.geometry.cylinder_radius);
         }
         self.mesh.vertices.clear();
         for corner in [

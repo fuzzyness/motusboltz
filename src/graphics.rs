@@ -1,14 +1,17 @@
 //! 3D drawing of the particles, tracer trails, cylinders, the opening
 //! between them and the regenerator's screens in it, the pistons, rods,
 //! crankshaft and flywheel, the burner and the liquid-nitrogen coil that
-//! stand for the two reservoirs, the valves that set them, and the
-//! background.
+//! stand for the two reservoirs, the valves that set them, the Pause and
+//! Tracers buttons, the regenerator's cartridge, the table the engine
+//! stands on, and the background.
 //!
 //! Drawing only; nothing here affects the physics.
 
 pub mod assembly;
 pub mod backdrop;
 pub mod block;
+pub mod buttons;
+pub mod cartridge;
 pub mod chamber;
 pub mod cloud;
 pub mod fire;
@@ -22,6 +25,7 @@ pub mod regenerator;
 pub mod soft_view;
 pub mod solid;
 pub mod sprites;
+pub mod table;
 pub mod trails;
 pub mod valves;
 
@@ -66,6 +70,11 @@ use assembly::Assembly;
 use backdrop::Backdrop;
 pub use backdrop::Scenery;
 use block::BlockShape;
+use buttons::{
+    Buttons, //
+    DomeStates,
+};
+use cartridge::Cartridge;
 use chamber::ConnectedChamberVisual;
 use cloud::CloudFloor;
 use fire::Fire;
@@ -83,6 +92,7 @@ use sprites::{
     Facing,
     SpriteMaterials, //
 };
+use table::Table;
 use trails::TrailRenderer;
 use valves::Valves;
 
@@ -173,6 +183,12 @@ fn load_lit(fragment: &'static str, extra: &[(&str, UniformType)]) -> Option<Mat
 /// fragment gives, hidden by what is in front, and hiding nothing drawn
 /// after it. `None` if its shader cannot be built.
 fn load_clear(fragment: &'static str) -> Option<Material> {
+    load_clear_with(fragment, &[])
+}
+
+/// A see-through material as `load_clear` makes, with the `extra` uniforms
+/// too.
+fn load_clear_with(fragment: &'static str, extra: &[(&str, UniformType)]) -> Option<Material> {
     let blend = BlendState::new(
         Equation::Add,
         BlendFactor::Value(BlendValue::SourceAlpha),
@@ -184,7 +200,7 @@ fn load_clear(fragment: &'static str) -> Option<Material> {
         color_blend: Some(blend),
         ..Default::default()
     };
-    load_lit_with(fragment, &[], pipeline_params)
+    load_lit_with(fragment, extra, pipeline_params)
 }
 
 /// A material lit per pixel by `fragment` with `pipeline_params`, the
@@ -250,6 +266,8 @@ pub struct Scene {
     screens: RegeneratorScreens,
     /// The see-through grid of the grid scenery.
     floor: FloorGrid,
+    /// The wooden table the engine stands on.
+    table: Table,
     /// The block, pistons, rods, crankshaft and flywheel.
     assembly: Assembly,
     /// The particles.
@@ -265,6 +283,12 @@ pub struct Scene {
     /// How far each valve's wheel is turned from shut, hot first, in
     /// radians counterclockwise seen from above.
     valve_turns: (f32, f32),
+    /// The Pause and Tracers buttons.
+    buttons: Buttons,
+    /// Whether Pause and Tracers are on and their buttons held down.
+    switches: DomeStates,
+    /// The regenerator's cartridge, on the table or in the opening.
+    cartridge: Cartridge,
     /// Twinkles where heat crosses the walls.
     heat_sparks: HeatSparks,
     /// `None` where the sprite shader cannot be built: the burner and nitrogen
@@ -272,7 +296,7 @@ pub struct Scene {
     sprite_materials: Option<SpriteMaterials>,
     /// The sky or the dark background.
     backdrop: Backdrop,
-    /// What the engine stands on in the sky scenery.
+    /// What the table stands on in the sky scenery.
     cloud: CloudFloor,
     /// The softened view the scene is drawn into.
     soft: SoftView,
@@ -298,7 +322,8 @@ impl Scene {
         Self {
             chamber: ConnectedChamberVisual::new(geometry),
             screens: RegeneratorScreens::new(geometry, simulation.regenerator().screens()),
-            floor: FloorGrid::new(shape.base),
+            floor: FloorGrid::new(table::ground(shape)),
+            table: Table::new(shape),
             assembly: Assembly::new(geometry, simulation.power_pistons()),
             particles: ParticleRenderer::new(extent),
             trails: TrailRenderer::new(),
@@ -306,6 +331,9 @@ impl Scene {
             nitrogen: Nitrogen::new(shape),
             valves: Valves::new(shape),
             valve_turns: (0.0, 0.0),
+            buttons: Buttons::new(shape),
+            switches: DomeStates::default(),
+            cartridge: Cartridge::new(shape, simulation.regenerator().is_enabled()),
             heat_sparks: HeatSparks::new(geometry),
             sprite_materials: SpriteMaterials::load(),
             backdrop: Backdrop::new(geometry),
@@ -321,6 +349,13 @@ impl Scene {
     /// counterclockwise seen from above, for the frames to come.
     pub fn set_valve_turns(&mut self, turns: (f32, f32)) {
         self.valve_turns = turns;
+    }
+
+    /// Lights the Pause and Tracers buttons while their switches are on
+    /// and presses them in while held, as `states` says, for the frames to
+    /// come.
+    pub fn set_switches(&mut self, states: DomeStates) {
+        self.switches = states;
     }
 
     /// Draws the background and the engine for one frame, and leaves the
@@ -403,25 +438,37 @@ impl Scene {
         self.fire.build(self.levels.heat, seconds, facing);
         self.nitrogen.build(self.levels.cold, seconds, facing);
         self.heat_sparks.build(simulation, camera, seconds);
+        self.cartridge
+            .follow(simulation.regenerator().is_enabled(), seconds);
+        // The screens show once the cartridge is seated in the opening.
+        let seated = self.cartridge.seated();
         self.chamber.draw(camera);
-        self.screens.draw(
-            simulation.regenerator(),
-            simulation.hot_kelvin(),
-            simulation.cold_kelvin(),
-            camera,
-        );
+        if seated {
+            self.screens.draw(
+                simulation.regenerator(),
+                simulation.hot_kelvin(),
+                simulation.cold_kelvin(),
+                camera,
+            );
+        }
         self.fire.draw_burner();
+        self.table.draw(camera);
         self.valves.draw(self.valve_turns, camera);
+        self.buttons.draw_bodies(camera);
+        self.cartridge.draw(camera);
         if scenery == Scenery::Sky {
             self.cloud.draw(camera, light);
         }
         self.particles.draw(simulation, camera, background);
         // The screens show faintly through the gas, but not through the
         // pistons, which come after.
-        self.screens.draw_ghost(simulation.regenerator(), camera);
+        if seated {
+            self.screens.draw_ghost(simulation.regenerator(), camera);
+        }
         self.assembly.draw(simulation.power_pistons(), camera);
         // The coil after everything solid, which shows through it.
         self.nitrogen.draw_coil(camera);
+        self.buttons.draw_domes(self.switches, seconds, camera);
         // The see-through grid and trails after everything solid, so they
         // blend over it.
         if scenery == Scenery::Grid {

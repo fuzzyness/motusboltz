@@ -1,24 +1,28 @@
 //! Tests for the cloud under the engine, `src/graphics/cloud.rs`.
 
 use super::*;
-use crate::graphics::outline::tests::outside_block;
+use crate::graphics::table::feet;
 use crate::sim::geometry::DEFAULT_GEOMETRY;
 
+/// The cloud stays under the table's feet, but for bumps along its edge,
+/// out beyond the legs.
 #[test]
-fn cloud_stays_under_the_floor_except_its_edge_bumps_beyond_the_burner_and_nitrogen() {
+fn cloud_stays_under_the_table_except_its_edge_bumps_beyond_the_legs() {
     let shape = BlockShape::new(DEFAULT_GEOMETRY);
     let cloud = CloudFloor::new(shape);
+    let floor = ground(shape);
     let mut above = 0;
     for vertex in &cloud.mesh.vertices {
         let point = vertex.position;
-        if point.y > shape.base + 1e-3 {
+        if point.y > floor + 1e-3 {
             above += 1;
-            let out = outside_block(shape.offset, shape.outer, Vec2::new(point.x, point.z));
-            // The burner reaches about 0.65 bore radii out, and the nitrogen less.
-            assert!(
-                out > 0.7 * shape.bore,
-                "{point} rises among the burner or nitrogen"
-            );
+            let seen_from_above = Vec2::new(point.x, point.z);
+            for foot in feet(shape) {
+                assert!(
+                    seen_from_above.distance(foot) > shape.bore,
+                    "{point} rises among the legs"
+                );
+            }
         }
     }
     assert!(above > 0, "the edge bumps show above the top");
@@ -34,25 +38,26 @@ fn cloud_stays_under_the_floor_except_its_edge_bumps_beyond_the_burner_and_nitro
     );
 }
 
+/// Every foot of the table, and a little round it, has a puff's top under
+/// it.
 #[test]
-fn top_covers_the_ground_under_the_engine() {
+fn top_carries_every_foot() {
     let shape = BlockShape::new(DEFAULT_GEOMETRY);
+    let floor = ground(shape);
     let tops: Vec<Puff> = puffs(shape)
         .into_iter()
-        .filter(|puff| puff.center.y + FLATTEN * puff.radius > shape.base - 0.1)
+        .filter(|puff| puff.center.y + FLATTEN * puff.radius > floor - 0.1)
         .collect();
-    // Every point of the block's outline, and a bore radius beyond it, has
-    // a puff's top under it.
-    for step in 0..64 {
-        let angle = std::f32::consts::TAU * step as f32 / 64.0;
-        for reach in [0.0, 0.5, 1.0, 1.4] {
-            let x = (shape.offset + shape.outer * reach) * angle.cos();
-            let z = shape.outer * reach * angle.sin();
+    for foot in feet(shape) {
+        for step in 0..16 {
+            let angle = std::f32::consts::TAU * step as f32 / 16.0;
+            let spot = foot + Vec2::from_angle(angle) * shape.bore;
             assert!(
                 tops.iter().any(
-                    |puff| Vec2::new(puff.center.x - x, puff.center.z - z).length() < puff.radius
+                    |puff| Vec2::new(puff.center.x - spot.x, puff.center.z - spot.y).length()
+                        < puff.radius
                 ),
-                "nothing under ({x}, {z})"
+                "nothing under {spot}"
             );
         }
     }

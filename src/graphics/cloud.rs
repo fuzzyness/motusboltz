@@ -1,10 +1,10 @@
-//! The cloud the engine stands on in the sky scenery.
+//! The cloud the engine's table stands on in the sky scenery.
 //!
 //! It is a cartoon cloud built from flattened puffs, in the style of a
 //! Dreamcast game. Puffs
-//! side by side make its gently rolling top at floor height, others bulge
+//! side by side make its gently rolling top at the table's feet, others bulge
 //! a little along its edge, and more billow underneath. It is solid
-//! geometry, so the engine sits on it cleanly from any angle; a soft
+//! geometry, so the table stands on it cleanly from any angle; a soft
 //! shader lights it in pale blue-white, bluer in the shade, mottled like
 //! a painted texture, with a pale rim. Built once and drawn in one call.
 //! Drawing only.
@@ -30,6 +30,7 @@ use macroquad::prelude::{
 
 use super::block::BlockShape;
 use super::sprites::unit_hash;
+use super::table::ground;
 use super::{
     DRAW_CALL_INDEX_CAPACITY,
     DRAW_CALL_VERTEX_CAPACITY,
@@ -83,9 +84,12 @@ void main() {
 
 /// Half the cloud across, along the shaft.
 ///
-/// Sizes are fractions of the bore's radius, so the cloud keeps its
-/// proportions at any engine size.
+/// Sizes are fractions of the bore's radius times `CLOUD_SCALE`, so the
+/// cloud keeps its proportions at any engine size.
 const HALF_LENGTH: f32 = 5.0;
+/// How much bigger every size of the cloud is than the bore's radius says:
+/// it carries the table, which is far wider than the engine.
+const CLOUD_SCALE: f32 = 2.4;
 /// Half the cloud front to back.
 const HALF_DEPTH: f32 = 3.6;
 /// Every puff is squashed to this share of its width in height, so the
@@ -177,7 +181,7 @@ struct Puff {
     radius: f32,
 }
 
-/// The cloud under the engine.
+/// The cloud under the table.
 pub struct CloudFloor {
     /// Every puff.
     mesh: Mesh,
@@ -187,7 +191,7 @@ pub struct CloudFloor {
 }
 
 impl CloudFloor {
-    /// The cloud under a block of `shape`.
+    /// The cloud under the table under a block of `shape`.
     ///
     /// # Panics
     ///
@@ -222,7 +226,8 @@ impl CloudFloor {
 /// Every puff: a grid of them inside the outline for the top, then the
 /// rings around and under it.
 fn puffs(shape: BlockShape) -> Vec<Puff> {
-    let unit = shape.bore;
+    let unit = shape.bore * CLOUD_SCALE;
+    let floor = ground(shape);
     let (length, depth) = (HALF_LENGTH * unit, HALF_DEPTH * unit);
     let mut puffs = Vec::new();
     let radius = TOP_RADIUS * unit;
@@ -244,7 +249,7 @@ fn puffs(shape: BlockShape) -> Vec<Puff> {
             let (x, z) = (x + jitter(SALT_ANGLE), z + jitter(SALT_REACH));
             let radius = radius * (1.0 + TOP_SIZE_SPREAD * (unit_hash(seed, SALT_RADIUS) - 0.5));
             puffs.push(Puff {
-                center: vec3(x, shape.base - BELOW_FLOOR - FLATTEN * radius, z),
+                center: vec3(x, floor - BELOW_FLOOR - FLATTEN * radius, z),
                 radius,
             });
         }
@@ -261,7 +266,7 @@ fn puffs(shape: BlockShape) -> Vec<Puff> {
             puffs.push(Puff {
                 center: vec3(
                     length * reach * angle.cos(),
-                    shape.base + ring.rise * FLATTEN * radius - ring.drop * unit,
+                    floor + ring.rise * FLATTEN * radius - ring.drop * unit,
                     depth * reach * angle.sin(),
                 ),
                 radius,

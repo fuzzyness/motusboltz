@@ -1,6 +1,7 @@
 //! The main loop.
 //!
-//! Each frame reads the input, turns any grabbed crank or valve, steps the
+//! Each frame reads the input, turns any grabbed crank or valve or presses
+//! a button or the regenerator's cartridge, steps the
 //! simulation with the walls moving toward their settings, updates the
 //! panel and camera, and draws the background, then the scene with its labels, the
 //! panel on the left and the sliders on the right with the demo's banner
@@ -36,6 +37,11 @@ use macroquad::time::get_time;
 
 use crate::graphics::assembly::hand_crank;
 use crate::graphics::block::BlockShape;
+use crate::graphics::buttons::{
+    DomeStates,
+    button_boxes, //
+};
+use crate::graphics::cartridge;
 use crate::graphics::valves::valve_wheels;
 use crate::graphics::{
     Scene,
@@ -235,7 +241,7 @@ struct App {
     /// The hot and cold walls' settings, from the sliders or the valves;
     /// the walls move toward them (see `handles::ramped`).
     settings: (f32, f32),
-    /// The crank or valve held with the mouse, if any.
+    /// The crank, valve, button or cartridge held with the mouse, if any.
     grab: Option<Grab>,
     /// The simulation is paused.
     paused: bool,
@@ -257,6 +263,8 @@ struct App {
     demo_age: f32,
     /// How far the labels have grown out of their dots, from 0 to 1.
     labels_grown: f32,
+    /// How far each label has been moved aside to clear the others, eased.
+    tag_shifts: scene_labels::Shifts,
     /// How far the keys list has grown out of its toggle, from 0 to 1.
     keys_grown: f32,
     /// How far the Demos menu has dropped, from 0 to 1.
@@ -323,6 +331,7 @@ impl App {
             demo: Some(FIRST_DEMO),
             demo_age: 0.0,
             labels_grown: 1.0,
+            tag_shifts: scene_labels::Shifts::default(),
             keys_grown: 0.0,
             menu_dropped: 0.0,
             panel_slide: Slide::new(true),
@@ -506,10 +515,7 @@ impl App {
             self.paused = !self.paused;
         }
         if chose(keys.tracers, Action::ToggleTracers) {
-            self.tracers = !self.tracers;
-            if !self.tracers {
-                self.simulation.stop_following();
-            }
+            self.toggle_tracers();
         }
         // The other toggles flip when their key or button is pressed.
         self.slow ^= chose(keys.slow, Action::ToggleSlow);
@@ -576,9 +582,10 @@ impl App {
         }
     }
 
-    /// Grabs a crank or valve pressed at `pointer` (unless the press is
-    /// `over_controls`), lets go when the button is up, and turns what is
-    /// held with the pointer over `dt` seconds of wall time.
+    /// Grabs a crank, valve, button or cartridge pressed at `pointer`
+    /// (unless the press is `over_controls`), presses a button or the
+    /// cartridge at once, lets go when the button is up, and turns a crank
+    /// or valve held with the pointer over `dt` seconds of wall time.
     ///
     /// `button` is whether the left button is down, and whether it went
     /// down this frame.
@@ -593,18 +600,33 @@ impl App {
         let geometry = self.simulation.geometry();
         let pistons = self.simulation.power_pistons();
         let crank = hand_crank(geometry, pistons);
-        let wheels = valve_wheels(BlockShape::new(geometry));
+        let shape = BlockShape::new(geometry);
+        let wheels = valve_wheels(shape);
         if self.grab.is_none() && pressed && !over_controls {
+            let [pause, tracers] = button_boxes(shape);
+            let cartridge = if self.simulation.regenerator().is_enabled() {
+                cartridge::seat(shape)
+            } else {
+                cartridge::rest(shape)
+            };
             let handles = [
                 (Handle::Crank, crank.handle(pistons.angle())),
                 (Handle::Valve(ReservoirSide::Hot), wheels[0].center),
                 (Handle::Valve(ReservoirSide::Cold), wheels[1].center),
+                (Handle::PauseButton, pause.dome_top()),
+                (Handle::TracersButton, tracers.dome_top()),
+                (Handle::Cartridge, cartridge),
             ];
             self.grab = pick(&handles, matrix, size, pointer).map(Grab::new);
+            if let Some(handle) = self.grab.map(|grab| grab.handle).filter(|h| h.presses()) {
+                self.press(handle);
+            }
         }
         let Some(mut grab) = self.grab else {
             return;
         };
+        // A press may have changed the engine; look again.
+        let pistons = self.simulation.power_pistons();
         let ray = Ray::through(matrix, size, pointer);
         match grab.handle {
             Handle::Crank => {
@@ -639,8 +661,37 @@ impl App {
                     self.demo = None;
                 }
             }
+            // Pressed once when grabbed; held, they only keep the camera
+            // still.
+            Handle::PauseButton | Handle::TracersButton | Handle::Cartridge => {}
         }
         self.grab = Some(grab);
+    }
+
+    /// Does what pressing `handle` does: a button flips its switch, as its
+    /// key would, and the cartridge puts the regenerator in or takes it
+    /// out, as its switch would.
+    fn press(&mut self, handle: Handle) {
+        match handle {
+            Handle::PauseButton => self.paused = !self.paused,
+            Handle::TracersButton => self.toggle_tracers(),
+            Handle::Cartridge => {
+                let on = !self.simulation.regenerator().is_enabled();
+                self.simulation.set_regenerator(on);
+                self.controls.set_regenerator(on);
+                // The demo's banner would no longer be true.
+                self.demo = None;
+            }
+            Handle::Crank | Handle::Valve(_) => {}
+        }
+    }
+
+    /// Turns the tracers on or off.
+    fn toggle_tracers(&mut self) {
+        self.tracers = !self.tracers;
+        if !self.tracers {
+            self.simulation.stop_following();
+        }
     }
 
     /// Sets up `scenario`: its temperatures on the walls and the sliders,
@@ -701,6 +752,7 @@ impl App {
         self.keys_grown = motion::advance(self.keys_grown, self.show_keys, dt, KEYS_SECONDS);
         self.menu_dropped = motion::advance(self.menu_dropped, self.show_demos, dt, MENU_SECONDS);
         self.demo_age += dt;
+        self.tag_shifts.tick(dt);
     }
 
     /// Steps the simulation by this frame's time and updates what follows
@@ -742,6 +794,11 @@ impl App {
             valve_turn(ReservoirSide::Hot, self.settings.0),
             valve_turn(ReservoirSide::Cold, self.settings.1),
         ));
+        let held = |handle| self.grab.is_some_and(|grab| grab.handle == handle);
+        self.scene.set_switches(DomeStates {
+            on: [self.paused, self.tracers],
+            held: [held(Handle::PauseButton), held(Handle::TracersButton)],
+        });
         self.scene.render(&self.simulation, &camera, self.scenery);
 
         // Measure every string first, then draw (see `Pen` for why).
@@ -787,7 +844,8 @@ impl App {
         if self.labels_grown > 0.0 && shown {
             let cards: Vec<Rect> = banner.into_iter().chain(strip).collect();
             let grown = motion::smooth(self.labels_grown);
-            scene_labels::draw(pen, &self.simulation, view, area, &cards, grown);
+            let (simulation, shifts) = (&self.simulation, &mut self.tag_shifts);
+            scene_labels::draw(pen, simulation, view, area, &cards, grown, shifts);
         }
         let (panel_shift, sliders_shift) = self.drawer_shifts(width, area.height);
         if let Some(shift) = panel_shift.filter(|_| shown) {

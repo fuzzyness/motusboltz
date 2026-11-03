@@ -1,5 +1,6 @@
 //! The engine's own controls, grabbed and turned with the mouse: the hand
-//! crank on the shaft and the two valves.
+//! crank on the shaft and the two valves; and the parts pressed with it:
+//! the Pause and Tracers buttons and the regenerator's cartridge.
 //!
 //! A press near a part's handle, on screen, grabs it; while the button is
 //! held, the pointer is followed onto the plane the part turns in, and the
@@ -49,6 +50,22 @@ pub enum Handle {
     Crank,
     /// The valve that feeds `ReservoirSide`'s wall.
     Valve(ReservoirSide),
+    /// The Pause button.
+    PauseButton,
+    /// The Tracers button.
+    TracersButton,
+    /// The regenerator's cartridge, on the table or in the opening.
+    Cartridge,
+}
+
+impl Handle {
+    /// Whether it acts once when pressed, rather than turning while held.
+    pub fn presses(self) -> bool {
+        matches!(
+            self,
+            Self::PauseButton | Self::TracersButton | Self::Cartridge
+        )
+    }
 }
 
 /// The temperature range a valve sets, from shut to fully open.

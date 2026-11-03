@@ -1,5 +1,7 @@
 //! Labels on the scene: tags beside the hot and cold cylinders, the
-//! opening, the flywheel and the gas, each with its part in the system.
+//! opening, the flywheel and the gas, each with its part in the system,
+//! and beside the Pause and Tracers buttons and the regenerator's
+//! cartridge, each with what pressing it does.
 //!
 //! The helium is the system; the hot and cold walls and the flywheel are
 //! its surroundings. Each tag stands clear of its part, past a point set in
@@ -19,8 +21,11 @@ use macroquad::prelude::{
 use crate::graphics::assembly::flywheel_radius;
 use crate::graphics::block::{
     BASE_THICKNESS,
+    BlockShape,
     WALL_THICKNESS, //
 };
+use crate::graphics::buttons::button_boxes;
+use crate::graphics::cartridge;
 use crate::sim::engine::ConnectedChambers;
 use crate::ui::controls::{
     BACKING,
@@ -84,9 +89,14 @@ pub struct Tag {
     pub outward: Vec3,
 }
 
-/// The tags for the engine of `engine`, the system's first: where two
-/// would overlap, the later one gives way.
-pub fn tags(engine: &ConnectedChambers) -> [Tag; 5] {
+/// How far a button's or the cartridge's tag stands out from it, in bore
+/// radii.
+const PART_OUT: f32 = 0.4;
+
+/// The tags for the engine of `engine`, the system's first and the
+/// buttons' and cartridge's last: where two would overlap, the later one
+/// gives way. The cartridge has one only while it lies on the table.
+pub fn tags(engine: &ConnectedChambers) -> Vec<Tag> {
     let geometry = engine.geometry();
     let outer = geometry.cylinder_radius + WALL_THICKNESS;
     let shaft = engine.power_pistons().shaft_height();
@@ -104,7 +114,10 @@ pub fn tags(engine: &ConnectedChambers) -> [Tag; 5] {
     } else {
         ("Opening", "insulated: no heat")
     };
-    [
+    let shape = BlockShape::new(geometry);
+    let out = PART_OUT * shape.bore;
+    let [pause, tracers] = button_boxes(shape);
+    let mut tags = vec![
         Tag {
             name: "Helium gas",
             role: "the system",
@@ -135,7 +148,77 @@ pub fn tags(engine: &ConnectedChambers) -> [Tag; 5] {
             anchor: vec3(0.0, geometry.passage_center_y(), 0.0),
             outward: under_opening,
         },
-    ]
+        Tag {
+            name: "Pause",
+            role: "press to pause or go on",
+            anchor: pause.dome_top(),
+            outward: away(pause.dome_top(), out),
+        },
+        Tag {
+            name: "Tracers",
+            role: "press to follow a few atoms",
+            anchor: tracers.dome_top(),
+            outward: away(tracers.dome_top(), out),
+        },
+    ];
+    if !engine.regenerator().is_enabled() {
+        tags.push(Tag {
+            name: "Regenerator",
+            role: "press to slide it in",
+            anchor: cartridge::rest(shape),
+            outward: away(cartridge::rest(shape), out) + Vec3::Y * out,
+        });
+    }
+    tags
+}
+
+/// A step of `length` from `point` straight away from the engine's
+/// middle, level, so a part's tag stands off on the side away from the
+/// engine and does not hide it.
+fn away(point: Vec3, length: f32) -> Vec3 {
+    vec3(point.x, 0.0, point.z).normalize_or_zero() * length
+}
+
+/// Seconds a tag crowded aside takes to settle most of the way into its
+/// new place, so it glides there instead of jumping.
+const SHIFT_SECONDS: f32 = 0.08;
+
+/// How far each tag has been moved aside from its own place to clear the
+/// others, eased over time, by name.
+#[derive(Debug, Default)]
+pub struct Shifts {
+    /// Each tag's name and its eased move.
+    moves: Vec<(&'static str, Vec2)>,
+    /// Seconds since the last frame, which the moves ease over.
+    dt: f32,
+}
+
+impl Shifts {
+    /// Starts a frame `dt` seconds after the last.
+    pub fn tick(&mut self, dt: f32) {
+        self.dt = dt.max(0.0);
+    }
+
+    /// Eases `name`'s move toward `target` over this frame and returns it;
+    /// a tag not seen before takes its move at once.
+    fn ease(&mut self, name: &'static str, target: Vec2) -> Vec2 {
+        let dt = self.dt;
+        let Some((_, shift)) = self.moves.iter_mut().find(|(seen, _)| *seen == name) else {
+            self.moves.push((name, target));
+            return target;
+        };
+        let share = 1.0 - (-dt / SHIFT_SECONDS).exp();
+        *shift += (target - *shift) * share;
+        *shift
+    }
+
+    /// `name`'s move as it stands, if it has one.
+    fn current(&self, name: &str) -> Option<Vec2> {
+        self.moves
+            .iter()
+            .find(|(seen, _)| *seen == name)
+            .map(|(_, shift)| *shift)
+    }
 }
 
 /// Where `point` lands on a screen of `size` through `matrix`, or `None`
@@ -148,45 +231,65 @@ pub fn project(matrix: Mat4, size: Vec2, point: Vec3) -> Option<Vec2> {
     })
 }
 
-/// `rect` moved up clear of every box in `taken`, or `None` if that would
-/// lift its top above `top`.
-fn clear_of(mut rect: Rect, taken: &[Rect], top: f32) -> Option<Rect> {
-    // Each move lifts the box above one in its way, so there are at most
-    // as many moves as boxes.
-    for _ in 0..=taken.len() {
-        let Some(other) = taken
-            .iter()
-            .find(|other| grown(**other, TAG_GAP).overlaps(&rect))
-        else {
-            return Some(rect);
-        };
-        rect.y = other.y - TAG_GAP - rect.h;
-        if rect.y < top {
-            return None;
+/// Half-steps up or down a tag may move to clear the others, each half its
+/// height and the gap.
+const VERTICAL_STEPS: i32 = 14;
+/// Half-steps left or right a tag may move, each half its width.
+const SIDEWAYS_STEPS: i32 = 3;
+
+/// `rect` moved as little as it can to clear every box in `taken` and
+/// `avoid`, staying inside `bounds`, or `None` if there is no such place
+/// within reach.
+///
+/// It looks a half step at a time up, down and to each side, so a tag
+/// crowded on one side finds room on another and no tag is lost while
+/// another's room is free.
+fn clear_of(rect: Rect, taken: &[Rect], bounds: Rect, avoid: Option<Rect>) -> Option<Rect> {
+    let step = vec2(rect.w, rect.h + TAG_GAP) / 2.0;
+    let fits = |spot: &Rect| {
+        spot.x >= bounds.x
+            && spot.y >= bounds.y
+            && spot.right() <= bounds.right()
+            && spot.bottom() <= bounds.bottom()
+            && avoid.is_none_or(|card| !grown(card, TAG_GAP).overlaps(spot))
+            && taken
+                .iter()
+                .all(|other| !grown(*other, TAG_GAP).overlaps(spot))
+    };
+    let mut best: Option<(f32, Rect)> = None;
+    for down in -VERTICAL_STEPS..=VERTICAL_STEPS {
+        for across in -SIDEWAYS_STEPS..=SIDEWAYS_STEPS {
+            let shift = vec2(across as f32 * step.x, down as f32 * step.y);
+            let spot = Rect::new(rect.x + shift.x, rect.y + shift.y, rect.w, rect.h);
+            let distance = shift.length();
+            if fits(&spot) && best.is_none_or(|(least, _)| distance < least) {
+                best = Some((distance, spot));
+            }
         }
     }
-    None
+    best.map(|(_, spot)| spot)
 }
 
 /// Where each tag goes, for `tags` seen through `matrix` in `area` clear of
-/// `cards`: its dot and its box, or `None` for a part behind the camera or
-/// a tag with no room left.
+/// `cards`: its dot, its box and how far the box was moved aside from its
+/// own place to clear the others, or `None` for a part behind the camera
+/// or a tag with no room left.
 ///
 /// The boxes stay between the panel and the window's right edge, left of
 /// the slider column's card where they are level with it, and between the
 /// toggles and the bottom row. A box in the way of one of `cards` or of an
-/// earlier tag moves up past it.
+/// earlier tag moves to the nearest free place (see `clear_of`).
 ///
 /// The right side is not held to the centered span, whose inset mirrors
 /// the panel's width, or the tag of a part on the right would be pushed
 /// in over the engine.
-pub fn place(
+fn place(
     pen: &Pen,
     tags: &[Tag],
     matrix: Mat4,
     area: SceneArea,
     cards: &[Rect],
-) -> Vec<Option<(Vec2, Rect)>> {
+) -> Vec<Option<(Vec2, Rect, Vec2)>> {
     let size = vec2(area.window_width, area.height);
     let floor = row_top(area.height);
     let mut taken = cards.to_vec();
@@ -220,9 +323,16 @@ pub fn place(
                 center
             };
             let rect = Rect::new(center.x - half.x, center.y - half.y, width, height);
-            let rect = clear_of(rect, &taken, low.y - half.y)?;
-            taken.push(rect);
-            Some((dot, rect))
+            let bounds = Rect::new(
+                low.x - half.x,
+                low.y - half.y,
+                high.x.max(low.x) - low.x + width,
+                high.y.max(low.y) - low.y + height,
+            );
+            let avoid = area.sliders.then_some(column);
+            let cleared = clear_of(rect, &taken, bounds, avoid)?;
+            taken.push(cleared);
+            Some((dot, cleared, cleared.point() - rect.point()))
         })
         .collect()
 }
@@ -245,6 +355,9 @@ pub fn grown_from(dot: Vec2, rect: Rect, grown: f32) -> Rect {
 ///
 /// A tag shrinks toward its dot along its leader; its words fade out
 /// first, so they never spill out of a shrinking tag.
+///
+/// A tag crowded aside to clear another glides there over the frame
+/// `shifts` was ticked for, its move kept there from frame to frame.
 pub fn draw(
     pen: &mut Pen,
     engine: &ConnectedChambers,
@@ -252,12 +365,25 @@ pub fn draw(
     area: SceneArea,
     cards: &[Rect],
     grown: f32,
+    shifts: &mut Shifts,
 ) {
     let tags = tags(engine);
     let words = smooth((grown - WORDS_FROM) / (1.0 - WORDS_FROM));
     for (tag, placed) in tags.iter().zip(place(pen, &tags, matrix, area, cards)) {
-        let Some((dot, rect)) = placed else {
+        let Some((dot, rect, moved)) = placed else {
             continue;
+        };
+        // A tag crowded aside glides to its new place; the pass that only
+        // measures leaves the moves as they stand.
+        let eased = if pen.is_warming() {
+            shifts.current(tag.name).unwrap_or(moved)
+        } else {
+            shifts.ease(tag.name, moved)
+        };
+        let rect = Rect {
+            x: rect.x - moved.x + eased.x,
+            y: rect.y - moved.y + eased.y,
+            ..rect
         };
         let rect = grown_from(dot, rect, grown);
         let end = vec2(

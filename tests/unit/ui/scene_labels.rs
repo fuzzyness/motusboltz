@@ -72,6 +72,10 @@ fn the_tags_stay_in_the_scene_apart() {
         for cards in [vec![], vec![corner]] {
             let pen = Pen::offline();
             let placed = place(&pen, &tags, matrix(width, height), area, &cards);
+            let placed: Vec<_> = placed
+                .into_iter()
+                .map(|placed| placed.map(|(dot, rect, _)| (dot, rect)))
+                .collect();
             assert!(placed[0].is_some(), "the system always has its tag");
             let boxes: Vec<Rect> = placed.into_iter().flatten().map(|(_, rect)| rect).collect();
             for (index, rect) in boxes.iter().enumerate() {
@@ -95,4 +99,41 @@ fn a_tag_grows_out_of_its_dot() {
     let half = grown_from(dot, rect, 0.5);
     assert_eq!(half.center(), dot.lerp(rect.center(), 0.5));
     assert_eq!(half.w, 40.0);
+}
+
+/// The buttons always have tags; the cartridge has one only while it lies
+/// on the table, and the opening's names the regenerator once it is in.
+#[test]
+fn the_parts_to_press_have_tags() {
+    let mut engine = engine();
+    let names = |engine: &ConnectedChambers| -> Vec<&str> {
+        tags(engine).iter().map(|tag| tag.name).collect()
+    };
+    let out = names(&engine);
+    assert!(out.contains(&"Pause") && out.contains(&"Tracers"));
+    assert_eq!(out.iter().filter(|name| **name == "Regenerator").count(), 1);
+    engine.set_regenerator(true);
+    let inside = names(&engine);
+    assert_eq!(inside.len(), out.len() - 1);
+    assert_eq!(
+        inside.iter().filter(|name| **name == "Regenerator").count(),
+        1
+    );
+}
+
+/// A tag moved aside glides to its new place instead of jumping; a new tag
+/// takes its place at once.
+#[test]
+fn a_crowded_tag_glides_aside() {
+    let mut shifts = Shifts::default();
+    let target = vec2(0.0, -60.0);
+    assert_eq!(shifts.ease("Tracers", Vec2::ZERO), Vec2::ZERO);
+    shifts.tick(1.0 / 60.0);
+    let first = shifts.ease("Tracers", target);
+    assert!(first.y < 0.0 && first.y > target.y / 2.0, "{first}");
+    for _ in 0..60 {
+        shifts.ease("Tracers", target);
+    }
+    assert!(shifts.current("Tracers").unwrap().distance(target) < 0.1);
+    assert_eq!(shifts.ease("Pause", target), target);
 }
