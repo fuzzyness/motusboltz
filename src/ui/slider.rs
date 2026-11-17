@@ -159,8 +159,6 @@ struct Setting {
 pub struct SliderUpdate {
     /// The value changed.
     pub changed: bool,
-    /// A drag ended.
-    pub released: bool,
 }
 
 /// Horizontal slider dragged with the left mouse button.
@@ -247,12 +245,8 @@ impl Slider {
     /// the button is released.
     pub fn update(&mut self) -> SliderUpdate {
         if !is_mouse_button_down(MouseButton::Left) {
-            let released = self.dragging;
             self.dragging = false;
-            return SliderUpdate {
-                released,
-                ..Default::default()
-            };
+            return SliderUpdate::default();
         }
         let hit = SLIDER_HIT_HALF_HEIGHT;
         if is_mouse_button_pressed(MouseButton::Left)
@@ -266,10 +260,7 @@ impl Slider {
         let next = self.value_at_x(mouse_position().0, self.origin_x());
         let changed = next != self.value;
         self.value = next;
-        SliderUpdate {
-            changed,
-            released: false,
-        }
+        SliderUpdate { changed }
     }
 
     /// Moves the glow on by `dt` seconds: up while the slider is `shown`

@@ -36,6 +36,12 @@ use crate::sim::pistons::{
     PowerPistons,
     starting_energy, //
 };
+use crate::sim::port::{
+    FLOW_PER_SECOND,
+    Port,
+    TANK_KELVIN,
+    closed_up, //
+};
 use crate::sim::regenerator::Regenerator;
 use crate::sim::reservoir::{
     PerReservoir,
@@ -86,6 +92,15 @@ const MAX_FRAME_TIME: f32 = MAX_FIXED_STEPS_PER_FRAME as f32 * FIXED_DT;
 /// work stay within the scatter between seeds. Every substep costs a full
 /// collision pass, so this limit sets most of the physics time.
 const MAX_TRAVEL_RADII: f32 = 0.75;
+/// Seconds the reported flow through the port takes to settle most of the
+/// way to the flow now.
+const FLOW_SMOOTHING_SECONDS: f32 = 0.15;
+/// Most steps' worth of flow the pump may make up at once after waiting
+/// for gas to reach the port or room at it.
+const MAX_BURST_STEPS: f32 = 2.0;
+/// Spots across the port's opening tried for each new particle before the
+/// pump waits for room.
+const PLACEMENT_TRIES: usize = 8;
 /// Most the crank turns in one substep.
 const MAX_CRANK_STEP_RADIANS: f32 = 0.02;
 
@@ -153,6 +168,18 @@ pub struct ConnectedChambers {
     sparks: HeatSparks,
     /// A pressure gauge on each piston, indexed by `HOT` and `COLD`.
     gauges: [PressureGauge; 2],
+    /// The particles the pump in the tank works toward.
+    target: usize,
+    /// Where the gas comes in and goes out.
+    port: Port,
+    /// Particles the pump may still move this step, carried over from
+    /// steps too short for a whole one.
+    flow_allowance: f32,
+    /// How fast gas has lately moved through the port, in particles per
+    /// second: positive in, negative out.
+    port_flow: f32,
+    /// Random stream for where and how fast new particles come in.
+    port_random: RandGenerator,
 }
 
 impl ConnectedChambers {
@@ -196,11 +223,8 @@ impl ConnectedChambers {
         let random = RandGenerator::new();
         random.srand(seed);
         let mut pistons = PowerPistons::new(geometry, PARTICLE_RADIUS);
-        // The back pressure equals the gas's initial pressure, P = N kT / V
-        // with kT = 1 in reduced units: a mechanical boundary condition, not
-        // a heat source.
         let volume_m3 = pistons.volume_m3(geometry);
-        pistons.set_reference_pressure(count as f32 / (volume_m3 / METERS_PER_UNIT.powi(3)) as f32);
+        pistons.set_reference_pressure(reference_pressure(geometry, count));
         pistons.set_starting_energy(starting_energy(count));
 
         // Sort the particles by region, then bring each region to rest on
@@ -223,6 +247,8 @@ impl ConnectedChambers {
         let (lower, upper) = geometry.gas_bounds();
         let thermal_seed = random.gen_range(0, u64::MAX);
         let regenerator_seed = random.gen_range(0, u64::MAX);
+        let port_random = RandGenerator::new();
+        port_random.srand(random.gen_range(0, u64::MAX));
         let start = CycleTotals {
             gas_energy: gas_energy(&particles),
             ..CycleTotals::default()
@@ -249,6 +275,11 @@ impl ConnectedChambers {
             tracers: None,
             sparks: HeatSparks::new(),
             gauges: [PressureGauge::new(); 2],
+            target: count,
+            port: Port::new(geometry),
+            flow_allowance: 0.0,
+            port_flow: 0.0,
+            port_random,
         }
     }
 
@@ -269,22 +300,177 @@ impl ConnectedChambers {
         self.regenerator.set_enabled(regenerating, hot, cold);
     }
 
-    /// Refills with the same amount of helium at 300 K.
+    /// Refills with fresh helium at 300 K, as much as the pump works
+    /// toward (see `set_concentration`).
     pub fn reset(&mut self) {
-        self.refill(self.particles.len());
+        self.refill(self.target);
     }
 
-    /// Refills at a new concentration in mol/L, if it changes the particle
-    /// count; each particle stands for a fixed amount of helium.
+    /// Sets the concentration in mol/L the pump in the helium tank works
+    /// toward; each particle stands for a fixed amount of helium.
+    ///
+    /// The gas does not change at once: while the engine runs, the pump
+    /// moves particles in or out through the port at `FLOW_PER_SECOND`
+    /// (see `run_port`), so the fill follows the slider as it moves.
     ///
     /// # Panics
     ///
     /// Panics if `concentration` is outside the fill range.
     pub fn set_concentration(&mut self, concentration: f32) {
-        let count = Self::particles_for_concentration(concentration);
-        if count != self.particles.len() {
-            self.refill(count);
+        self.target = Self::particles_for_concentration(concentration);
+    }
+
+    /// The particles the pump works toward.
+    #[cfg(test)]
+    pub fn target_count(&self) -> usize {
+        self.target
+    }
+
+    /// The port the gas comes in and goes out through.
+    pub fn port(&self) -> Port {
+        self.port
+    }
+
+    /// How fast gas has lately moved through the port, in particles per
+    /// second of model time: positive coming in, negative going out.
+    pub fn port_flow(&self) -> f32 {
+        self.port_flow
+    }
+
+    /// Pumps gas through the port for a step of `dt` toward the target
+    /// (see `set_concentration`).
+    ///
+    /// New particles start in the port's inlet at the tank's temperature,
+    /// heading in, where there is room; leaving ones are taken from those
+    /// near it, never a followed one, the nearest first. Gas that has to
+    /// reach the port first makes the pump wait. What scales with the
+    /// amount of gas follows it (see `fit_to_count`), the energy the
+    /// particles bring or take is set apart from the heat and work since
+    /// the fill, and the turn in progress is not recorded.
+    fn run_port(&mut self, dt: f32) {
+        let wanted = self.target as i64 - self.particles.len() as i64;
+        let rate_share = 1.0 - (-dt / FLOW_SMOOTHING_SECONDS).exp();
+        if wanted == 0 {
+            self.flow_allowance = 0.0;
+            self.port_flow -= self.port_flow * rate_share;
+            return;
         }
+        let burst = FLOW_PER_SECOND * dt * MAX_BURST_STEPS;
+        self.flow_allowance = (self.flow_allowance + FLOW_PER_SECOND * dt).min(burst);
+        let allowed = self.flow_allowance.floor() as i64;
+        let moved = if wanted > 0 {
+            self.pump_in(allowed.min(wanted) as usize) as i64
+        } else {
+            -(self.pump_out(allowed.min(-wanted) as usize) as i64)
+        };
+        self.flow_allowance -= moved.unsigned_abs() as f32;
+        self.port_flow += (moved as f32 / dt - self.port_flow) * rate_share;
+        if moved != 0 {
+            self.fit_to_count();
+            self.cycle.discard_turn();
+        }
+    }
+
+    /// Brings in up to `count` particles through the port, as many as
+    /// there is room for in its inlet (see `Port::inlet_spot`); returns
+    /// how many came.
+    fn pump_in(&mut self, count: usize) -> usize {
+        let port = self.port;
+        let gap = 2.0 * PARTICLE_RADIUS;
+        let temperature = TANK_KELVIN / KELVIN_PER_UNIT as f32;
+        let mut came = 0;
+        for _ in 0..count {
+            let random = &self.port_random;
+            let spot = (0..PLACEMENT_TRIES)
+                .map(|_| {
+                    let [deep, round, out] = [0; 3].map(|_| random.gen_range(0.0_f32, 1.0));
+                    port.inlet_spot(PARTICLE_RADIUS, deep, round, out)
+                })
+                .find(|spot| {
+                    self.region(*spot) == Region::Cold
+                        && self
+                            .particles
+                            .iter()
+                            .all(|other| other.position.distance(*spot) >= gap)
+                });
+            let Some(position) = spot else {
+                break;
+            };
+            let mut velocity = gas::sample_thermal_velocity(temperature, &self.port_random);
+            // Heading in, out of the port.
+            let outward = velocity.dot(port.outward);
+            if outward > 0.0 {
+                velocity -= 2.0 * outward * port.outward;
+            }
+            let particle = Particle { position, velocity };
+            self.initial_energy += gas::particle_kinetic_energy(velocity);
+            self.particles.push(particle);
+            self.flashes.push(0.0);
+            came += 1;
+        }
+        came
+    }
+
+    /// Takes up to `count` particles in the port's outlet back into the
+    /// tank, the nearest its middle first, never a followed one; returns
+    /// how many left.
+    fn pump_out(&mut self, count: usize) -> usize {
+        let outlet = self.port.outlet(PARTICLE_RADIUS);
+        let reach = self.port.capture;
+        let followed: Vec<usize> = self
+            .tracers
+            .as_ref()
+            .map(|tracers| tracers.indices().collect())
+            .unwrap_or_default();
+        let mut near: Vec<(f32, usize)> = self
+            .particles
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !followed.contains(index))
+            .map(|(index, particle)| (particle.position.distance(outlet), index))
+            .filter(|&(distance, _)| distance <= reach)
+            .collect();
+        near.sort_by(|a, b| a.0.total_cmp(&b.0));
+        near.truncate(count);
+        // Never the last particle.
+        near.truncate(self.particles.len().saturating_sub(1));
+        let leaving: Vec<usize> = near.into_iter().map(|(_, index)| index).collect();
+        for &index in &leaving {
+            let velocity = self.particles[index].velocity;
+            self.initial_energy -= gas::particle_kinetic_energy(velocity);
+        }
+        self.remove_particles(&leaving);
+        leaving.len()
+    }
+
+    /// Takes out the particles at `leaving`; the rest close up in order,
+    /// and the tracers follow their particles to their new places.
+    fn remove_particles(&mut self, leaving: &[usize]) {
+        let moved = closed_up(self.particles.len(), leaving);
+        let mut slot = 0;
+        self.particles.retain(|_| {
+            slot += 1;
+            moved[slot - 1].is_some()
+        });
+        let mut slot = 0;
+        self.flashes.retain(|_| {
+            slot += 1;
+            moved[slot - 1].is_some()
+        });
+        if let Some(tracers) = self.tracers.as_mut() {
+            tracers.reindex(&moved);
+        }
+    }
+
+    /// Sizes what scales with the amount of gas for the particles there are
+    /// now: the back pressure on the pistons, the flywheel's starting
+    /// speed, and the regenerator's screens, whose temperatures are kept.
+    fn fit_to_count(&mut self) {
+        let count = self.particles.len();
+        self.pistons
+            .set_reference_pressure(reference_pressure(self.geometry, count));
+        self.pistons.set_starting_energy(starting_energy(count));
+        self.regenerator.set_particle_count(count);
     }
 
     /// Sets the hot wall temperature; the gas changes only as it hits it.
@@ -554,6 +740,7 @@ impl ConnectedChambers {
     /// particle moves more than `MAX_TRAVEL_RADII` relative to a piston and
     /// the crank turns at most `MAX_CRANK_STEP_RADIANS` in each.
     fn step(&mut self, dt: f32) {
+        self.run_port(dt);
         let mut remaining = dt;
         while remaining > 0.0 {
             let max_speed = self
@@ -831,6 +1018,16 @@ fn fill_sites(geometry: ChamberGeometry, pistons: &PowerPistons, count: usize) -
         }
     }
     unreachable!("the lattice refines until it fits or fails the assertion")
+}
+
+/// The constant pressure behind the pistons for `count` particles in
+/// `geometry`: the gas's pressure at the fill, P = N kT / V with kT = 1 in
+/// reduced units and the pistons where a fill leaves them. It is a
+/// mechanical boundary condition, not a heat source, and scales with the
+/// amount of gas.
+fn reference_pressure(geometry: ChamberGeometry, count: usize) -> f32 {
+    let volume_m3 = PowerPistons::new(geometry, PARTICLE_RADIUS).volume_m3(geometry);
+    count as f32 / (volume_m3 / METERS_PER_UNIT.powi(3)) as f32
 }
 
 /// Gas kinetic (internal) energy summed in f64, so per-turn differences of a

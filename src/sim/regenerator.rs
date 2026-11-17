@@ -131,6 +131,18 @@ impl Regenerator {
         self.enabled = enabled;
     }
 
+    /// Sizes the screens for `particle_count` particles, as `new` does,
+    /// keeping their temperatures: the gas passing through them scales
+    /// with the fill, and so must they, to warm and cool as fast.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `particle_count` is zero.
+    pub fn set_particle_count(&mut self, particle_count: usize) {
+        assert!(particle_count > 0);
+        self.heat_capacity = HEAT_CAPACITY_PER_PARTICLE * particle_count as f64;
+    }
+
     /// Heat the screens have given the gas since the fill.
     pub fn heat(&self) -> f64 {
         self.heat

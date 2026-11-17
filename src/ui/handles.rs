@@ -1,5 +1,6 @@
 //! The engine's own controls, grabbed and turned with the mouse: the hand
-//! crank on the shaft and the two valves; and the parts pressed with it:
+//! crank on the shaft, the two valves and the helium tank's knob; and the
+//! parts pressed with it:
 //! the Reset and Tracers buttons and the regenerator's cartridge.
 //!
 //! A press near a part's handle, on screen, grabs it; while the button is
@@ -9,7 +10,10 @@
 //! for 300 K, fully open after `VALVE_TURNS` turns for the slider's far
 //! end. The walls then move toward a new setting at
 //! `RAMP_KELVIN_PER_SECOND`, as a burner or a nitrogen line takes time to
-//! heat or cool them, whether it was set by a valve or a slider.
+//! heat or cool them, whether it was set by a valve or a slider. The tank's
+//! knob sets the helium the pump works toward: shut for the least fill,
+//! fully open after `KNOB_TURNS` turns for the most, as the helium slider
+//! does.
 
 use std::f32::consts::{
     PI,
@@ -30,10 +34,16 @@ use crate::sim::reservoir::{
     MIN_HOT_KELVIN,
     ReservoirSide, //
 };
+use crate::sim::units::{
+    MAX_CONCENTRATION,
+    MIN_CONCENTRATION, //
+};
 use crate::ui::scene_labels::project;
 
 /// Turns of a valve's wheel from shut to fully open.
 pub const VALVE_TURNS: f32 = 1.5;
+/// Turns of the helium tank's knob from the least fill to the most.
+pub const KNOB_TURNS: f32 = 1.5;
 /// How fast a wall's temperature moves toward its setting, in kelvin per
 /// second of model time.
 pub const RAMP_KELVIN_PER_SECOND: f32 = 150.0;
@@ -56,6 +66,8 @@ pub enum Handle {
     TracersButton,
     /// The regenerator's cartridge, on the table or in the opening.
     Cartridge,
+    /// The helium tank's knob.
+    TankKnob,
 }
 
 impl Handle {
@@ -94,6 +106,25 @@ pub fn valve_kelvin(side: ReservoirSide, opening: f32) -> f32 {
 /// in radians counterclockwise seen from above.
 pub fn valve_turn(side: ReservoirSide, kelvin: f32) -> f32 {
     valve_opening(side, kelvin) * VALVE_TURNS * TAU
+}
+
+/// How far the tank's knob is open, from 0 (the least fill) to 1 (the
+/// most), for a concentration of `concentration` mol/L.
+pub fn knob_opening(concentration: f32) -> f32 {
+    ((concentration - MIN_CONCENTRATION) / (MAX_CONCENTRATION - MIN_CONCENTRATION)).clamp(0.0, 1.0)
+}
+
+/// The concentration in mol/L the tank's knob sets when it is `opening`
+/// open (see `knob_opening`).
+pub fn knob_concentration(opening: f32) -> f32 {
+    MIN_CONCENTRATION + (MAX_CONCENTRATION - MIN_CONCENTRATION) * opening.clamp(0.0, 1.0)
+}
+
+/// How far the tank's knob has turned from the least fill for a
+/// concentration of `concentration`, in radians counterclockwise seen from
+/// above.
+pub fn knob_turn(concentration: f32) -> f32 {
+    knob_opening(concentration) * KNOB_TURNS * TAU
 }
 
 /// `current` moved toward `target` over `dt` seconds of model time at

@@ -91,6 +91,20 @@ impl Tracers {
         }
     }
 
+    /// Follows the particles to their new indices after some left and the
+    /// rest closed up: `moved` gives each old index's new one, or `None`
+    /// for a particle that left, whose path is dropped.
+    pub fn reindex(&mut self, moved: &[Option<usize>]) {
+        self.paths
+            .retain_mut(|path| match moved.get(path.index).copied().flatten() {
+                Some(index) => {
+                    path.index = index;
+                    true
+                }
+                None => false,
+            });
+    }
+
     /// Model time since the tracers were chosen.
     pub fn time(&self) -> f64 {
         self.time

@@ -111,3 +111,19 @@ fn wheel_angles_run_counterclockwise_seen_from_above() {
     let quarter = Mat3::from_rotation_y(FRAC_PI_2) * Vec3::X;
     assert!((wheel_angle(center, center + quarter) - FRAC_PI_2).abs() < TOLERANCE);
 }
+
+/// The tank's knob runs from the least fill, shut, to the most after
+/// `KNOB_TURNS` turns, and a turn back undoes a turn forward.
+#[test]
+fn the_knob_sets_the_fill() {
+    use crate::sim::units::{
+        MAX_CONCENTRATION,
+        MIN_CONCENTRATION, //
+    };
+    assert_eq!(knob_turn(MIN_CONCENTRATION), 0.0);
+    assert!((knob_turn(MAX_CONCENTRATION) - KNOB_TURNS * TAU).abs() < 1e-4);
+    assert_eq!(knob_concentration(-1.0), MIN_CONCENTRATION);
+    assert_eq!(knob_concentration(2.0), MAX_CONCENTRATION);
+    let middle = knob_concentration(0.5);
+    assert!((knob_opening(middle) - 0.5).abs() < 1e-5);
+}

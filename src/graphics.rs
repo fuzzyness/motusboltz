@@ -1,9 +1,9 @@
 //! 3D drawing of the particles, tracer trails, cylinders, the opening
-//! between them, the pistons, rods,
-//! crankshaft and flywheel, the burner and the liquid-nitrogen coil that
-//! stand for the two reservoirs, the valves that set them, the Reset and
-//! Tracers buttons, the regenerator's cartridge, the table the engine
-//! stands on, and the background.
+//! between them, the pistons, rods, crankshaft and flywheel, the burner
+//! and the liquid-nitrogen coil that stand for the two reservoirs, the
+//! valves that set them, the Reset and Tracers buttons, the regenerator's
+//! cartridge, the helium tank, the table the engine stands on, and the
+//! background.
 //!
 //! Drawing only; nothing here affects the physics.
 
@@ -25,6 +25,7 @@ pub mod soft_view;
 pub mod solid;
 pub mod sprites;
 pub mod table;
+pub mod tank;
 pub mod trails;
 pub mod valves;
 
@@ -95,6 +96,7 @@ use sprites::{
     SpriteMaterials, //
 };
 use table::Table;
+use tank::Tank;
 use trails::TrailRenderer;
 use valves::Valves;
 
@@ -314,6 +316,10 @@ pub struct Scene {
     switches: DomeStates,
     /// The regenerator's cartridge, on the table or in the opening.
     cartridge: Cartridge,
+    /// The helium tank, its gauge and its pipe to the port.
+    tank: Tank,
+    /// The tank's knob's turn (see `set_knob_turn`).
+    knob_turn: f32,
     /// Twinkles where heat crosses the walls.
     heat_sparks: HeatSparks,
     /// `None` where the sprite shader cannot be built: the burner and nitrogen
@@ -373,6 +379,8 @@ impl Scene {
             buttons: Buttons::new(shape),
             switches: DomeStates::default(),
             cartridge: Cartridge::new(shape, simulation.regenerator().is_enabled()),
+            tank: Tank::new(shape, simulation.port()),
+            knob_turn: 0.0,
             heat_sparks: HeatSparks::new(geometry),
             sprite_materials: SpriteMaterials::load(),
             backdrop: Backdrop::new(geometry),
@@ -394,6 +402,12 @@ impl Scene {
     /// counterclockwise seen from above, for the frames to come.
     pub fn set_valve_turns(&mut self, turns: (f32, f32)) {
         self.valve_turns = turns;
+    }
+
+    /// Turns the helium tank's knob to `turn` radians counterclockwise
+    /// seen from above, for the frames to come.
+    pub fn set_knob_turn(&mut self, turn: f32) {
+        self.knob_turn = turn;
     }
 
     /// Lights the Reset and Tracers buttons while their switches are on
@@ -522,6 +536,9 @@ impl Scene {
         self.nitrogen
             .build(self.levels.cold, effects, facing, camera.position);
         self.heat_sparks.build(simulation, camera, effects);
+        let particles = simulation.particles.len();
+        let flow = simulation.port_flow();
+        self.tank.pose(self.knob_turn, particles, flow, facing);
         self.cartridge
             .follow(simulation.regenerator().is_enabled(), seconds);
         self.chamber.draw(camera);
@@ -533,6 +550,7 @@ impl Scene {
         self.valves.draw(self.valve_turns, camera);
         self.buttons.draw_bodies(camera);
         self.cartridge.draw(camera);
+        self.tank.draw(camera);
         if scenery == Scenery::Sky {
             self.cloud.draw(camera, light);
         }
@@ -559,6 +577,7 @@ impl Scene {
         if let Some(materials) = &self.sprite_materials {
             self.fire.draw(materials);
             self.nitrogen.draw(materials);
+            self.tank.draw_puff(materials);
             if simulation.tracers().is_none() {
                 self.heat_sparks.draw(materials);
             }

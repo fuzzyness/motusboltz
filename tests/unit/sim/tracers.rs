@@ -64,3 +64,18 @@ fn every_followed_particle_has_its_own_path() {
         .collect();
     assert_eq!(starts, [particles[2].position, particles[0].position]);
 }
+
+/// When particles leave and the rest close up, each path follows its
+/// particle to its new index, and the path of one that left is dropped.
+#[test]
+fn paths_follow_their_particles_when_others_leave() {
+    let particles = [
+        particle(Vec3::ZERO, Vec3::X),
+        particle(Vec3::X, Vec3::Y),
+        particle(Vec3::Y, Vec3::Z),
+    ];
+    let mut tracers = Tracers::new(&[0, 2], &particles);
+    tracers.reindex(&[None, Some(0), Some(1)]);
+    let indices: Vec<usize> = tracers.indices().collect();
+    assert_eq!(indices, [1]);
+}

@@ -521,8 +521,9 @@ fn unshifted(pen: &Pen) {
 
 /// What the controls did this frame.
 ///
-/// Slider values are reported when a temperature changes and when the
-/// helium slider is released, since a new fill restarts the gas.
+/// Slider values are reported as they change; the helium's is the amount
+/// the pump in the tank works toward, which the gas follows as the slider
+/// moves.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ControlEvents {
     /// The button pressed, if any.
@@ -638,7 +639,7 @@ impl Controls {
             action,
             hot_kelvin: hot.changed.then(|| self.hot.value()),
             cold_kelvin: cold.changed.then(|| self.cold.value()),
-            concentration: concentration.released.then(|| self.concentration.value()),
+            concentration: concentration.changed.then(|| self.concentration.value()),
         }
     }
 
@@ -646,6 +647,17 @@ impl Controls {
     pub fn set_kelvin(&mut self, hot_kelvin: f32, cold_kelvin: f32) {
         self.hot.set_value(hot_kelvin);
         self.cold.set_value(cold_kelvin);
+    }
+
+    /// Moves the helium slider to `concentration` mol/L, set elsewhere (by
+    /// the tank's knob), without reporting it as a change.
+    pub fn set_concentration(&mut self, concentration: f32) {
+        self.concentration.set_value(concentration);
+    }
+
+    /// The helium concentration the slider stands at, in mol/L.
+    pub fn concentration(&self) -> f32 {
+        self.concentration.value()
     }
 
     /// Whether the camera should ignore the mouse this frame.

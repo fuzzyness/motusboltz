@@ -11,6 +11,8 @@ use crate::sim::cycle::{
 };
 use crate::sim::gas::DYNAMICS_TIME_SCALE;
 use crate::sim::geometry::DEFAULT_GEOMETRY;
+use crate::sim::pistons::FORWARD;
+use crate::sim::port::FLOW_PER_SECOND;
 use crate::sim::reservoir::{
     MAX_COLD_KELVIN,
     MAX_HOT_KELVIN,
@@ -529,7 +531,11 @@ fn concentration_controls_gas_amount_and_reset_preserves_it() {
     simulation.set_hot_kelvin(TEST_WARM_KELVIN);
     simulation.reset();
     assert_eq!(simulation.total_moles(), initial_moles);
+    // The pump brings the rest in through the port.
     simulation.set_concentration(0.50);
+    for _ in 0..(3.0 / FIXED_DT) as usize {
+        simulation.update(FIXED_DT);
+    }
     assert_eq!(simulation.total_moles(), 2.0 * initial_moles);
     assert_eq!(simulation.hot_kelvin(), TEST_WARM_KELVIN);
 }
@@ -1364,4 +1370,122 @@ fn regenerator_raises_efficiency_within_the_laws() {
             "seed {seed}"
         );
     }
+}
+
+/// Particles in a fill at `concentration`.
+fn particles_at(concentration: f32) -> usize {
+    ConnectedChambers::particles_for_concentration(concentration)
+}
+
+/// Gas pumped in comes through the port at the tank's temperature,
+/// heading in, at the pump's pace, until the fill reaches the target;
+/// the engine runs on and the ledgers stay balanced.
+#[test]
+fn the_pump_fills_through_the_port_while_the_engine_runs() {
+    const RELATIVE_TOLERANCE: f64 = 2e-3;
+    let mut simulation = ConnectedChambers::seeded(DEFAULT_PARTICLES);
+    simulation.set_hot_kelvin(MAX_HOT_KELVIN);
+    simulation.start_engine();
+    for _ in 0..240 {
+        simulation.update(FIXED_DT);
+    }
+    let angle = simulation.power_pistons().total_angle();
+    simulation.set_concentration(MAX_CONCENTRATION);
+    assert_eq!(simulation.particles.len(), DEFAULT_PARTICLES, "not at once");
+    assert_eq!(simulation.target_count(), MAX_PARTICLES);
+    // One step's worth comes in at the port's mouth, heading in.
+    let before = simulation.particles.len();
+    simulation.run_port(FIXED_DT);
+    let came = simulation.particles.len() - before;
+    assert!(
+        came >= 1 && came as f32 <= FLOW_PER_SECOND * FIXED_DT + 1.0,
+        "{came}"
+    );
+    let port = simulation.port();
+    for particle in &simulation.particles[before..] {
+        let mouth = port.mouth(PARTICLE_RADIUS);
+        assert!(particle.position.distance(mouth) <= port.inlet_reach() + 1e-4);
+        assert!(particle.velocity.dot(port.outward) <= 0.0, "heading in");
+        assert!(simulation.contains(particle.position));
+    }
+    assert!(simulation.port_flow() > 0.0);
+    let seconds = (MAX_PARTICLES - DEFAULT_PARTICLES) as f32 / FLOW_PER_SECOND;
+    for _ in 0..((seconds + 2.0) / FIXED_DT) as usize {
+        simulation.update(FIXED_DT);
+    }
+    assert_eq!(simulation.particles.len(), MAX_PARTICLES);
+    let energy = simulation.kinetic_energy() as f64;
+    assert!(simulation.energy_balance_error().abs() < RELATIVE_TOLERANCE * energy);
+    assert!(simulation.mechanical_balance_error().abs() < RELATIVE_TOLERANCE * energy);
+    let turned = simulation.power_pistons().total_angle() - angle;
+    assert!(turned * FORWARD > 0.0, "it runs on: {turned}");
+    let geometry = simulation.geometry();
+    assert_eq!(
+        reference_pressure(geometry, 2 * DEFAULT_PARTICLES),
+        2.0 * reference_pressure(geometry, DEFAULT_PARTICLES)
+    );
+}
+
+/// Gas pumped out leaves from near the port, never a followed particle,
+/// until the fill comes down to the target.
+#[test]
+fn the_pump_drains_through_the_port() {
+    const RELATIVE_TOLERANCE: f64 = 2e-3;
+    let mut simulation = ConnectedChambers::seeded(MAX_PARTICLES);
+    simulation.follow_particles(6, TEST_SEED);
+    let followed = |simulation: &ConnectedChambers| -> Vec<Vec3> {
+        let tracers = simulation.tracers().unwrap();
+        tracers
+            .indices()
+            .map(|index| simulation.particles[index].position)
+            .collect()
+    };
+    let watched = followed(&simulation);
+    simulation.set_concentration(MIN_CONCENTRATION);
+    let port = simulation.port();
+    let outlet = port.outlet(PARTICLE_RADIUS);
+    let near_before: Vec<Vec3> = simulation
+        .particles
+        .iter()
+        .map(|particle| particle.position)
+        .filter(|position| position.distance(outlet) <= port.capture)
+        .collect();
+    let before = simulation.particles.len();
+    simulation.run_port(FIXED_DT);
+    let left = before - simulation.particles.len();
+    assert!(left >= 1, "gas at the port leaves");
+    let near_after = simulation
+        .particles
+        .iter()
+        .filter(|particle| particle.position.distance(outlet) <= port.capture)
+        .count();
+    assert_eq!(
+        near_before.len() - near_after,
+        left,
+        "only from near the port"
+    );
+    assert_eq!(followed(&simulation), watched);
+    assert!(simulation.port_flow() < 0.0);
+    let target = particles_at(MIN_CONCENTRATION);
+    let mut seconds = 0.0;
+    while simulation.particles.len() > target && seconds < 20.0 {
+        simulation.update(FIXED_DT);
+        seconds += FIXED_DT;
+    }
+    assert_eq!(simulation.particles.len(), target, "drained in {seconds} s");
+    let energy = simulation.kinetic_energy() as f64;
+    assert!(simulation.energy_balance_error().abs() < RELATIVE_TOLERANCE * energy);
+}
+
+/// A reset while the pump is still at work refills with fresh gas at the
+/// amount it works toward.
+#[test]
+fn a_reset_refills_to_the_pumps_target() {
+    let mut simulation = ConnectedChambers::seeded(DEFAULT_PARTICLES);
+    simulation.set_concentration(MAX_CONCENTRATION);
+    simulation.update(FIXED_DT);
+    assert!(simulation.particles.len() < MAX_PARTICLES);
+    simulation.reset();
+    assert_eq!(simulation.particles.len(), MAX_PARTICLES);
+    assert_eq!(simulation.target_count(), MAX_PARTICLES);
 }

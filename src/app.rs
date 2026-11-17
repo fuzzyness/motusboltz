@@ -61,6 +61,7 @@ use crate::graphics::buttons::{
 };
 use crate::graphics::cartridge;
 use crate::graphics::table;
+use crate::graphics::tank::tank_place;
 use crate::graphics::valves::valve_wheels;
 use crate::graphics::{
     Dissolve,
@@ -118,8 +119,12 @@ use crate::ui::full_screen;
 use crate::ui::handles::{
     Grab,
     Handle,
+    KNOB_TURNS,
     Ray,
     VALVE_TURNS,
+    knob_concentration,
+    knob_opening,
+    knob_turn,
     pick,
     ramped,
     valve_kelvin,
@@ -963,8 +968,8 @@ impl App {
         if let Some(on) = regenerator {
             self.simulation.set_regenerator(on);
         }
-        // A new fill, temperature or regenerator ends the demo, whose banner
-        // would no longer be true.
+        // A change of the fill, a temperature or the regenerator ends the
+        // demo, whose banner would no longer be true.
         let changed = [events.concentration, events.hot_kelvin, events.cold_kelvin];
         if changed.iter().any(Option::is_some) || regenerator.is_some() {
             self.demo = None;
@@ -1000,6 +1005,7 @@ impl App {
         let crank = hand_crank(geometry, pistons);
         let shape = BlockShape::new(geometry);
         let wheels = valve_wheels(shape);
+        let knob = tank_place(shape, self.simulation.port()).knob;
         if self.grab.is_none() && pressed && !over_controls {
             let [reset, tracers] = button_boxes(shape);
             let cartridge = if self.simulation.regenerator().is_enabled() {
@@ -1014,6 +1020,7 @@ impl App {
                 (Handle::ResetButton, reset.dome_top()),
                 (Handle::TracersButton, tracers.dome_top()),
                 (Handle::Cartridge, cartridge),
+                (Handle::TankKnob, knob),
             ];
             self.grab = pick(&handles, matrix, size, pointer).map(Grab::new);
             if let Some(handle) = self.grab.map(|grab| grab.handle).filter(|h| h.presses()) {
@@ -1059,6 +1066,19 @@ impl App {
                     self.demo = None;
                 }
             }
+            Handle::TankKnob => {
+                let point = ray.and_then(|ray| ray.meet(knob, Vec3::Y));
+                let turn = grab.turned(point.map(|point| wheel_angle(knob, point)));
+                if turn != 0.0 {
+                    let current = self.controls.concentration();
+                    let opening = knob_opening(current) + turn / (KNOB_TURNS * TAU);
+                    let concentration = knob_concentration(opening);
+                    self.controls.set_concentration(concentration);
+                    self.simulation.set_concentration(concentration);
+                    // The demo's banner would no longer be true.
+                    self.demo = None;
+                }
+            }
             // Pressed once when grabbed; held, they only keep the camera
             // still.
             Handle::ResetButton | Handle::TracersButton | Handle::Cartridge => {}
@@ -1082,7 +1102,7 @@ impl App {
                 // The demo's banner would no longer be true.
                 self.demo = None;
             }
-            Handle::Crank | Handle::Valve(_) => {}
+            Handle::Crank | Handle::Valve(_) | Handle::TankKnob => {}
         }
     }
 
@@ -1222,7 +1242,8 @@ impl App {
     /// from it: the frame stats, Start and the panel.
     fn step(&mut self) {
         let physics_start = date::now();
-        // A refill (reset, new fill) clears the followed particles.
+        // A refill (a reset, or a demo set up) clears the followed
+        // particles; a change of the fill keeps them.
         if self.tracers && self.simulation.tracers().is_none() {
             let seed = gen_range(0, u64::MAX);
             self.simulation.follow_particles(FOLLOWED_PARTICLES, seed);
@@ -1277,6 +1298,8 @@ impl App {
             valve_turn(ReservoirSide::Hot, self.settings.0),
             valve_turn(ReservoirSide::Cold, self.settings.1),
         ));
+        self.scene
+            .set_knob_turn(knob_turn(self.controls.concentration()));
         let held = |handle| self.grab.is_some_and(|grab| grab.handle == handle);
         self.scene.set_paused(self.paused);
         self.scene.set_switches(DomeStates {

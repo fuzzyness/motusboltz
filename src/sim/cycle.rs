@@ -214,7 +214,8 @@ pub struct Substep {
 /// the start. Crossing the same angle again (the shaft rocked backward)
 /// restarts the count instead. A turn during which a reservoir temperature
 /// changed is discarded, along with the history, so averages always use one
-/// setting.
+/// setting; a turn during which the amount of gas changed is discarded
+/// alone (see `discard_turn`).
 pub struct CycleMonitor {
     /// Area of one piston face, in square model units.
     face_area: f64,
@@ -226,7 +227,8 @@ pub struct CycleMonitor {
     start: CycleTotals,
     /// Model time since the turn in progress began.
     elapsed: f64,
-    /// A reservoir temperature changed during the turn in progress.
+    /// The turn in progress is not to be recorded: a reservoir temperature
+    /// or the amount of gas changed during it.
     settings_changed: bool,
     /// The most recent turns, as a ring.
     history: [TurnSummary; TURNS_AVERAGED],
@@ -351,6 +353,13 @@ impl CycleMonitor {
         for points in &mut self.last_loops {
             points.clear();
         }
+    }
+
+    /// Discards the turn in progress, keeping the history; call when the
+    /// amount of gas changes, which would otherwise count as energy the
+    /// turn took in or gave out.
+    pub fn discard_turn(&mut self) {
+        self.settings_changed = true;
     }
 
     /// Turns recorded since the fill.

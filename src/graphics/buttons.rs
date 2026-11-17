@@ -193,10 +193,11 @@ impl ButtonBox {
 
 /// Where each box lies, as (switch, out past the block's cold end, toward
 /// the front, turn), in bore radii and radians: one ahead of the other,
-/// each turned its own way, the engraved sides toward the usual view.
+/// each turned its own way, the engraved sides toward the usual view, both
+/// in front of the helium tank.
 const PLACES: [(Switch, f32, f32, f32); 2] = [
-    (Switch::Reset, 1.45, 0.55, 0.45),
-    (Switch::Tracers, 2.05, -0.95, 1.15),
+    (Switch::Reset, 1.2, 0.85, 0.45),
+    (Switch::Tracers, 2.5, 0.0, 1.15),
 ];
 
 /// Both boxes, Reset first, beside the cold end of a block of `shape`.

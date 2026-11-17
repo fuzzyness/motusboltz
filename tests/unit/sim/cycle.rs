@@ -281,3 +281,22 @@ fn regenerator_heat_counts_as_the_engines_own_energy() {
     assert!(storing.first_law_residual().abs() < TOLERANCE);
     assert!(!storing.is_settled());
 }
+
+/// A change of the amount of gas drops only the turn in progress: the
+/// turns before it stay.
+#[test]
+fn a_fill_change_discards_only_the_turn_in_progress() {
+    let mut driver = Driver::new();
+    driver.rotate(-2.25);
+    driver.monitor.discard_turn();
+    assert_eq!(driver.monitor.recent().unwrap().turns, 2);
+    assert!(!driver.monitor.last_loop(HOT).is_empty());
+    driver.rotate(-1.0);
+    assert_eq!(
+        driver.monitor.recent().unwrap().turns,
+        2,
+        "straddling turn kept"
+    );
+    driver.rotate(-1.0);
+    assert_eq!(driver.monitor.recent().unwrap().turns, 3);
+}

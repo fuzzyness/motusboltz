@@ -1,7 +1,8 @@
 //! Labels on the scene: tags beside the hot and cold cylinders, the
 //! opening, the flywheel and the gas, each with its part in the system,
-//! and beside the hand crank, the valves, the Reset and Tracers buttons and
-//! the regenerator's cartridge, each with what it does.
+//! and beside the hand crank, the valves, the Reset and Tracers buttons,
+//! the helium tank and the regenerator's cartridge, each with what it
+//! does.
 //!
 //! With Labels on, every tag shows; otherwise a part's tag shows while the
 //! pointer is over the part (see `hovered`), one tag at a time.
@@ -33,6 +34,7 @@ use crate::graphics::buttons::{
     button_boxes, //
 };
 use crate::graphics::cartridge;
+use crate::graphics::tank::tank_place;
 use crate::graphics::valves::{
     ValveWheel,
     valve_wheels, //
@@ -275,6 +277,14 @@ const OPENING_REACH: f32 = 1.3;
 /// How far round the middle of the hand crank's sweep counts as over it,
 /// in the arm's lengths.
 const CRANK_REACH: f32 = 1.2;
+/// Where along the helium tank's height the middles of the two balls that
+/// find it are, low and high.
+const TANK_LOW: f32 = 0.3;
+/// The higher of them (see `TANK_LOW`).
+const TANK_HIGH: f32 = 0.75;
+/// How far round each of its two middles the helium tank counts as under
+/// the pointer, in the bottle's radii.
+const TANK_REACH: f32 = 1.4;
 /// How far round a valve's handwheel counts as over the valve, in the
 /// wheel's radii.
 const VALVE_REACH: f32 = 1.3;
@@ -432,6 +442,23 @@ pub fn tags(engine: &ConnectedChambers) -> Vec<Tag> {
         button("reset", "Reset", "press for fresh gas", reset),
         button("tracers", "Tracers", "press to follow a few atoms", tracers),
     ];
+    // The bottle is tall: two balls along it, low and high.
+    let tank = tank_place(shape, engine.port());
+    let along = |share: f32| tank.foot + Vec3::Y * tank.height * share;
+    tags.push(Tag {
+        key: "tank",
+        name: "Helium tank",
+        role: "turn its knob to pump helium in or out",
+        anchor: tank.gauge,
+        also: None,
+        outward: away(tank.gauge, out) + Vec3::Y * out,
+        spots: [TANK_LOW, TANK_HIGH]
+            .map(|share| Spot::Ball {
+                center: along(share),
+                radius: TANK_REACH * tank.radius,
+            })
+            .to_vec(),
+    });
     if !engine.regenerator().is_enabled() {
         let rest = cartridge::rest(shape);
         tags.push(Tag {
