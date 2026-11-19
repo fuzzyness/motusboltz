@@ -26,7 +26,7 @@ use macroquad::prelude::{
     Camera3D,
     Color,
     Mat3,
-    Material,
+    Mat4,
     Vec3,
     vec3, //
 };
@@ -34,6 +34,10 @@ use macroquad::prelude::{
 use super::block::{
     BlockShape,
     key_light, //
+};
+use super::gpu::{
+    GpuMaterial,
+    GpuMesh, //
 };
 use super::solid::{
     Frame,
@@ -46,7 +50,7 @@ use super::solid::{
 use super::{
     DRAW_CALL_INDEX_CAPACITY,
     DRAW_CALL_VERTEX_CAPACITY,
-    draw_lit, //
+    draw_lit_placed, //
 };
 use crate::sim::geometry::ChamberGeometry;
 use crate::sim::pistons::PowerPistons;
@@ -321,13 +325,24 @@ pub fn hand_crank(geometry: ChamberGeometry, pistons: &PowerPistons) -> HandCran
     Layout::new(geometry, pistons.stroke() / 2.0, pistons.shaft_height()).hand_crank()
 }
 
-/// Where one part's vertices are in the mesh and how it moves.
+/// Where one part's vertices and triangles are among all the parts' as
+/// built, and how it moves.
 #[derive(Clone, Debug)]
 struct Part {
-    /// Its vertices in the mesh.
+    /// Its vertices.
     vertices: Range<usize>,
+    /// Its triangles' corners.
+    indices: Range<usize>,
     /// How it moves.
     motion: Motion,
+}
+
+impl Motion {
+    /// Whether the part keeps its shape, so a matrix can move it on the
+    /// graphics card; the rods stretch, and are moved on the CPU.
+    fn rigid(self) -> bool {
+        !matches!(self, Motion::Rod { .. })
+    }
 }
 
 /// How a part moves.
@@ -356,6 +371,7 @@ enum Motion {
 ///
 /// Each point `p` of the part as built goes to `to + turn * (p - from)`,
 /// after a point above `split` moves up by `stretch`.
+#[derive(Clone, Copy, Debug)]
 struct Placement {
     /// Rotation of the part.
     turn: Mat3,
@@ -370,6 +386,22 @@ struct Placement {
 }
 
 impl Placement {
+    /// Where the part stays as built.
+    const STILL: Self = Self {
+        turn: Mat3::IDENTITY,
+        from: Vec3::ZERO,
+        to: Vec3::ZERO,
+        split: f32::INFINITY,
+        stretch: 0.0,
+    };
+
+    /// The matrix that places a part that does not stretch.
+    fn matrix(&self) -> Mat4 {
+        Mat4::from_translation(self.to)
+            * Mat4::from_mat3(self.turn)
+            * Mat4::from_translation(-self.from)
+    }
+
     /// Where the built point `point` goes.
     fn apply(&self, point: Vec3) -> Vec3 {
         let extra = if point.y > self.split {
@@ -382,17 +414,24 @@ impl Placement {
 }
 
 /// The pistons, rods, crankshaft, flywheel and stands.
+///
+/// Each part is a mesh of its own on the graphics card. The ones that keep
+/// their shape are sent once as built and moved by a matrix as they are
+/// drawn; only the two rods, which stretch, are moved on the CPU and sent
+/// again each frame, a few hundred vertices rather than ten thousand.
 pub struct Assembly {
     /// Where everything goes.
     layout: Layout,
-    /// Every part as built, in place; the mesh holds them as posed.
+    /// Every part as built, in place.
     built: Vec<Vertex>,
-    /// Every part as posed.
-    mesh: Mesh,
+    /// Each part's mesh: as built, or for a rod, as posed.
+    meshes: Vec<GpuMesh>,
     /// Where each part's vertices are, and how it moves.
     parts: Vec<Part>,
+    /// Where each part is this frame.
+    placements: Vec<Placement>,
     /// The lit-metal material, if it can be built.
-    material: Option<Material>,
+    material: Option<GpuMaterial>,
 }
 
 impl Assembly {
@@ -405,7 +444,12 @@ impl Assembly {
         let mut assembly = Self::build(geometry, pistons.stroke() / 2.0, pistons.shaft_height());
         if material.is_none() {
             // Drawn in plain colors, alpha means transparency: make it solid.
-            for vertex in assembly.built.iter_mut().chain(&mut assembly.mesh.vertices) {
+            for vertex in assembly.built.iter_mut().chain(
+                assembly
+                    .meshes
+                    .iter_mut()
+                    .flat_map(|mesh| &mut mesh.edit().vertices),
+            ) {
                 vertex.color[3] = u8::MAX;
             }
         }
@@ -425,10 +469,11 @@ impl Assembly {
         let mut solid = Solid::new();
         let mut parts = Vec::new();
         let mut add = |solid: &mut Solid, motion, build: &dyn Fn(&mut Solid)| {
-            let start = solid.vertices.len();
+            let (start, first) = (solid.vertices.len(), solid.indices.len());
             build(solid);
             parts.push(Part {
                 vertices: start..solid.vertices.len(),
+                indices: first..solid.indices.len(),
                 motion,
             });
         };
@@ -455,14 +500,25 @@ impl Assembly {
         }
         assert!(solid.vertices.len() <= DRAW_CALL_VERTEX_CAPACITY);
         assert!(solid.indices.len() <= DRAW_CALL_INDEX_CAPACITY);
+        let meshes = parts
+            .iter()
+            .map(|part| {
+                let start = part.vertices.start as u16;
+                GpuMesh::new(Mesh {
+                    vertices: solid.vertices[part.vertices.clone()].to_vec(),
+                    indices: solid.indices[part.indices.clone()]
+                        .iter()
+                        .map(|&corner| corner - start)
+                        .collect(),
+                    texture: None,
+                })
+            })
+            .collect();
         let mut assembly = Self {
             layout,
-            built: solid.vertices.clone(),
-            mesh: Mesh {
-                vertices: solid.vertices,
-                indices: solid.indices,
-                texture: None,
-            },
+            built: solid.vertices,
+            meshes,
+            placements: vec![Placement::STILL; parts.len()],
             parts,
             material: None,
         };
@@ -474,10 +530,9 @@ impl Assembly {
     /// `hot_face` and `cold_face`.
     fn pose(&mut self, angle: f32, hot_face: f32, cold_face: f32) {
         let layout = self.layout;
-        for part in &self.parts {
+        for (index, part) in self.parts.iter().enumerate() {
             let placement = match part.motion {
-                // Fixed parts stay as built (the mesh starts as a copy).
-                Motion::Fixed => continue,
+                Motion::Fixed => Placement::STILL,
                 Motion::Shaft => {
                     let axis = vec3(0.0, layout.shaft_y, 0.0);
                     Placement {
@@ -520,9 +575,12 @@ impl Assembly {
                     }
                 }
             };
-            for index in part.vertices.clone() {
-                let built = self.built[index];
-                let vertex = &mut self.mesh.vertices[index];
+            self.placements[index] = placement;
+            if part.motion.rigid() {
+                continue;
+            }
+            let built = &self.built[part.vertices.clone()];
+            for (vertex, built) in self.meshes[index].edit().vertices.iter_mut().zip(built) {
                 vertex.position = placement.apply(built.position);
                 let normal = placement.turn * built.normal.truncate();
                 vertex.normal = normal.extend(0.0);
@@ -530,11 +588,27 @@ impl Assembly {
         }
     }
 
+    /// Where each vertex of `part` is as posed.
+    #[cfg(test)]
+    fn posed(&self, part: usize) -> impl Iterator<Item = Vec3> + '_ {
+        let placement = self.placements[part];
+        self.built[self.parts[part].vertices.clone()]
+            .iter()
+            .map(move |vertex| placement.apply(vertex.position))
+    }
+
     /// Draws every part where `pistons` has the crank now.
     pub fn draw(&mut self, pistons: &PowerPistons, camera: &Camera3D) {
         self.pose(pistons.angle(), pistons.hot().face_y, pistons.cold().face_y);
         let light = key_light(camera.position);
-        draw_lit([&self.mesh], self.material.as_ref(), camera, light);
+        for ((mesh, part), placement) in self.meshes.iter().zip(&self.parts).zip(&self.placements) {
+            let model = if part.motion.rigid() {
+                placement.matrix()
+            } else {
+                Mat4::IDENTITY
+            };
+            draw_lit_placed([mesh], self.material.as_ref(), camera, light, model);
+        }
     }
 }
 

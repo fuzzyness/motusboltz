@@ -58,6 +58,9 @@ const CHECK_GAP: f32 = 2.0;
 const GAS_HEADING: &str = "GAS NOW";
 /// Heading of the flywheel section.
 const FLYWHEEL_HEADING: &str = "FLYWHEEL";
+/// Heading of the diagnostics build's timings.
+#[cfg(feature = "diagnostics")]
+const DIAGNOSTICS_HEADING: &str = "DIAGNOSTICS";
 /// Heading of the running totals.
 const TOTALS_HEADING: &str = "SINCE THE GAS WAS FILLED";
 /// The first law, per turn.
@@ -267,5 +270,21 @@ pub fn draw_totals(pen: &mut Pen, readout: &Readout, top: f32) -> f32 {
         signed_number(now.shaft_error, 4)
     );
     pen.fitted(&check, LEFT, y, CONTENT_WIDTH, SMALL_SIZE, QUIET);
+    y
+}
+
+/// Draws the diagnostics build's timings, `rows` of a label and a value,
+/// below `top` and returns the last baseline.
+#[cfg(feature = "diagnostics")]
+pub fn draw_diagnostics(pen: &mut Pen, rows: &[(&str, String)], top: f32) -> f32 {
+    let mut y = section(pen, DIAGNOSTICS_HEADING, top);
+    if rows.is_empty() {
+        y += LINE;
+        pen.fitted("Measuring...", LEFT, y, CONTENT_WIDTH, BODY_SIZE, QUIET);
+    }
+    for (label, value) in rows {
+        y += ROW;
+        row(pen, label, value, y, TEXT);
+    }
     y
 }

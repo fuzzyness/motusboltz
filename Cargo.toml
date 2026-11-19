@@ -1,7 +1,22 @@
 [package]
 name = "motusboltz"
-version = "0.11.3"
+version = "0.11.4"
 edition = "2024"
 
 [dependencies]
 macroquad = "0.4.16"
+
+[features]
+# A build for measuring: shows the frame rate and where each frame's time
+# goes in the Advanced view (see src/ui/diagnostics.rs). Run it with
+# `cargo run --release --features diagnostics`.
+diagnostics = []
+
+# Speed and size for what is shipped, the web build above all: the whole
+# program optimized as one, panics stop it at once rather than unwinding
+# (the web build cannot unwind anyway), and no symbol names are kept.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

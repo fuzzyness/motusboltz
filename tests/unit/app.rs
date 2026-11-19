@@ -24,7 +24,13 @@ const WINDOWS: [(f32, f32); 5] = [
 #[test]
 fn build_label_names_this_version() {
     assert!(BUILD_LABEL.starts_with(concat!("v", env!("CARGO_PKG_VERSION"), " (")));
-    assert!(BUILD_LABEL.ends_with(')'));
+    // The diagnostics build says so after the revision.
+    let end = if cfg!(feature = "diagnostics") {
+        ") diagnostics"
+    } else {
+        ")"
+    };
+    assert!(BUILD_LABEL.ends_with(end));
     assert!(crate::ui::fonts::tests::drawable(BUILD_LABEL));
     assert!(crate::ui::fonts::tests::drawable(LIMITED_TEXT));
 }

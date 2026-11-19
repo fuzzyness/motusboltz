@@ -62,3 +62,28 @@ fn shaders_are_glsl_100_and_declare_their_uniforms() {
     // wedge on Mesa), so the noise must not use one.
     assert!(!BACKDROP_FRAGMENT.contains("sin("));
 }
+
+#[test]
+fn the_sky_noise_repeats_seamlessly() {
+    let bytes = noise_bytes();
+    let side = NOISE_CELLS + 1;
+    assert_eq!(bytes.len(), side * side * BYTES_PER_TEXEL);
+    let value = |row: usize, column: usize| bytes[(row * side + column) * BYTES_PER_TEXEL];
+    for index in 0..side {
+        assert_eq!(value(NOISE_CELLS, index), value(0, index));
+        assert_eq!(value(index, NOISE_CELLS), value(index, 0));
+    }
+    // Spread over the whole range, not one value or a narrow band.
+    let values: Vec<u8> = (0..NOISE_CELLS * NOISE_CELLS)
+        .map(|index| value(index / NOISE_CELLS, index % NOISE_CELLS))
+        .collect();
+    let mean = values.iter().map(|&value| f32::from(value)).sum::<f32>() / values.len() as f32;
+    assert!((mean / f32::from(u8::MAX) - 0.5).abs() < 0.02, "{mean}");
+    assert!(values.iter().any(|&value| value < 8) && values.iter().any(|&value| value > 247));
+    assert_eq!(noise_bytes(), bytes, "the same clouds on every run");
+}
+
+#[test]
+fn the_sky_shader_knows_the_noise_size() {
+    assert!(SKY_FRAGMENT.contains(&format!("const float NOISE_CELLS = {NOISE_CELLS}.0;")));
+}

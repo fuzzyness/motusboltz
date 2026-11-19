@@ -48,28 +48,55 @@ fn each_pose(assembly: &mut Assembly, mut check: impl FnMut(&Assembly, f32, [f32
 
 /// The posed points of every part that moves as `wanted` says.
 fn points(assembly: &Assembly, wanted: impl Fn(Motion) -> bool) -> Vec<Vec3> {
-    assembly
-        .parts
-        .iter()
-        .filter(|part| wanted(part.motion))
-        .flat_map(|part| assembly.mesh.vertices[part.vertices.clone()].iter())
-        .map(|vertex| vertex.position)
+    (0..assembly.parts.len())
+        .filter(|&part| wanted(assembly.parts[part].motion))
+        .flat_map(|part| assembly.posed(part))
         .collect()
 }
 
 #[test]
-fn everything_fits_one_draw_call() {
+fn every_part_is_a_whole_mesh_of_its_own() {
     let (_, assembly) = assembly();
-    assert!(assembly.mesh.vertices.len() <= DRAW_CALL_VERTEX_CAPACITY);
-    assert!(assembly.mesh.indices.len() <= DRAW_CALL_INDEX_CAPACITY);
-    let count = assembly.mesh.vertices.len();
-    assert!(
-        assembly
-            .mesh
-            .indices
-            .iter()
-            .all(|&index| (index as usize) < count)
-    );
+    assert!(assembly.built.len() <= DRAW_CALL_VERTEX_CAPACITY);
+    let vertices: usize = assembly
+        .meshes
+        .iter()
+        .map(|mesh| mesh.mesh().vertices.len())
+        .sum();
+    assert_eq!(vertices, assembly.built.len());
+    for (mesh, part) in assembly.meshes.iter().zip(&assembly.parts) {
+        let mesh = mesh.mesh();
+        assert!(mesh.indices.len() <= DRAW_CALL_INDEX_CAPACITY);
+        assert_eq!(mesh.indices.len(), part.indices.len());
+        assert!(
+            mesh.indices
+                .iter()
+                .all(|&index| (index as usize) < mesh.vertices.len())
+        );
+    }
+}
+
+/// A part that keeps its shape lands, moved by its matrix on the graphics
+/// card, where its points would be moved one by one; a rod's mesh holds
+/// its points as posed.
+#[test]
+fn matrices_place_the_parts_as_the_points_would_go() {
+    let (_, mut assembly) = assembly();
+    each_pose(&mut assembly, |assembly, _, _| {
+        for (index, part) in assembly.parts.iter().enumerate() {
+            let posed: Vec<Vec3> = assembly.posed(index).collect();
+            let mesh = assembly.meshes[index].mesh();
+            let matrix = if part.motion.rigid() {
+                assembly.placements[index].matrix()
+            } else {
+                Mat4::IDENTITY
+            };
+            for (vertex, expected) in mesh.vertices.iter().zip(posed) {
+                let placed = matrix.transform_point3(vertex.position);
+                assert!(placed.distance(expected) < TOLERANCE, "{placed} {expected}");
+            }
+        }
+    });
 }
 
 #[test]

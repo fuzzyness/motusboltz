@@ -22,7 +22,6 @@ use macroquad::models::Mesh;
 use macroquad::prelude::{
     Camera3D,
     Color,
-    Material,
     Vec3,
     vec3, //
 };
@@ -30,6 +29,10 @@ use macroquad::prelude::{
 use super::block::{
     BlockShape,
     key_light, //
+};
+use super::gpu::{
+    GpuMaterial,
+    GpuMesh, //
 };
 use super::solid::{
     Frame,
@@ -281,10 +284,13 @@ pub fn needle_turn(share: f32) -> f32 {
 
 /// The bottle, regulator, gauge and pipe, and the glow at the port.
 pub struct Tank {
-    /// Everything that stays still.
-    body: Mesh,
+    /// Everything that stays still, on the graphics card.
+    body: GpuMesh,
     /// The knob and the needle, as posed this frame.
-    moving: Mesh,
+    moving: GpuMesh,
+    /// The knob's turn and the needle's the moving parts were last posed
+    /// at: they are built again only when one changes.
+    posed: Option<(f32, f32)>,
     /// The parts' places.
     layout: Layout,
     /// The glow at the port.
@@ -292,7 +298,7 @@ pub struct Tank {
     /// The port.
     port: Port,
     /// The lit-metal material, if it can be built.
-    material: Option<Material>,
+    material: Option<GpuMaterial>,
 }
 
 impl Tank {
@@ -303,7 +309,7 @@ impl Tank {
         let mut tank = Self::build(shape, port);
         tank.material = load_metal();
         if tank.material.is_none() {
-            solidify(&mut tank.body);
+            solidify(tank.body.edit());
         }
         tank
     }
@@ -319,8 +325,9 @@ impl Tank {
         assert!(solid.vertices.len() < DRAW_CALL_VERTEX_CAPACITY);
         assert!(solid.indices.len() < DRAW_CALL_INDEX_CAPACITY);
         Self {
-            body: mesh(solid),
-            moving: mesh(Solid::new()),
+            body: GpuMesh::new(mesh(solid)),
+            moving: GpuMesh::empty(),
+            posed: None,
             layout,
             puff: Sprites::new(),
             port,
@@ -333,12 +340,17 @@ impl Tank {
     /// the glow at the port for gas moving at `flow` particles per second,
     /// facing the camera as `facing` says.
     pub fn pose(&mut self, knob_turn: f32, particles: usize, flow: f32, facing: Facing) {
-        let mut solid = Solid::new();
-        add_knob(&mut solid, &self.layout, knob_turn);
-        add_needle(&mut solid, &self.layout, needle_turn(tank_share(particles)));
-        self.moving = mesh(solid);
-        if self.material.is_none() {
-            solidify(&mut self.moving);
+        let turns = (knob_turn, needle_turn(tank_share(particles)));
+        if self.posed != Some(turns) {
+            self.posed = Some(turns);
+            let mut solid = Solid::new();
+            add_knob(&mut solid, &self.layout, turns.0);
+            add_needle(&mut solid, &self.layout, turns.1);
+            let moving = self.moving.edit();
+            *moving = mesh(solid);
+            if self.material.is_none() {
+                solidify(moving);
+            }
         }
         self.puff.clear();
         let strength = (flow.abs() / FLOW_PER_SECOND).min(1.0);

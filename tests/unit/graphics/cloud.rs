@@ -12,7 +12,7 @@ fn cloud_stays_under_the_table_except_its_edge_bumps_beyond_the_legs() {
     let cloud = CloudFloor::new(shape);
     let floor = ground(shape);
     let mut above = 0;
-    for vertex in &cloud.mesh.vertices {
+    for vertex in &cloud.mesh.mesh().vertices {
         let point = vertex.position;
         if point.y > floor + 1e-3 {
             above += 1;
@@ -26,12 +26,13 @@ fn cloud_stays_under_the_table_except_its_edge_bumps_beyond_the_legs() {
         }
     }
     assert!(above > 0, "the edge bumps show above the top");
-    assert!(cloud.mesh.vertices.len() <= DRAW_CALL_VERTEX_CAPACITY);
-    assert!(cloud.mesh.indices.len() <= DRAW_CALL_INDEX_CAPACITY);
-    let count = cloud.mesh.vertices.len();
+    assert!(cloud.mesh.mesh().vertices.len() <= DRAW_CALL_VERTEX_CAPACITY);
+    assert!(cloud.mesh.mesh().indices.len() <= DRAW_CALL_INDEX_CAPACITY);
+    let count = cloud.mesh.mesh().vertices.len();
     assert!(
         cloud
             .mesh
+            .mesh()
             .indices
             .iter()
             .all(|&index| (index as usize) < count)

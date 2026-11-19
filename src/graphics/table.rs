@@ -17,7 +17,6 @@ use macroquad::models::{
 use macroquad::prelude::{
     Camera3D,
     Color,
-    Material,
     Vec2,
     Vec3,
     vec2,
@@ -27,6 +26,10 @@ use macroquad::prelude::{
 use super::block::{
     BlockShape,
     key_light, //
+};
+use super::gpu::{
+    GpuMaterial,
+    GpuMesh, //
 };
 use super::solid::Solid;
 use super::{
@@ -189,17 +192,17 @@ pub fn feet(shape: BlockShape) -> [Vec2; 4] {
 
 /// The table under the engine.
 pub struct Table {
-    /// The top, the apron and the legs.
-    mesh: Mesh,
+    /// The top, the apron and the legs, on the graphics card.
+    mesh: GpuMesh,
     /// Made on the first draw (it needs a window); `Some(None)` where it
     /// cannot be built, and the table is drawn in plain colors.
-    material: Option<Option<Material>>,
+    material: Option<Option<GpuMaterial>>,
     /// The highlight over the top: its middle's four corners, then its
     /// rim's.
-    highlight: Mesh,
+    highlight: GpuMesh,
     /// The highlight's see-through material, made on its first draw;
     /// `Some(None)` where it cannot be built, and the top is not lit.
-    highlight_material: Option<Option<Material>>,
+    highlight_material: Option<Option<GpuMaterial>>,
     /// How strongly the highlight shows, from 0 to 1.
     glow: f32,
     /// The clock at the last highlight, if there was one.
@@ -217,13 +220,13 @@ impl Table {
         assert!(solid.vertices.len() < DRAW_CALL_VERTEX_CAPACITY);
         assert!(solid.indices.len() < DRAW_CALL_INDEX_CAPACITY);
         Self {
-            mesh: Mesh {
+            mesh: GpuMesh::new(Mesh {
                 vertices: solid.vertices,
                 indices: solid.indices,
                 texture: None,
-            },
+            }),
             material: None,
-            highlight: highlight_mesh(shape),
+            highlight: GpuMesh::new(highlight_mesh(shape)),
             highlight_material: None,
             glow: 0.0,
             last_seconds: None,
@@ -249,7 +252,7 @@ impl Table {
                 * (0.5
                     - 0.5 * (std::f32::consts::TAU * HIGHLIGHT_PULSE_RATE * seconds as f32).cos());
         let strength = self.glow * pulse;
-        for (index, vertex) in self.highlight.vertices.iter_mut().enumerate() {
+        for (index, vertex) in self.highlight.edit().vertices.iter_mut().enumerate() {
             let opacity = if index < 4 {
                 HIGHLIGHT_FILL
             } else {
@@ -276,7 +279,7 @@ impl Table {
             let material = load_lit(WOOD_FRAGMENT, &[]);
             if material.is_none() {
                 // Drawn in plain colors, alpha means transparency.
-                for vertex in &mut self.mesh.vertices {
+                for vertex in &mut self.mesh.edit().vertices {
                     vertex.color[3] = u8::MAX;
                 }
             }

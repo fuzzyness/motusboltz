@@ -168,7 +168,7 @@ fn a_particle_can_cross_from_hot_to_cold_through_the_opening() {
     let mut saw_passage = false;
     let mut reached_cold = false;
     for _ in 0..TRANSFER_TEST_STEPS {
-        simulation.update(FIXED_DT);
+        simulation.update(MAX_STEP);
         let position = simulation.particles[0].position;
         assert!(simulation.contains(position));
         saw_passage |= simulation.region(position) == Region::Passage;
@@ -193,7 +193,7 @@ fn travel_through_the_opening_works_in_both_directions() {
     simulation.particles[0].velocity = vec3(-TRANSIT_SPEED, 0.0, 0.0);
 
     let reached_hot = (0..TRANSFER_TEST_STEPS).any(|_| {
-        simulation.update(FIXED_DT);
+        simulation.update(MAX_STEP);
         simulation.region(simulation.particles[0].position) == Region::Hot
     });
     assert!(reached_hot, "the opening must be open both ways");
@@ -211,7 +211,7 @@ fn shared_wall_is_closed_above_the_opening() {
     let original_energy = simulation.kinetic_energy();
 
     for _ in 0..TRANSFER_TEST_STEPS {
-        simulation.update(FIXED_DT);
+        simulation.update(MAX_STEP);
         let position = simulation.particles[0].position;
         assert!(simulation.contains(position));
         assert_eq!(simulation.region(position), Region::Hot);
@@ -226,7 +226,7 @@ fn opening_walls_reflect_without_changing_energy() {
     simulation.particles[0].velocity = vec3(0.0, 0.0, TRANSIT_SPEED);
     let energy = simulation.kinetic_energy();
     for _ in 0..TRANSFER_TEST_STEPS {
-        simulation.update(FIXED_DT);
+        simulation.update(MAX_STEP);
         assert!(simulation.contains(simulation.particles[0].position));
     }
     assert!((simulation.kinetic_energy() - energy).abs() < ENERGY_TOLERANCE);
@@ -237,7 +237,7 @@ fn two_chamber_gas_conserves_particles_and_energy() {
     let mut simulation = insulated(TEST_COUNT);
     let initial_energy = simulation.kinetic_energy();
     for _ in 0..TRANSFER_TEST_STEPS {
-        simulation.update(FIXED_DT);
+        simulation.update(MAX_STEP);
     }
     let counts = simulation.counts();
     assert_eq!(counts.hot + counts.passage + counts.cold, TEST_COUNT);
@@ -260,14 +260,14 @@ fn thermal_reservoirs_exchange_energy_at_both_cylinder_walls() {
     simulation.thermal.set_accommodation(1.0);
     simulation.pin_pistons();
     let x = CYLINDER_OFFSET + CYLINDER_RADIUS - PARTICLE_RADIUS;
-    let step_into_wall = WALL_SPEED * FIXED_DT / 2.0;
+    let step_into_wall = WALL_SPEED * MAX_STEP / 2.0;
     simulation.particles[0].position = vec3(-x + step_into_wall, 0.0, 0.0);
     simulation.particles[0].velocity = vec3(-WALL_SPEED, 0.0, 0.0);
     simulation.particles[1].position = vec3(x - step_into_wall, 0.0, 0.0);
     simulation.particles[1].velocity = vec3(WALL_SPEED, 0.0, 0.0);
 
     let before = simulation.kinetic_energy();
-    simulation.update(FIXED_DT);
+    simulation.update(MAX_STEP);
     let heat = simulation.heat();
     assert_ne!(heat.hot, 0.0);
     assert_ne!(heat.cold, 0.0);
@@ -293,8 +293,8 @@ fn cold_sink_alone_drives_heat_from_hot_to_cold() {
     simulation.set_hot_kelvin(MIN_HOT_KELVIN);
     simulation.set_cold_kelvin(COLD_KELVIN);
     simulation.pin_pistons();
-    for _ in 0..(SECONDS / FIXED_DT) as usize {
-        simulation.step(FIXED_DT);
+    for _ in 0..(SECONDS / MAX_STEP) as usize {
+        simulation.step(MAX_STEP);
     }
     let heat = simulation.heat();
     assert!(heat.hot > 0.0, "hot wall gave the gas {} units", heat.hot);
@@ -316,7 +316,7 @@ fn fixed_chamber_first_law_holds_during_heating_and_cooling() {
     simulation.pin_pistons();
     let initial_energy = simulation.kinetic_energy();
     for _ in 0..THERMAL_TEST_STEPS {
-        simulation.update(FIXED_DT);
+        simulation.update(MAX_STEP);
     }
     assert!(simulation.heat().hot != 0.0);
     assert!(
@@ -362,7 +362,7 @@ fn gas_through_the_regenerator_keeps_the_first_law_balanced() {
     simulation.set_regenerator(true);
     let initial_energy = simulation.kinetic_energy();
     for _ in 0..TRANSFER_TEST_STEPS {
-        simulation.update(FIXED_DT);
+        simulation.update(MAX_STEP);
     }
     assert_eq!(simulation.heat().total(), 0.0, "the walls are insulated");
     assert!(
@@ -389,7 +389,7 @@ fn opening_and_upper_caps_are_adiabatic() {
     simulation.particles[1].position = vec3(-CYLINDER_OFFSET, CYLINDER_HEIGHT / 2.0 - radius, 0.0);
     simulation.particles[1].velocity = vec3(0.0, WALL_SPEED, 0.0);
     let energy = simulation.kinetic_energy();
-    simulation.update(FIXED_DT);
+    simulation.update(MAX_STEP);
     assert_eq!(simulation.heat().total(), 0.0);
     assert!((simulation.kinetic_energy() - energy).abs() < ENERGY_TOLERANCE);
 }
@@ -409,7 +409,7 @@ fn real_unit_measurements_conserve_helium_amount_on_transfer() {
     assert!(first.hot.temperature_kelvin.unwrap() > 0.0);
     assert!(first.cold.temperature_kelvin.unwrap() > 0.0);
     for _ in 0..TRANSFER_TEST_STEPS {
-        simulation.update(FIXED_DT);
+        simulation.update(MAX_STEP);
     }
     let readings = simulation.measurements();
     assert_eq!(
@@ -498,7 +498,7 @@ fn particle_centers_stay_within_the_gas_bounds() {
     assert!(simulation.start_engine());
     let (lower, upper) = simulation.geometry().gas_bounds();
     for _ in 0..STEPS {
-        simulation.step(FIXED_DT);
+        simulation.step(MAX_STEP);
         for particle in &simulation.particles {
             for axis in 0..3 {
                 assert!((lower[axis]..=upper[axis]).contains(&particle.position[axis]));
@@ -533,8 +533,8 @@ fn concentration_controls_gas_amount_and_reset_preserves_it() {
     assert_eq!(simulation.total_moles(), initial_moles);
     // The pump brings the rest in through the port.
     simulation.set_concentration(0.50);
-    for _ in 0..(3.0 / FIXED_DT) as usize {
-        simulation.update(FIXED_DT);
+    for _ in 0..(3.0 / MAX_STEP) as usize {
+        simulation.update(MAX_STEP);
     }
     assert_eq!(simulation.total_moles(), 2.0 * initial_moles);
     assert_eq!(simulation.hot_kelvin(), TEST_WARM_KELVIN);
@@ -562,8 +562,8 @@ fn concentration_scaling_is_independent_of_geometry_size() {
 fn pressures_at_rest(concentration: f32, seconds: f32) -> [(f64, f64); 2] {
     let mut simulation = ConnectedChambers::seeded_at_concentration(concentration);
     simulation.pin_pistons();
-    for _ in 0..(seconds / FIXED_DT) as usize {
-        simulation.step(FIXED_DT);
+    for _ in 0..(seconds / MAX_STEP) as usize {
+        simulation.step(MAX_STEP);
     }
     let readings = simulation.measurements();
     let pistons = [simulation.pistons.hot(), simulation.pistons.cold()];
@@ -642,7 +642,7 @@ fn resetting_refills_both_cylinders_at_the_same_temperature() {
     let mut simulation = ConnectedChambers::seeded_at_concentration(0.5);
     simulation.set_hot_kelvin(MAX_HOT_KELVIN);
     for _ in 0..100 {
-        simulation.update(FIXED_DT);
+        simulation.update(MAX_STEP);
     }
     simulation.reset();
     let readings = simulation.measurements();
@@ -660,7 +660,7 @@ fn moving_pistons_keep_every_sphere_below_their_faces() {
     simulation.kick_flywheel();
     simulation.thermal.set_accommodation(0.0);
     for step in 0..TEST_STEPS {
-        simulation.update(FIXED_DT);
+        simulation.update(MAX_STEP);
         for (index, particle) in simulation.particles.iter().enumerate() {
             assert!(
                 simulation.contains(particle.position),
@@ -680,7 +680,7 @@ fn piston_collision_exchanges_equal_and_opposite_energy() {
     pistons.kick();
     // Turn until the hot piston moves down onto the particle.
     for _ in 0..1_000 {
-        pistons.advance(FIXED_DT);
+        pistons.advance(MAX_STEP);
         if pistons.hot().velocity < 0.0 {
             break;
         }
@@ -719,7 +719,7 @@ fn moving_insulated_pistons_obey_first_law() {
     simulation.thermal.set_accommodation(0.0);
     let reference = simulation.kinetic_energy();
     for _ in 0..TEST_STEPS {
-        simulation.update(FIXED_DT);
+        simulation.update(MAX_STEP);
     }
     assert_eq!(simulation.heat().total(), 0.0);
     assert!(simulation.piston_work_by_gas().abs() > 0.0);
@@ -736,7 +736,7 @@ fn heating_and_piston_motion_track_heat_and_work_separately() {
     simulation.kick_flywheel();
     let reference = simulation.kinetic_energy();
     for _ in 0..TEST_STEPS {
-        simulation.update(FIXED_DT);
+        simulation.update(MAX_STEP);
     }
     assert!(simulation.heat().hot != 0.0);
     assert!(simulation.piston_work_by_gas().abs() > 0.0);
@@ -763,7 +763,7 @@ fn free_flywheel_tracks_gas_and_mechanical_energy_separately() {
     simulation.kick_flywheel();
     let gas_reference = simulation.kinetic_energy();
     for _ in 0..TEST_STEPS {
-        simulation.update(FIXED_DT);
+        simulation.update(MAX_STEP);
     }
     assert!(simulation.energy_balance_error().abs() < (RELATIVE_TOLERANCE * gas_reference) as f64);
     assert!(
@@ -779,8 +779,8 @@ fn seeded_simulations_remain_identical_when_interleaved() {
     first.set_hot_kelvin(MAX_HOT_KELVIN);
     second.set_hot_kelvin(MAX_HOT_KELVIN);
     for _ in 0..STEPS {
-        first.update(FIXED_DT);
-        second.update(FIXED_DT);
+        first.update(MAX_STEP);
+        second.update(MAX_STEP);
     }
     for (a, b) in first.particles.iter().zip(&second.particles) {
         assert_eq!(a.position, b.position);
@@ -816,7 +816,7 @@ fn fast_head_on_particles_do_not_tunnel_past_each_other() {
     simulation.particles[0].velocity = vec3(SPEED, 0.0, 0.0);
     simulation.particles[1].velocity = vec3(-SPEED, 0.0, 0.0);
     let before = simulation.kinetic_energy();
-    simulation.step(FIXED_DT);
+    simulation.step(MAX_STEP);
     assert!(simulation.particles[0].velocity.x < 0.0);
     assert!(simulation.particles[1].velocity.x > 0.0);
     assert!((simulation.kinetic_energy() - before).abs() < ENERGY_TOLERANCE);
@@ -1028,11 +1028,11 @@ fn check_recorded_turns(outcome: &CycleOutcome, context: &str) {
 #[ignore = "long particle-driven cycle regression; run in release mode"]
 fn sustained_rotation_requires_a_temperature_difference() {
     let cases = [
-        (42, MAX_HOT_KELVIN, FIXED_DT),
-        (7, MAX_HOT_KELVIN, FIXED_DT),
-        (42, MAX_HOT_KELVIN, FIXED_DT / 2.0),
-        (42, MIN_HOT_KELVIN, FIXED_DT),
-        (7, MIN_HOT_KELVIN, FIXED_DT),
+        (42, MAX_HOT_KELVIN, MAX_STEP),
+        (7, MAX_HOT_KELVIN, MAX_STEP),
+        (42, MAX_HOT_KELVIN, MAX_STEP / 2.0),
+        (42, MIN_HOT_KELVIN, MAX_STEP),
+        (7, MIN_HOT_KELVIN, MAX_STEP),
     ];
     for (seed, hot_kelvin, dt) in cases {
         check_started_run(
@@ -1081,7 +1081,7 @@ fn rotation_holds_for_random_seeds() {
                             (
                                 seed,
                                 hot,
-                                started_run(seed, hot, FIXED_DT, ROTATION_DURATION),
+                                started_run(seed, hot, MAX_STEP, ROTATION_DURATION),
                             )
                         })
                         .collect::<Vec<_>>()
@@ -1094,7 +1094,7 @@ fn rotation_holds_for_random_seeds() {
             .collect()
     });
     for (seed, hot, outcome) in &results {
-        check_started_run(*seed, *hot, FIXED_DT, outcome);
+        check_started_run(*seed, *hot, MAX_STEP, outcome);
     }
 }
 
@@ -1169,16 +1169,16 @@ fn one_start_completes_a_turn_at_every_fill() {
         let mut simulation = ConnectedChambers::with_geometry_seed(count, DEFAULT_GEOMETRY, seed);
         simulation.set_hot_kelvin(hot);
         simulation.set_cold_kelvin(cold);
-        for _ in 0..(warm_up / FIXED_DT) as usize {
-            simulation.step(FIXED_DT);
+        for _ in 0..(warm_up / MAX_STEP) as usize {
+            simulation.step(MAX_STEP);
         }
         let start_angle = simulation.pistons.total_angle();
         assert!(simulation.start_engine());
         let mut elapsed = 0.0_f64;
         let mut reversed = false;
         while elapsed < MAX_FIRST_TURN {
-            simulation.step(FIXED_DT);
-            elapsed += FIXED_DT as f64;
+            simulation.step(MAX_STEP);
+            elapsed += MAX_STEP as f64;
             reversed |= simulation.pistons.angular_velocity() >= 0.0;
             if simulation.pistons.total_angle() - start_angle <= -std::f64::consts::TAU {
                 return (seed, count, hot, cold, warm_up, Some(elapsed), reversed);
@@ -1232,12 +1232,12 @@ fn maximum_fill_benchmark() {
     let mut simulation = ConnectedChambers::seeded(MAX_PARTICLES);
     simulation.set_hot_kelvin(MAX_HOT_KELVIN);
     simulation.start_engine();
-    for _ in 0..(WARMUP_SECONDS / FIXED_DT) as usize {
-        simulation.step(FIXED_DT);
+    for _ in 0..(WARMUP_SECONDS / MAX_STEP) as usize {
+        simulation.step(MAX_STEP);
     }
     let start = std::time::Instant::now();
-    for _ in 0..(SAMPLE_SECONDS / FIXED_DT) as usize {
-        simulation.step(FIXED_DT);
+    for _ in 0..(SAMPLE_SECONDS / MAX_STEP) as usize {
+        simulation.step(MAX_STEP);
     }
     println!(
         "max-fill: {:.3} ms/model-second; gas residual={:.6}; shaft residual={:.6}",
@@ -1254,22 +1254,103 @@ fn slow_frame_caps_catchup_without_larger_physics_steps() {
     let mut capped = ConnectedChambers::seeded(TEST_COUNT);
     let mut reference = ConnectedChambers::seeded(TEST_COUNT);
     assert!(capped.update(SLOW_FRAME));
-    for _ in 0..MAX_FIXED_STEPS_PER_FRAME {
-        reference.step(FIXED_DT);
+    for _ in 0..MAX_STEPS_PER_FRAME {
+        reference.step(MAX_FRAME_TIME / MAX_STEPS_PER_FRAME as f32);
     }
-    for (actual, expected) in capped.particles.iter().zip(&reference.particles) {
+    assert_same_gas(&capped, &reference);
+    assert!(!capped.update(0.0));
+    assert_same_gas(&capped, &reference);
+    assert!(!reference.update(MAX_STEP));
+}
+
+/// Asserts that two simulations' particles are in the same places with the
+/// same velocities.
+fn assert_same_gas(actual: &ConnectedChambers, expected: &ConnectedChambers) {
+    assert_eq!(actual.particles.len(), expected.particles.len());
+    for (actual, expected) in actual.particles.iter().zip(&expected.particles) {
         assert_eq!(actual.position, expected.position);
         assert_eq!(actual.velocity, expected.velocity);
     }
-    assert!(capped.accumulator < FIXED_DT);
-    assert!(!capped.update(0.0));
-    assert!(!reference.update(FIXED_DT));
+}
+
+/// A frame runs in the fewest equal steps that keep each within the
+/// longest step: one for a frame at 144 FPS or in slow motion, two at 60,
+/// three at 50, and the whole budget at the longest frame, with no extra
+/// step for a frame that is whole steps but a hair over in floating point.
+#[test]
+fn frames_run_in_the_fewest_equal_steps_within_the_longest() {
+    const AT_144_FPS: f32 = 1.0 / 144.0;
+    const AT_60_FPS: f32 = 1.0 / 60.0;
+    const AT_50_FPS: f32 = 1.0 / 50.0;
+    assert_eq!(steps_for(0.0), 0);
+    assert_eq!(steps_for(AT_144_FPS), 1);
+    assert_eq!(steps_for(MAX_STEP), 1);
+    assert_eq!(steps_for(AT_60_FPS), 2);
+    assert_eq!(steps_for(2.0 * MAX_STEP), 2);
+    assert_eq!(steps_for(AT_50_FPS), 3);
+    assert_eq!(steps_for(MAX_FRAME_TIME), MAX_STEPS_PER_FRAME);
+}
+
+/// A frame shorter than the longest step moves the gas by exactly its own
+/// time, so no frame repeats the last one's positions; a frame of two
+/// longest steps runs as two of them.
+#[test]
+fn each_frame_runs_exactly_its_own_time() {
+    const AT_144_FPS: f32 = 1.0 / 144.0;
+    const FRAMES_PER_CHECK: usize = 30;
+    let mut framed = ConnectedChambers::seeded(TEST_COUNT);
+    let mut reference = ConnectedChambers::seeded(TEST_COUNT);
+    for simulation in [&mut framed, &mut reference] {
+        simulation.set_hot_kelvin(MAX_HOT_KELVIN);
+        assert!(simulation.start_engine());
+    }
+    for _ in 0..FRAMES_PER_CHECK {
+        assert!(!framed.update(AT_144_FPS));
+        reference.step(AT_144_FPS);
+    }
+    assert_same_gas(&framed, &reference);
+    for _ in 0..FRAMES_PER_CHECK {
+        assert!(!framed.update(2.0 * MAX_STEP));
+        reference.step(MAX_STEP);
+        reference.step(MAX_STEP);
+    }
+    assert_same_gas(&framed, &reference);
+}
+
+/// The running engine's ledgers balance whatever the frames: at 144 FPS,
+/// at 60, and in slow motion, where each frame runs a quarter of its
+/// time.
+#[test]
+fn the_ledgers_balance_at_any_frame_rate() {
+    const MODEL_SECONDS: f32 = 3.0;
+    const SLOW_MOTION: f32 = 0.25 / 60.0;
+    const RELATIVE_TOLERANCE: f32 = 2e-3;
+    for frame in [1.0 / 144.0, 1.0 / 60.0, SLOW_MOTION] {
+        let mut simulation = ConnectedChambers::seeded(TEST_COUNT);
+        simulation.set_hot_kelvin(MAX_HOT_KELVIN);
+        assert!(simulation.start_engine());
+        let initial_energy = simulation.kinetic_energy();
+        for _ in 0..(MODEL_SECONDS / frame) as usize {
+            assert!(!simulation.update(frame));
+        }
+        let reference = initial_energy.max(simulation.kinetic_energy());
+        let gas = simulation.energy_balance_error().abs();
+        let shaft = simulation.mechanical_balance_error().abs();
+        assert!(
+            gas < (RELATIVE_TOLERANCE * reference) as f64,
+            "{frame}: {gas}"
+        );
+        assert!(
+            shaft < (RELATIVE_TOLERANCE * reference) as f64,
+            "{frame}: {shaft}"
+        );
+    }
 }
 
 /// A display held at 30 FPS delivers frames of about 33 ms that arrive
 /// unevenly. None of that time may be dropped: the budget must absorb the
-/// late frames and leave no backlog. With the old budget of 4 steps, these
-/// frames dropped time and flashed the warning.
+/// late frames. With the old budget of 4 steps, these frames dropped time
+/// and flashed the warning.
 #[test]
 fn uneven_thirty_fps_frames_keep_real_time() {
     const FRAMES: usize = 240;
@@ -1278,7 +1359,6 @@ fn uneven_thirty_fps_frames_keep_real_time() {
     for frame in 0..FRAMES {
         let limited = simulation.update(FRAME_TIMES[frame % FRAME_TIMES.len()]);
         assert!(!limited, "frame {frame} dropped time");
-        assert!(simulation.accumulator < FIXED_DT);
     }
 }
 
@@ -1304,11 +1384,11 @@ fn tracers_follow_both_sides_without_changing_the_physics() {
         .collect();
     assert!(regions.contains(&Region::Hot) && regions.contains(&Region::Cold));
     for _ in 0..STEPS {
-        followed.step(FIXED_DT);
-        plain.step(FIXED_DT);
+        followed.step(MAX_STEP);
+        plain.step(MAX_STEP);
     }
     let tracers = followed.tracers().unwrap();
-    assert!((tracers.time() - STEPS as f64 * FIXED_DT as f64).abs() < 1e-6);
+    assert!((tracers.time() - STEPS as f64 * MAX_STEP as f64).abs() < 1e-6);
     assert!(tracers.paths().all(|(_, points)| points.len() > 1));
     for (a, b) in followed.particles.iter().zip(&plain.particles) {
         assert_eq!(a.position, b.position);
@@ -1350,9 +1430,9 @@ fn regenerator_raises_efficiency_within_the_laws() {
     /// efficiency without it (measured: 5.8 and 6.3).
     const EFFICIENCY_GAIN: f64 = 3.0;
     for seed in SEEDS {
-        let open = started_run_with(seed, MAX_HOT_KELVIN, FIXED_DT, ROTATION_DURATION, false);
-        let screened = started_run_with(seed, MAX_HOT_KELVIN, FIXED_DT, ROTATION_DURATION, true);
-        check_started_run(seed, MAX_HOT_KELVIN, FIXED_DT, &screened);
+        let open = started_run_with(seed, MAX_HOT_KELVIN, MAX_STEP, ROTATION_DURATION, false);
+        let screened = started_run_with(seed, MAX_HOT_KELVIN, MAX_STEP, ROTATION_DURATION, true);
+        check_started_run(seed, MAX_HOT_KELVIN, MAX_STEP, &screened);
         let (open_heat, open_work) = late_heat_and_work(&open, LATE_TURNS);
         let (screened_heat, screened_work) = late_heat_and_work(&screened, LATE_TURNS);
         let (open_efficiency, screened_efficiency) =
@@ -1387,7 +1467,7 @@ fn the_pump_fills_through_the_port_while_the_engine_runs() {
     simulation.set_hot_kelvin(MAX_HOT_KELVIN);
     simulation.start_engine();
     for _ in 0..240 {
-        simulation.update(FIXED_DT);
+        simulation.update(MAX_STEP);
     }
     let angle = simulation.power_pistons().total_angle();
     simulation.set_concentration(MAX_CONCENTRATION);
@@ -1395,10 +1475,10 @@ fn the_pump_fills_through_the_port_while_the_engine_runs() {
     assert_eq!(simulation.target_count(), MAX_PARTICLES);
     // One step's worth comes in at the port's mouth, heading in.
     let before = simulation.particles.len();
-    simulation.run_port(FIXED_DT);
+    simulation.run_port(MAX_STEP);
     let came = simulation.particles.len() - before;
     assert!(
-        came >= 1 && came as f32 <= FLOW_PER_SECOND * FIXED_DT + 1.0,
+        came >= 1 && came as f32 <= FLOW_PER_SECOND * MAX_STEP + 1.0,
         "{came}"
     );
     let port = simulation.port();
@@ -1410,8 +1490,8 @@ fn the_pump_fills_through_the_port_while_the_engine_runs() {
     }
     assert!(simulation.port_flow() > 0.0);
     let seconds = (MAX_PARTICLES - DEFAULT_PARTICLES) as f32 / FLOW_PER_SECOND;
-    for _ in 0..((seconds + 2.0) / FIXED_DT) as usize {
-        simulation.update(FIXED_DT);
+    for _ in 0..((seconds + 2.0) / MAX_STEP) as usize {
+        simulation.update(MAX_STEP);
     }
     assert_eq!(simulation.particles.len(), MAX_PARTICLES);
     let energy = simulation.kinetic_energy() as f64;
@@ -1451,7 +1531,7 @@ fn the_pump_drains_through_the_port() {
         .filter(|position| position.distance(outlet) <= port.capture)
         .collect();
     let before = simulation.particles.len();
-    simulation.run_port(FIXED_DT);
+    simulation.run_port(MAX_STEP);
     let left = before - simulation.particles.len();
     assert!(left >= 1, "gas at the port leaves");
     let near_after = simulation
@@ -1469,8 +1549,8 @@ fn the_pump_drains_through_the_port() {
     let target = particles_at(MIN_CONCENTRATION);
     let mut seconds = 0.0;
     while simulation.particles.len() > target && seconds < 20.0 {
-        simulation.update(FIXED_DT);
-        seconds += FIXED_DT;
+        simulation.update(MAX_STEP);
+        seconds += MAX_STEP;
     }
     assert_eq!(simulation.particles.len(), target, "drained in {seconds} s");
     let energy = simulation.kinetic_energy() as f64;
@@ -1483,7 +1563,7 @@ fn the_pump_drains_through_the_port() {
 fn a_reset_refills_to_the_pumps_target() {
     let mut simulation = ConnectedChambers::seeded(DEFAULT_PARTICLES);
     simulation.set_concentration(MAX_CONCENTRATION);
-    simulation.update(FIXED_DT);
+    simulation.update(MAX_STEP);
     assert!(simulation.particles.len() < MAX_PARTICLES);
     simulation.reset();
     assert_eq!(simulation.particles.len(), MAX_PARTICLES);

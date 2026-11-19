@@ -20,26 +20,21 @@ use macroquad::miniquad::{
     BlendValue,
     Equation, //
 };
-use macroquad::models::{
-    Mesh,
-    Vertex,
-    draw_mesh, //
-};
+use macroquad::models::Vertex;
 use macroquad::prelude::{
     Camera3D,
     Color,
     Comparison,
-    Material,
-    MaterialParams,
+    Mat4,
     PipelineParams,
-    ShaderSource,
     Vec3,
-    gl_use_default_material,
-    gl_use_material,
-    load_material,
     vec2, //
 };
 
+use super::gpu::{
+    GpuMaterial,
+    GpuMesh, //
+};
 use super::{
     DRAW_CALL_INDEX_CAPACITY,
     DRAW_CALL_VERTEX_CAPACITY, //
@@ -158,18 +153,18 @@ pub const MAX_SPRITES: usize = {
 pub struct SpriteMaterials {
     /// Adds light, round: the flames' glow on the floor and the burner's
     /// blue port flames.
-    pub glow: Material,
+    pub glow: GpuMaterial,
     /// Covers partly, round: frost and mist.
-    pub haze: Material,
+    pub haze: GpuMaterial,
     /// Adds light, shaped as a flame tongue, while partly covering what is
     /// behind, so many flames overlapping stay orange and yellow instead
     /// of burning out to white.
-    pub flame: Material,
+    pub flame: GpuMaterial,
     /// Adds light, shaped as a twinkle: sparks and sparkles.
-    pub sparkle: Material,
+    pub sparkle: GpuMaterial,
     /// Like `sparkle`, drawn over everything, for heat sparks at the far
     /// wall of a bore, where the gas in front would hide them.
-    pub overlay: Material,
+    pub overlay: GpuMaterial,
 }
 
 impl SpriteMaterials {
@@ -180,17 +175,7 @@ impl SpriteMaterials {
     pub fn load() -> Option<Self> {
         let alpha = BlendFactor::Value(BlendValue::SourceAlpha);
         let behind = BlendFactor::OneMinusValue(BlendValue::SourceAlpha);
-        let load = |pipeline_params, fragment| {
-            let source = ShaderSource::Glsl {
-                vertex: SPRITE_VERTEX,
-                fragment,
-            };
-            let params = MaterialParams {
-                pipeline_params,
-                ..Default::default()
-            };
-            load_material(source, params).ok()
-        };
+        let load = |params, fragment| GpuMaterial::new(SPRITE_VERTEX, fragment, &[], params);
         let material = |source, behind, fragment| load(sprite_pipeline(source, behind), fragment);
         let overlay = PipelineParams {
             depth_test: Comparison::Always,
@@ -276,8 +261,9 @@ struct Sprite {
 pub struct Sprites {
     /// The sprites gathered this frame.
     gathered: Vec<Sprite>,
-    /// The sprites in order, as quads.
-    mesh: Mesh,
+    /// The sprites in order, as quads, sent to the graphics card again
+    /// each frame.
+    mesh: GpuMesh,
 }
 
 impl Sprites {
@@ -285,19 +271,16 @@ impl Sprites {
     pub fn new() -> Self {
         Self {
             gathered: Vec::new(),
-            mesh: Mesh {
-                vertices: Vec::new(),
-                indices: Vec::new(),
-                texture: None,
-            },
+            mesh: GpuMesh::empty(),
         }
     }
 
     /// Empties the batch.
     pub fn clear(&mut self) {
         self.gathered.clear();
-        self.mesh.vertices.clear();
-        self.mesh.indices.clear();
+        let mesh = self.mesh.edit();
+        mesh.vertices.clear();
+        mesh.indices.clear();
     }
 
     /// Adds a sprite centered on `center`, spanning `across` and `along`
@@ -353,10 +336,11 @@ impl Sprites {
             let farther = depth(second).total_cmp(&depth(first));
             second.flat.cmp(&first.flat).then(farther)
         });
-        self.mesh.vertices.clear();
-        self.mesh.indices.clear();
+        let mesh = self.mesh.edit();
+        mesh.vertices.clear();
+        mesh.indices.clear();
         for sprite in &self.gathered {
-            let first = self.mesh.vertices.len() as u16;
+            let first = mesh.vertices.len() as u16;
             let Sprite {
                 center,
                 across,
@@ -372,24 +356,16 @@ impl Sprites {
             ] {
                 // From the middle to this corner: -1 or 1 times each side.
                 let corner = (2.0 * uv.x - 1.0) * across + (2.0 * uv.y - 1.0) * along;
-                self.mesh
-                    .vertices
-                    .push(Vertex::new2(center + corner, uv, color));
+                mesh.vertices.push(Vertex::new2(center + corner, uv, color));
             }
-            self.mesh
-                .indices
+            mesh.indices
                 .extend([first, first + 1, first + 2, first, first + 2, first + 3]);
         }
     }
 
     /// Draws the batch with `material`.
-    pub fn draw(&self, material: &Material) {
-        if self.mesh.indices.is_empty() {
-            return;
-        }
-        gl_use_material(material);
-        draw_mesh(&self.mesh);
-        gl_use_default_material();
+    pub fn draw(&self, material: &GpuMaterial) {
+        material.draw([&self.mesh], Mat4::IDENTITY);
     }
 }
 

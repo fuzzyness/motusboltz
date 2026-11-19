@@ -1,9 +1,14 @@
-//! Frame rate and physics time, and when the "physics time limited"
-//! warning shows.
+//! Frame rate, the work of each frame and its physics, and when the
+//! "physics time limited" warning shows.
 //!
 //! The readings are averaged over short windows so they can be read on a
 //! machine whose frame rate swings. Both are drawn in the corner of the
 //! scene, so they show in every panel tab and with the panel hidden.
+//!
+//! The work is the time the program spends making a frame, before it
+//! hands the frame over and waits for the next. A frame rate below the
+//! display's with little work a frame means the graphics card is what
+//! holds it back; with the work near the whole frame, the processor.
 
 use std::collections::VecDeque;
 
@@ -26,11 +31,14 @@ const MILLISECONDS_PER_SECOND: f64 = 1_000.0;
 /// Warning shown while the physics cannot keep up.
 pub const LIMITED_TEXT: &str = "Physics time limited: computer too slow";
 
-/// Averages over one finished window.
+/// Averages over one finished window, shown in the diagnostics build.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(not(any(test, feature = "diagnostics")), allow(dead_code))]
 struct Reading {
     /// Frames per second.
     fps: f64,
+    /// Mean time spent making a frame, in milliseconds.
+    work_ms: f64,
     /// Mean physics time per frame, in milliseconds.
     physics_ms: f64,
     /// Longest physics time of any frame in the window, in milliseconds.
@@ -47,6 +55,10 @@ pub struct FrameStats {
     physics_seconds: f64,
     /// Longest physics time of a frame in the current window, in seconds.
     worst_seconds: f64,
+    /// Time spent making the frames in the current window, in seconds.
+    work_seconds: f64,
+    /// Frames whose work is counted in `work_seconds`.
+    work_frames: u32,
     /// Averages over the last finished window.
     reading: Option<Reading>,
     /// Times of the last `LIMITED_MIN_FRAMES` frames that dropped time.
@@ -63,6 +75,8 @@ impl FrameStats {
             frames: 0,
             physics_seconds: 0.0,
             worst_seconds: 0.0,
+            work_seconds: 0.0,
+            work_frames: 0,
             reading: None,
             recent_drops: VecDeque::with_capacity(LIMITED_MIN_FRAMES),
             limited_until: f64::NEG_INFINITY,
@@ -86,8 +100,10 @@ impl FrameStats {
         let elapsed = now - start;
         if elapsed >= WINDOW_SECONDS {
             let frames = f64::from(self.frames);
+            let work_frames = f64::from(self.work_frames.max(1));
             self.reading = Some(Reading {
                 fps: frames / elapsed,
+                work_ms: self.work_seconds / work_frames * MILLISECONDS_PER_SECOND,
                 physics_ms: self.physics_seconds / frames * MILLISECONDS_PER_SECOND,
                 worst_ms: self.worst_seconds * MILLISECONDS_PER_SECOND,
             });
@@ -95,17 +111,35 @@ impl FrameStats {
             self.frames = 0;
             self.physics_seconds = 0.0;
             self.worst_seconds = 0.0;
+            self.work_seconds = 0.0;
+            self.work_frames = 0;
         }
     }
 
-    /// The frame rate and physics time of the last finished window, once
-    /// there is one.
-    pub fn line(&self) -> Option<String> {
+    /// Records that making a frame took `seconds`, from reading the input
+    /// to handing the frame over.
+    #[cfg(any(test, feature = "diagnostics"))]
+    pub fn record_work(&mut self, seconds: f64) {
+        self.work_seconds += seconds;
+        self.work_frames += 1;
+    }
+
+    /// The frame rate, work and physics time of the last finished window,
+    /// as labeled rows, once there is one.
+    #[cfg(any(test, feature = "diagnostics"))]
+    pub fn rows(&self) -> Option<[(&'static str, String); 3]> {
         self.reading.map(|reading| {
-            format!(
-                "{:.0} fps | physics {:.1} ms per frame, worst {:.1} ms",
-                reading.fps, reading.physics_ms, reading.worst_ms
-            )
+            [
+                ("Frame rate", format!("{:.0} fps", reading.fps)),
+                ("Work a frame", format!("{:.1} ms", reading.work_ms)),
+                (
+                    "Physics a frame",
+                    format!(
+                        "{:.1} ms (worst {:.1})",
+                        reading.physics_ms, reading.worst_ms
+                    ),
+                ),
+            ]
         })
     }
 

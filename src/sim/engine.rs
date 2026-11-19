@@ -70,20 +70,25 @@ pub const PARTICLE_RADIUS: f32 = 0.13;
 const SPACING_PER_RADIUS: f32 = 2.5;
 /// Model time a particle stays highlighted after a collision; drawing only.
 pub const COLLISION_FLASH_DURATION: f32 = 0.01;
-/// Fixed steps per second of model time.
-const FIXED_STEPS_PER_SECOND: u32 = 120;
-/// Length of one fixed step.
-const FIXED_DT: f32 = 1.0 / FIXED_STEPS_PER_SECOND as f32;
-/// Most fixed steps run in one frame, so a slow frame cannot build an
-/// ever-growing backlog.
+/// Fewest steps per second of model time: no step is longer than at this
+/// rate.
+const MIN_STEPS_PER_SECOND: u32 = 120;
+/// Longest step.
+const MAX_STEP: f32 = 1.0 / MIN_STEPS_PER_SECOND as f32;
+/// Most steps run in one frame, so a slow frame cannot take an ever longer
+/// time to run.
 ///
 /// Six steps cover a 20 FPS frame, so a display held at 30 FPS (for example
 /// Safari in Low Power Mode) keeps real time even when its frames arrive
 /// unevenly.
-const MAX_FIXED_STEPS_PER_FRAME: usize = 6;
+const MAX_STEPS_PER_FRAME: usize = 6;
 /// Longest frame time taken per update, exactly the step budget; longer
 /// frames are clipped and reported as limited.
-const MAX_FRAME_TIME: f32 = MAX_FIXED_STEPS_PER_FRAME as f32 * FIXED_DT;
+pub const MAX_FRAME_TIME: f32 = MAX_STEPS_PER_FRAME as f32 * MAX_STEP;
+/// A frame this little longer than a whole number of longest steps, as a
+/// share of a step, takes no extra step: frame times that are whole steps
+/// come out a hair over in floating point.
+const STEP_ROUNDING_SLACK: f32 = 1.0e-3;
 /// Most a particle moves relative to a piston in one substep, in radii.
 ///
 /// Collisions are found as overlaps at the end of each substep, so longer
@@ -103,6 +108,11 @@ const MAX_BURST_STEPS: f32 = 2.0;
 const PLACEMENT_TRIES: usize = 8;
 /// Most the crank turns in one substep.
 const MAX_CRANK_STEP_RADIANS: f32 = 0.02;
+
+/// Equal steps, each within `MAX_STEP`, that run `time`: none for none.
+fn steps_for(time: f32) -> usize {
+    (time / MAX_STEP - STEP_ROUNDING_SLACK).ceil().max(0.0) as usize
+}
 
 /// Which part of the connected gas volume holds a particle center.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -150,8 +160,6 @@ pub struct ConnectedChambers {
     pistons: PowerPistons,
     /// Work done by the gas on the pistons since the fill.
     piston_work_by_gas: f64,
-    /// Frame time not yet run as fixed steps.
-    accumulator: f32,
     /// Hot and cold walls.
     thermal: ThermalReservoirs,
     /// Screens that can be put in the opening.
@@ -263,7 +271,6 @@ impl ConnectedChambers {
             cycle: CycleMonitor::new(pistons.face_area() as f64, start),
             pistons,
             piston_work_by_gas: 0.0,
-            accumulator: 0.0,
             thermal: ThermalReservoirs::with_seed(thermal_seed),
             regenerator: Regenerator::new(
                 geometry,
@@ -709,8 +716,15 @@ impl ConnectedChambers {
         region_of(self.geometry, &self.pistons, position)
     }
 
-    /// Advances the simulation by `frame_time` of fixed steps, at most
-    /// `MAX_FIXED_STEPS_PER_FRAME`.
+    /// Advances the simulation by `frame_time`, in as few equal steps as
+    /// keep each within `MAX_STEP`, at most `MAX_STEPS_PER_FRAME`.
+    ///
+    /// The steps follow the frames rather than a fixed clock, so every
+    /// frame shows the motion of exactly its own time: at 144 frames a
+    /// second, or in slow motion, no frame repeats the last one's
+    /// positions while the next jumps two steps ahead. A step is never
+    /// longer than `MAX_STEP`, so the physics is the same at any frame
+    /// rate.
     ///
     /// Returns true when frame time had to be dropped to keep the window
     /// responsive; the step size never grows to catch up.
@@ -720,23 +734,16 @@ impl ConnectedChambers {
     /// Panics if `frame_time` is negative or not finite.
     pub fn update(&mut self, frame_time: f32) -> bool {
         assert!(frame_time.is_finite() && frame_time >= 0.0);
-        let mut limited = frame_time > MAX_FRAME_TIME;
-        self.accumulator += frame_time.min(MAX_FRAME_TIME);
-        for _ in 0..MAX_FIXED_STEPS_PER_FRAME {
-            if self.accumulator < FIXED_DT {
-                break;
-            }
-            self.step(FIXED_DT);
-            self.accumulator -= FIXED_DT;
-        }
-        if self.accumulator >= FIXED_DT {
-            self.accumulator %= FIXED_DT;
-            limited = true;
+        let limited = frame_time > MAX_FRAME_TIME;
+        let time = frame_time.min(MAX_FRAME_TIME);
+        let steps = steps_for(time);
+        for _ in 0..steps {
+            self.step(time / steps as f32);
         }
         limited
     }
 
-    /// Advances one fixed step of `dt`, in substeps short enough that no
+    /// Advances one step of `dt`, in substeps short enough that no
     /// particle moves more than `MAX_TRAVEL_RADII` relative to a piston and
     /// the crank turns at most `MAX_CRANK_STEP_RADIANS` in each.
     fn step(&mut self, dt: f32) {

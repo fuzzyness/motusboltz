@@ -27,7 +27,7 @@ fn the_boxes_lie_beyond_the_cold_end_apart() {
     let shape = BlockShape::new(DEFAULT_GEOMETRY);
     let boxes = button_boxes(shape);
     let buttons = Buttons::build(shape);
-    for vertex in &buttons.bodies.vertices {
+    for vertex in &buttons.bodies.mesh().vertices {
         let point = vertex.position;
         assert!(point.x > shape.offset + shape.outer, "{point} by the block");
         assert!(point.y >= shape.base - 1e-5);
@@ -47,6 +47,7 @@ fn a_dome_sinks_while_held_and_glows_while_on() {
     let mut buttons = Buttons::build(shape);
     let top = |buttons: &Buttons| {
         buttons.domes[0]
+            .mesh()
             .vertices
             .iter()
             .map(|vertex| vertex.position.y)

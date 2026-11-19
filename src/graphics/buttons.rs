@@ -20,7 +20,6 @@ use macroquad::prelude::{
     Camera3D,
     Color,
     Mat3,
-    Material,
     UniformType,
     Vec2,
     Vec3,
@@ -31,6 +30,10 @@ use macroquad::prelude::{
 use super::block::{
     BlockShape,
     key_light, //
+};
+use super::gpu::{
+    GpuMaterial,
+    GpuMesh, //
 };
 use super::solid::{
     Frame,
@@ -456,7 +459,7 @@ enum Clear {
     /// Not built yet.
     Untried,
     /// Built.
-    Ready(Material),
+    Ready(GpuMaterial),
     /// Its shader could not be built; the domes are left out.
     Unavailable,
 }
@@ -464,11 +467,11 @@ enum Clear {
 /// Both boxes.
 pub struct Buttons {
     /// Both bodies, in the world, one mesh.
-    bodies: Mesh,
+    bodies: GpuMesh,
     /// Each dome as built, unpressed, in the world.
     rest: [Vec<Vertex>; 2],
-    /// Each dome as posed.
-    domes: [Mesh; 2],
+    /// Each dome as posed, sent again only when it moves.
+    domes: [GpuMesh; 2],
     /// How far each dome is pressed in, from 0 to 1.
     pressed: [f32; 2],
     /// How brightly each dome glows, from 0 to 1.
@@ -480,7 +483,7 @@ pub struct Buttons {
     /// The clock at the last pose, if there was one.
     last_seconds: Option<f64>,
     /// The lit-metal material, if it can be built.
-    metal: Option<Material>,
+    metal: Option<GpuMaterial>,
     /// The domes' material, once tried.
     clear: Clear,
     /// The bore radius every size is a fraction of, times `BOX_SCALE`.
@@ -507,7 +510,7 @@ impl Buttons {
         buttons.metal = load_metal();
         if buttons.metal.is_none() {
             // Drawn in plain colors, alpha means transparency: make it solid.
-            for vertex in &mut buttons.bodies.vertices {
+            for vertex in &mut buttons.bodies.edit().vertices {
                 vertex.color[3] = u8::MAX;
             }
         }
@@ -535,13 +538,15 @@ impl Buttons {
         assert!(bodies.indices.len() < DRAW_CALL_INDEX_CAPACITY);
         let built = boxes.map(|box_| placed(build_dome(box_.switch, box_.unit), box_));
         let rest = [built[0].0.clone(), built[1].0.clone()];
-        let domes = built.map(|(vertices, indices)| Mesh {
-            vertices,
-            indices,
-            texture: None,
+        let domes = built.map(|(vertices, indices)| {
+            GpuMesh::new(Mesh {
+                vertices,
+                indices,
+                texture: None,
+            })
         });
         Self {
-            bodies,
+            bodies: GpuMesh::new(bodies),
             rest,
             domes,
             pressed: [0.0; 2],
@@ -572,13 +577,17 @@ impl Buttons {
             self.tapped[index] = (self.tapped[index] - dt).max(0.0);
             let down = states.held[index] || self.tapped[index] > 0.0;
             let pressed = &mut self.pressed[index];
+            let before = *pressed;
             *pressed = approach(*pressed, down, dt / PRESS_SECONDS);
             let sink = Vec3::Y * *pressed * PRESS_DEPTH * unit;
             let glow = &mut self.glow[index];
             *glow = approach(*glow, states.on[index], dt / GLOW_SECONDS);
-            let rest = &self.rest[index];
-            for (vertex, rest) in self.domes[index].vertices.iter_mut().zip(rest) {
-                vertex.position = rest.position - sink;
+            // Only a dome that moved is sent again.
+            if *pressed != before {
+                let rest = &self.rest[index];
+                for (vertex, rest) in self.domes[index].edit().vertices.iter_mut().zip(rest) {
+                    vertex.position = rest.position - sink;
+                }
             }
         }
     }

@@ -5,13 +5,18 @@ use super::*;
 /// One frame at 60 frames per second.
 const FRAME: f64 = 1.0 / 60.0;
 
+/// Time spent making each frame in the tests below, in seconds.
+const WORK: f64 = 0.005;
+
 /// Records `count` frames from `start`, one every `FRAME`, each spending
-/// `physics` seconds on the physics. Returns the time of the last frame.
+/// `physics` seconds on the physics and `WORK` in all. Returns the time of
+/// the last frame.
 fn frames(stats: &mut FrameStats, start: f64, count: usize, physics: f64) -> f64 {
     let mut now = start;
     for _ in 0..count {
         now += FRAME;
         stats.record(now, physics, false);
+        stats.record_work(WORK);
     }
     now
 }
@@ -21,7 +26,7 @@ fn readings_average_whole_windows() {
     let mut stats = FrameStats::new();
     stats.record(0.0, 0.004, false);
     let now = frames(&mut stats, 0.0, 20, 0.004);
-    assert_eq!(stats.line(), None, "no window has finished yet");
+    assert_eq!(stats.rows(), None, "no window has finished yet");
 
     frames(&mut stats, now, 9, 0.004);
     // The thirtieth frame closes the window at exactly half a second.
@@ -30,10 +35,10 @@ fn readings_average_whole_windows() {
     assert!((reading.fps - 60.0).abs() < 0.5, "{reading:?}");
     assert!((reading.physics_ms - 4.2).abs() < 0.01, "{reading:?}");
     assert!((reading.worst_ms - 10.0).abs() < 1e-9, "{reading:?}");
-    assert_eq!(
-        stats.line().as_deref(),
-        Some("60 fps | physics 4.2 ms per frame, worst 10.0 ms")
-    );
+    assert!((reading.work_ms - 5.0).abs() < 1e-9, "{reading:?}");
+    let rows = stats.rows().expect("a window finished");
+    let values: Vec<&str> = rows.iter().map(|(_, value)| value.as_str()).collect();
+    assert_eq!(values, ["60 fps", "5.0 ms", "4.2 ms (worst 10.0)"]);
 }
 
 #[test]
@@ -100,6 +105,8 @@ fn readout_text_is_ascii() {
     let mut stats = FrameStats::new();
     stats.record(0.0, 0.0, false);
     frames(&mut stats, 0.0, 40, 0.002);
-    assert!(stats.line().unwrap().is_ascii());
+    for (label, value) in stats.rows().unwrap() {
+        assert!(label.is_ascii() && value.is_ascii());
+    }
     assert!(LIMITED_TEXT.is_ascii());
 }

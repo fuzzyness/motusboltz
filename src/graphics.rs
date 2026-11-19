@@ -16,6 +16,7 @@ pub mod chamber;
 pub mod cloud;
 pub mod fire;
 pub mod floor;
+pub mod gpu;
 pub mod heat_sparks;
 pub mod levels;
 pub mod nitrogen;
@@ -35,33 +36,28 @@ use macroquad::miniquad::{
     BlendValue,
     Equation, //
 };
-use macroquad::models::{
-    Mesh,
-    draw_mesh, //
-};
+use macroquad::models::draw_mesh;
 use macroquad::prelude::{
     Camera3D,
     Color,
     Comparison,
-    Material,
-    MaterialParams,
+    Mat4,
     PipelineParams,
-    ShaderSource,
-    UniformDesc,
     UniformType,
     Vec3,
     clear_background,
-    gl_use_default_material,
-    gl_use_material,
-    load_material,
     screen_dpi_scale,
     screen_height,
     screen_width,
     vec2, //
 };
-use macroquad::time::get_time;
+use macroquad::window::get_internal_gl;
 
 use crate::sim::engine::ConnectedChambers;
+use crate::ui::diagnostics::{
+    self,
+    Piece, //
+};
 use crate::ui::draw_target::{
     draw_to,
     draw_to_screen, //
@@ -79,6 +75,10 @@ use chamber::ConnectedChamberVisual;
 use cloud::CloudFloor;
 use fire::Fire;
 use floor::FloorGrid;
+use gpu::{
+    GpuMaterial,
+    GpuMesh, //
+};
 use heat_sparks::HeatSparks;
 use levels::ReservoirLevels;
 use nitrogen::Nitrogen;
@@ -157,7 +157,8 @@ uniform mat4 Projection;
 void main() {
     vec4 placed = Model * vec4(position, 1.0);
     world = placed.xyz;
-    surface_normal = normal.xyz;
+    // Turned with the mesh; `Model` only turns and moves, never stretches.
+    surface_normal = (Model * vec4(normal.xyz, 0.0)).xyz;
     color = color0 / 255.0;
     uv = texcoord;
     gl_Position = Projection * placed;
@@ -194,7 +195,7 @@ fn mix_color(first: Color, second: Color, amount: f32) -> Color {
 /// A depth-tested material lit per pixel by `fragment`, with the `Eye` and
 /// `Light` uniforms and the `extra` ones, or `None` if its shader cannot
 /// be built.
-fn load_lit(fragment: &'static str, extra: &[(&str, UniformType)]) -> Option<Material> {
+fn load_lit(fragment: &'static str, extra: &[(&str, UniformType)]) -> Option<GpuMaterial> {
     let pipeline_params = PipelineParams {
         depth_write: true,
         depth_test: Comparison::LessOrEqual,
@@ -211,13 +212,13 @@ fn load_lit(fragment: &'static str, extra: &[(&str, UniformType)]) -> Option<Mat
 /// It writes depth too, so it hides what is drawn after it behind it:
 /// Miniquad tests depth only for pipelines that write it, and without the
 /// test, glass and domes showed through the block.
-fn load_clear(fragment: &'static str) -> Option<Material> {
+fn load_clear(fragment: &'static str) -> Option<GpuMaterial> {
     load_clear_with(fragment, &[])
 }
 
 /// A see-through material as `load_clear` makes, with the `extra` uniforms
 /// too.
-fn load_clear_with(fragment: &'static str, extra: &[(&str, UniformType)]) -> Option<Material> {
+fn load_clear_with(fragment: &'static str, extra: &[(&str, UniformType)]) -> Option<GpuMaterial> {
     let blend = BlendState::new(
         Equation::Add,
         BlendFactor::Value(BlendValue::SourceAlpha),
@@ -239,42 +240,112 @@ fn load_lit_with(
     fragment: &'static str,
     extra: &[(&str, UniformType)],
     pipeline_params: PipelineParams,
-) -> Option<Material> {
+) -> Option<GpuMaterial> {
     let lighting = [("Eye", UniformType::Float3), ("Light", UniformType::Float3)];
-    let uniforms = lighting
-        .iter()
-        .chain(extra)
-        .map(|&(name, kind)| UniformDesc::new(name, kind))
-        .collect();
-    let source = ShaderSource::Glsl {
-        vertex: LIT_VERTEX,
-        fragment,
-    };
-    let params = MaterialParams {
-        pipeline_params,
-        uniforms,
-        ..Default::default()
-    };
-    load_material(source, params).ok()
+    let uniforms: Vec<_> = lighting.iter().chain(extra).copied().collect();
+    GpuMaterial::new(LIT_VERTEX, fragment, &uniforms, pipeline_params)
+}
+
+/// Vertex shader for meshes in their own colors, as Macroquad draws a mesh
+/// with no material.
+const PLAIN_VERTEX: &str = r#"#version 100
+attribute vec3 position;
+attribute vec2 texcoord;
+attribute vec4 color0;
+attribute vec4 normal;
+
+varying lowp vec2 uv;
+varying lowp vec4 color;
+
+uniform mat4 Model;
+uniform mat4 Projection;
+
+void main() {
+    gl_Position = Projection * Model * vec4(position, 1);
+    color = color0 / 255.0;
+    uv = texcoord;
+}"#;
+
+/// Fragment shader for meshes in their own colors, alpha blending them.
+const PLAIN_FRAGMENT: &str = r#"#version 100
+varying lowp vec4 color;
+varying lowp vec2 uv;
+
+uniform sampler2D Texture;
+
+void main() {
+    gl_FragColor = color * texture2D(Texture, uv);
+}"#;
+
+thread_local! {
+    /// The material for meshes in their own colors, made on its first use
+    /// (it needs the window); `None` where it cannot be built.
+    static PLAIN: std::cell::OnceCell<Option<GpuMaterial>> = const { std::cell::OnceCell::new() };
+}
+
+/// Draws `meshes` placed by `model` in their own colors, blended by their
+/// alpha and depth tested, as Macroquad draws a mesh with no material.
+fn draw_plain<'a>(meshes: impl IntoIterator<Item = &'a GpuMesh>, model: Mat4) {
+    PLAIN.with(|plain| {
+        let material = plain.get_or_init(|| {
+            let blend = BlendState::new(
+                Equation::Add,
+                BlendFactor::Value(BlendValue::SourceAlpha),
+                BlendFactor::OneMinusValue(BlendValue::SourceAlpha),
+            );
+            let params = PipelineParams {
+                depth_write: true,
+                depth_test: Comparison::LessOrEqual,
+                color_blend: Some(blend),
+                ..Default::default()
+            };
+            GpuMaterial::new(PLAIN_VERTEX, PLAIN_FRAGMENT, &[], params)
+        });
+        match material {
+            Some(material) => material.draw(meshes, model),
+            // Not even that: through Macroquad, sent anew each frame.
+            None => {
+                // SAFETY: only Macroquad's own batch is touched, on the
+                // window's thread.
+                let gl = unsafe { get_internal_gl() };
+                gl.quad_gl.push_model_matrix(model);
+                for mesh in meshes {
+                    draw_mesh(mesh.mesh());
+                }
+                gl.quad_gl.pop_model_matrix();
+            }
+        }
+    });
 }
 
 /// Draws `meshes` lit per pixel by `material`, seen from `camera` and lit
 /// from `light`, or, with no material, in their own colors.
 fn draw_lit<'a>(
-    meshes: impl IntoIterator<Item = &'a Mesh>,
-    material: Option<&Material>,
+    meshes: impl IntoIterator<Item = &'a GpuMesh>,
+    material: Option<&GpuMaterial>,
     camera: &Camera3D,
     light: Vec3,
 ) {
-    if let Some(material) = material {
-        material.set_uniform("Eye", camera.position);
-        material.set_uniform("Light", light);
-        gl_use_material(material);
+    draw_lit_placed(meshes, material, camera, light, Mat4::IDENTITY);
+}
+
+/// Draws `meshes` as `draw_lit` does, placed by `model`, which may only
+/// turn and move them.
+fn draw_lit_placed<'a>(
+    meshes: impl IntoIterator<Item = &'a GpuMesh>,
+    material: Option<&GpuMaterial>,
+    camera: &Camera3D,
+    light: Vec3,
+    model: Mat4,
+) {
+    match material {
+        Some(material) => {
+            material.set_uniform("Eye", camera.position);
+            material.set_uniform("Light", light);
+            material.draw(meshes, model);
+        }
+        None => draw_plain(meshes, model),
     }
-    for mesh in meshes {
-        draw_mesh(mesh);
-    }
-    gl_use_default_material();
 }
 
 /// Scales a color's red, green and blue by `brightness`, keeping alpha.
@@ -441,12 +512,19 @@ impl Scene {
     /// The frame is drawn into a softened view (see `soft_view.rs`), or
     /// straight to the screen where that cannot be built. For a moment
     /// after the scenery switches, the last view of the old one dissolves
-    /// over the new one through a dither. The clock eases
-    /// the reservoir effects toward the sliders and animates the flames,
-    /// mist and clouds, so they keep moving while the simulation is paused.
-    pub fn render(&mut self, simulation: &ConnectedChambers, camera: &Camera3D, scenery: Scenery) {
+    /// over the new one through a dither. The clock, `seconds`, eases the
+    /// reservoir effects toward the sliders and animates the flames, mist
+    /// and clouds, so they keep moving while the simulation is paused; it
+    /// should run as smoothly as the frames are shown (see
+    /// `ui::frame_clock`).
+    pub fn render(
+        &mut self,
+        simulation: &ConnectedChambers,
+        camera: &Camera3D,
+        scenery: Scenery,
+        seconds: f64,
+    ) {
         let (width, height, dpi) = (screen_width(), screen_height(), screen_dpi_scale());
-        let seconds = get_time();
         // A switch of scenery, or a dissolve asked for, keeps the old view,
         // drawn last frame, and draws the new one into the other.
         match self.scenery {
@@ -474,14 +552,12 @@ impl Scene {
             z_near: camera.z_near,
             z_far: camera.z_far,
         };
-        if let Some(target) = self.soft.target(width, height, dpi) {
+        let soft = diagnostics::shown(Piece::SoftView);
+        if let Some(target) = soft.then(|| self.soft.target(width, height, dpi)).flatten() {
             draw_to(&SoftView::flat_camera(&target, width, height));
             clear_background(BACKGROUND);
             camera.render_target = Some(target);
         }
-        let size = vec2(width, height);
-        self.backdrop
-            .draw(scenery, &camera, size, self.levels, seconds);
         draw_to(&camera);
         let fade = match scenery {
             Scenery::Sky => SKY_FADE,
@@ -501,7 +577,9 @@ impl Scene {
             },
             time: (seconds % WAVE_PERIOD) as f32,
         };
-        self.soft.present(width, height, wave);
+        if soft {
+            self.soft.present(width, height, wave);
+        }
         if dissolved < 1.0 {
             self.previous
                 .present_dithered(width, height, dpi, style.cell, 1.0 - dissolved, wave);
@@ -543,7 +621,9 @@ impl Scene {
             .follow(simulation.regenerator().is_enabled(), seconds);
         self.chamber.draw(camera);
         self.fire.draw_burner();
-        self.table.draw(camera);
+        if diagnostics::shown(Piece::Table) {
+            self.table.draw(camera);
+        }
         // Lit right over the table, before what stands on it, which then
         // covers it.
         self.table.draw_highlight(self.highlight, seconds, camera);
@@ -554,11 +634,20 @@ impl Scene {
         if scenery == Scenery::Sky {
             self.cloud.draw(camera, light);
         }
-        self.particles.draw(simulation, camera, background);
+        if diagnostics::shown(Piece::Particles) {
+            self.particles.draw(simulation, camera, background);
+        }
         // The seated cartridge shows faintly through the gas, but not
         // through the pistons, which come after.
         self.cartridge.draw_ghost();
         self.assembly.draw(simulation.power_pistons(), camera);
+        // The background behind everything solid, where it shows, and
+        // before anything see-through, which blends over it.
+        let size = vec2(screen_width(), screen_height());
+        if diagnostics::shown(Piece::Sky) {
+            self.backdrop
+                .draw(scenery, camera, size, self.levels, seconds);
+        }
         // The coil after everything solid, which shows through it.
         self.nitrogen.draw_coil(camera);
         self.buttons.draw_domes(self.switches, seconds, camera);
@@ -574,7 +663,8 @@ impl Scene {
         // but hide nothing.
         // The sparks stay out of the way of the followed particles while
         // the tracers are on.
-        if let Some(materials) = &self.sprite_materials {
+        let effects = diagnostics::shown(Piece::Effects);
+        if let (Some(materials), true) = (&self.sprite_materials, effects) {
             self.fire.draw(materials);
             self.nitrogen.draw(materials);
             self.tank.draw_puff(materials);

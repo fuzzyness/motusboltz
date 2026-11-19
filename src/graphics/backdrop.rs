@@ -6,8 +6,16 @@
 //! darker at the window's corners. Both add a warm glow behind the hot
 //! cylinder and a cool one behind the cold cylinder, each as strong as its
 //! reservoir is hot or cold, following the cylinders as the camera turns.
-//! One full-window quad drawn before the scene, so it costs one draw call;
-//! without its shader the plain clear color stays.
+//! One full-window quad, so it costs one draw call; without its shader the
+//! plain clear color stays. It is drawn after the solid parts of the scene
+//! but behind them, at the far end of the depth range, so only the pixels
+//! left uncovered are shaded, rather than every pixel only for the table and
+//! the engine to cover most of them.
+//!
+//! The sky's clouds are value noise read from a small texture of random
+//! values, which the GPU's own smoothing interpolates, rather than hashed
+//! anew for every pixel: at most ten texture reads a pixel in place of
+//! forty hashes.
 
 use macroquad::models::{
     Mesh,
@@ -17,10 +25,14 @@ use macroquad::models::{
 use macroquad::prelude::{
     Camera,
     Camera3D,
+    Comparison,
+    FilterMode,
     Mat4,
     Material,
     MaterialParams,
+    PipelineParams,
     ShaderSource,
+    Texture2D,
     UniformDesc,
     UniformType,
     Vec2,
@@ -33,13 +45,19 @@ use macroquad::prelude::{
     vec2,
     vec3, //
 };
+use macroquad::rand::RandGenerator;
 
 use super::block::BlockShape;
 use super::levels::ReservoirLevels;
 use super::table::ground;
 use crate::sim::geometry::ChamberGeometry;
 
-/// Vertex shader for the full-window quad.
+/// Vertex shader for the full-window quad: it places the corners by their
+/// texture coordinates straight on the window, whatever camera is set, at
+/// the far end of the depth range, behind everything.
+///
+/// `uv` runs from the window's top left (0, 0) to its bottom right (1, 1),
+/// as the sky shader's lines of sight and the glows' spots expect.
 const BACKDROP_VERTEX: &str = r#"#version 100
 attribute vec3 position;
 attribute vec2 texcoord;
@@ -51,7 +69,7 @@ uniform mat4 Model;
 uniform mat4 Projection;
 
 void main() {
-    gl_Position = Projection * Model * vec4(position, 1);
+    gl_Position = vec4(texcoord.x * 2.0 - 1.0, 1.0 - texcoord.y * 2.0, 1.0, 1.0);
     uv = texcoord;
 }"#;
 
@@ -102,8 +120,9 @@ void main() {
 /// and projection, inverted). Above the horizon: the sky, brighter toward
 /// the sun, with thin clouds on a high layer. Below it: the tops of a sea
 /// of clouds on a layer under the engine, lit from the sun's side and
-/// fading into haze in the distance. The noise is value noise from a hash
-/// with no sine (see the grid's shader).
+/// fading into haze in the distance. The noise is value noise whose values
+/// at the lattice points are read from `Noise` (see `noise_bytes`), so the
+/// texture's smoothing does the interpolating.
 const SKY_FRAGMENT: &str = r#"#version 100
 #ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
@@ -121,24 +140,24 @@ uniform mat4 Unproject;
 uniform vec3 Eye;
 uniform float Time;
 uniform float Sea;
+uniform sampler2D Noise;
 
 const vec3 SUN = vec3(0.55, 0.42, -0.72);
 const vec3 ZENITH = vec3(0.13, 0.36, 0.86);
 const vec3 HORIZON = vec3(0.66, 0.82, 1.0);
 const vec3 GAP = vec3(0.42, 0.58, 0.88);
 
-float hash(vec2 p) {
-    vec3 q = fract(vec3(p.xyx) * 0.1031);
-    q += dot(q, q.yzx + 33.33);
-    return fract((q.x + q.y) * q.z);
-}
+// Cells across `Noise` before it repeats (see `NOISE_CELLS`).
+const float NOISE_CELLS = 128.0;
 
+// The values at a cell's corners eased together: the texture holds one
+// cell more than it repeats after, so the four corners are neighbors, and
+// reading between their texels at the eased position interpolates them.
 float noise(vec2 p) {
-    vec2 i = floor(p);
+    vec2 cell = mod(floor(p), NOISE_CELLS);
     vec2 f = fract(p);
     vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
-               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+    return texture2D(Noise, (cell + u + 0.5) / (NOISE_CELLS + 1.0)).r;
 }
 
 float fbm(vec2 p) {
@@ -209,6 +228,40 @@ impl Scenery {
     }
 }
 
+/// Cells across the sky's noise texture before it repeats; `SKY_FRAGMENT`
+/// says the same.
+///
+/// The repeat lies far beyond the clouds' largest shapes, and each layer
+/// of detail reads the texture at a scale that is no whole multiple of
+/// another's, so it does not show.
+const NOISE_CELLS: usize = 128;
+/// Seed of the sky's noise, so the clouds have the same shapes on every
+/// run.
+const NOISE_SEED: u64 = 1_046;
+/// Bytes per texel of an RGBA texture.
+const BYTES_PER_TEXEL: usize = 4;
+
+/// The sky's noise texture's bytes, RGBA: random values in red, green and
+/// blue alike, opaque, `NOISE_CELLS` each way and then the first row and
+/// column again, so every cell's four corners are side by side and the
+/// noise repeats seamlessly.
+fn noise_bytes() -> Vec<u8> {
+    let random = RandGenerator::new();
+    random.srand(NOISE_SEED);
+    let values: Vec<u8> = (0..NOISE_CELLS * NOISE_CELLS)
+        .map(|_| random.gen_range(0_u16, u16::from(u8::MAX) + 1) as u8)
+        .collect();
+    let side = NOISE_CELLS + 1;
+    let mut bytes = Vec::with_capacity(side * side * BYTES_PER_TEXEL);
+    for row in 0..side {
+        for column in 0..side {
+            let value = values[(row % NOISE_CELLS) * NOISE_CELLS + column % NOISE_CELLS];
+            bytes.extend([value, value, value, u8::MAX]);
+        }
+    }
+    bytes
+}
+
 /// How far below the floor the table stands on the sea of clouds lies,
 /// in bore radii.
 const SEA_DEPTH: f32 = 7.0;
@@ -255,6 +308,9 @@ pub struct Backdrop {
     grid: Option<Material>,
     /// The sky scenery's shader, if it can be built.
     sky: Option<Material>,
+    /// The sky's noise, made with its shader. Macroquad frees a texture
+    /// once nothing holds it, so the shader's hold is not enough.
+    noise: Option<Texture2D>,
     /// The full-window quad.
     mesh: Mesh,
     /// Where the cylinders are, for the glows.
@@ -265,6 +321,11 @@ impl Backdrop {
     /// The background for the engine of `geometry`.
     pub fn new(geometry: ChamberGeometry) -> Self {
         let material = |fragment, sky: bool| {
+            let textures = if sky {
+                vec!["Noise".to_owned()]
+            } else {
+                Vec::new()
+            };
             let mut uniforms = vec![
                 UniformDesc::new("Hot", UniformType::Float4),
                 UniformDesc::new("Cold", UniformType::Float4),
@@ -284,15 +345,31 @@ impl Backdrop {
                     fragment,
                 },
                 MaterialParams {
+                    // Tested against what is drawn, and so writing depth
+                    // too (Miniquad tests depth only for pipelines that
+                    // write it), at the far end where nothing is.
+                    pipeline_params: PipelineParams {
+                        depth_write: true,
+                        depth_test: Comparison::LessOrEqual,
+                        ..Default::default()
+                    },
                     uniforms,
-                    ..Default::default()
+                    textures,
                 },
             )
             .ok()
         };
+        let sky = material(SKY_FRAGMENT, true);
+        let noise = sky.as_ref().map(|_| {
+            let side = (NOISE_CELLS + 1) as u16;
+            let noise = Texture2D::from_rgba8(side, side, &noise_bytes());
+            noise.set_filter(FilterMode::Linear);
+            noise
+        });
         Self {
             grid: material(BACKDROP_FRAGMENT, false),
-            sky: material(SKY_FRAGMENT, true),
+            sky,
+            noise,
             mesh: Mesh {
                 vertices: Vec::new(),
                 indices: vec![0, 1, 2, 0, 2, 3],
@@ -302,11 +379,13 @@ impl Backdrop {
         }
     }
 
-    /// Fills the view of `size`, in screen points, in `scenery`, with a 2D
-    /// camera over it set.
+    /// Fills whatever is still empty of the view of `size`, in screen
+    /// points, seen from `camera`, in `scenery`.
     ///
-    /// The glows follow the reservoirs' `levels`; `seconds` drifts the
-    /// clouds.
+    /// The camera must be set, and everything solid drawn: the quad is
+    /// drawn behind it. Anything see-through goes after, so it blends over
+    /// the background. The glows follow the reservoirs' `levels`; `seconds`
+    /// drifts the clouds.
     pub fn draw(
         &mut self,
         scenery: Scenery,
@@ -335,7 +414,8 @@ impl Backdrop {
         material.set_uniform("Hot", hot);
         material.set_uniform("Cold", cold);
         material.set_uniform("Aspect", size.x / size.y.max(1.0));
-        if scenery == Scenery::Sky && self.sky.is_some() {
+        if let (Scenery::Sky, Some(_), Some(noise)) = (scenery, &self.sky, &self.noise) {
+            material.set_texture("Noise", noise.clone());
             material.set_uniform("Unproject", matrix.inverse());
             material.set_uniform("Eye", camera.position);
             // Wrapped, so the clouds stay smooth however long it runs.
@@ -344,16 +424,16 @@ impl Backdrop {
             material.set_uniform("Sea", ground - SEA_DEPTH * self.geometry.cylinder_radius);
         }
         self.mesh.vertices.clear();
+        // The shader places the corners by their texture coordinates.
         for corner in [
             vec2(0.0, 0.0),
             vec2(1.0, 0.0),
             vec2(1.0, 1.0),
             vec2(0.0, 1.0),
         ] {
-            let position = (corner * size).extend(0.0);
             self.mesh
                 .vertices
-                .push(Vertex::new2(position, corner, WHITE));
+                .push(Vertex::new2(Vec3::ZERO, corner, WHITE));
         }
         gl_use_material(material);
         draw_mesh(&self.mesh);

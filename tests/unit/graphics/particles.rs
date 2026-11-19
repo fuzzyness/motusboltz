@@ -177,18 +177,19 @@ fn batches_cover_all_particles_without_overflowing_indices() {
     let total_particles: usize = renderer
         .batches
         .iter()
-        .map(|mesh| mesh.vertices.len() / renderer.template.positions.len())
+        .map(|mesh| mesh.mesh().vertices.len() / renderer.template.positions.len())
         .sum();
 
     assert_eq!(total_particles, particle_count);
 
     for mesh in &renderer.batches {
-        assert!(mesh.vertices.len() < DRAW_CALL_VERTEX_CAPACITY);
-        assert!(mesh.indices.len() < DRAW_CALL_INDEX_CAPACITY);
+        assert!(mesh.mesh().vertices.len() < DRAW_CALL_VERTEX_CAPACITY);
+        assert!(mesh.mesh().indices.len() < DRAW_CALL_INDEX_CAPACITY);
         assert!(
-            mesh.indices
+            mesh.mesh()
+                .indices
                 .iter()
-                .all(|&index| (index as usize) < mesh.vertices.len())
+                .all(|&index| (index as usize) < mesh.mesh().vertices.len())
         );
     }
 }
@@ -216,7 +217,8 @@ fn maximum_fill_mesh_benchmark() {
     renderer.resize_batches(MAX_PARTICLES);
     let start = std::time::Instant::now();
     for _ in 0..SAMPLE_FRAMES {
-        renderer.prepare(&simulation, &camera, TEST_BACKGROUND);
+        let looks: Vec<Look> = renderer.looks(&simulation, &camera).collect();
+        renderer.write_batches(&looks, &camera, TEST_BACKGROUND);
         std::hint::black_box(&renderer.batches);
     }
     println!(
@@ -225,12 +227,12 @@ fn maximum_fill_mesh_benchmark() {
         renderer
             .batches
             .iter()
-            .map(|m| m.vertices.len())
+            .map(|m| m.mesh().vertices.len())
             .sum::<usize>(),
         renderer
             .batches
             .iter()
-            .map(|m| m.indices.len())
+            .map(|m| m.mesh().indices.len())
             .sum::<usize>()
     );
 }
@@ -258,7 +260,7 @@ fn high_fill_detail_reduction_preserves_particles_and_valid_geometry() {
     let represented: usize = renderer
         .batches
         .iter()
-        .map(|mesh| mesh.vertices.len() / renderer.template.positions.len())
+        .map(|mesh| mesh.mesh().vertices.len() / renderer.template.positions.len())
         .sum();
     assert_eq!(represented, DEFAULT_PARTICLES);
 }

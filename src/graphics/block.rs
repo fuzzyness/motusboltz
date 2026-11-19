@@ -21,7 +21,6 @@ use macroquad::models::{
 use macroquad::prelude::{
     Camera3D,
     Color,
-    Material,
     UniformType,
     Vec2,
     Vec3,
@@ -30,6 +29,10 @@ use macroquad::prelude::{
     vec3, //
 };
 
+use super::gpu::{
+    GpuMaterial,
+    GpuMesh, //
+};
 use super::{
     DRAW_CALL_INDEX_CAPACITY,
     DRAW_CALL_VERTEX_CAPACITY,
@@ -233,10 +236,10 @@ enum Rim {
 pub struct EngineBlock {
     /// The block's dimensions.
     shape: BlockShape,
-    /// The whole block.
-    mesh: Mesh,
+    /// The whole block, on the graphics card.
+    mesh: GpuMesh,
     /// The cutting shader.
-    material: Material,
+    material: GpuMaterial,
 }
 
 impl EngineBlock {
@@ -254,7 +257,7 @@ impl EngineBlock {
         let material = load_lit(BLOCK_FRAGMENT, &window)?;
         Some(Self {
             shape,
-            mesh: block_mesh(shape),
+            mesh: GpuMesh::new(block_mesh(shape)),
             material,
         })
     }

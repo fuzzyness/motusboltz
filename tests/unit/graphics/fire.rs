@@ -55,7 +55,7 @@ fn burner_is_out_at_300_k_and_lit_above_it() {
     let lit = sprites_at(&mut fire, heat_level(310.0));
     assert!(!lit.is_empty(), "a little heat shows a little flame");
     assert!(
-        !fire.burner.indices.is_empty(),
+        !fire.burner.mesh().indices.is_empty(),
         "the burner shows even when out"
     );
 }
@@ -104,7 +104,7 @@ fn burner_sits_on_the_floor_around_the_hot_half() {
     let (shape, fire) = fire();
     let gap = BURNER_GAP * shape.bore;
     let half_width = BURNER_WIDTH * shape.bore / 2.0;
-    for vertex in &fire.burner.vertices {
+    for vertex in &fire.burner.mesh().vertices {
         let position = vertex.position;
         assert!(position.y >= shape.base - 1e-5);
         assert!(position.y <= shape.base + BURNER_HEIGHT * shape.bore + 1e-5);
@@ -115,5 +115,5 @@ fn burner_sits_on_the_floor_around_the_hot_half() {
             "{position} is {out} out"
         );
     }
-    assert!(fire.burner.vertices.len() < crate::graphics::DRAW_CALL_VERTEX_CAPACITY);
+    assert!(fire.burner.mesh().vertices.len() < crate::graphics::DRAW_CALL_VERTEX_CAPACITY);
 }

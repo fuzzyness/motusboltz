@@ -6,7 +6,11 @@ use macroquad::prelude::Vec3;
 impl FloorGrid {
     /// Every corner of every line piece.
     fn vertices(&self) -> impl Iterator<Item = Vec3> + '_ {
-        self.mesh.vertices.iter().map(|vertex| vertex.position)
+        self.mesh
+            .mesh()
+            .vertices
+            .iter()
+            .map(|vertex| vertex.position)
     }
 }
 
@@ -24,7 +28,7 @@ fn grid_is_flat_under_the_block_and_fades_to_nothing_at_its_edge() {
                 && p.z.abs() <= GRID_HALF_WIDTH + LINE_WIDTH)
     );
     let mut middle = 0_u8;
-    for vertex in &grid.mesh.vertices {
+    for vertex in &grid.mesh.mesh().vertices {
         let reach = (vertex.position.x.powi(2) + vertex.position.z.powi(2)).sqrt();
         if reach >= GRID_HALF_WIDTH {
             assert_eq!(vertex.color[3], 0, "edges fade out");
@@ -34,5 +38,5 @@ fn grid_is_flat_under_the_block_and_fades_to_nothing_at_its_edge() {
         }
     }
     assert!(middle as f32 > 0.9 * GRID_OPACITY * 255.0);
-    assert!(grid.mesh.vertices.len() < DRAW_CALL_VERTEX_CAPACITY);
+    assert!(grid.mesh.mesh().vertices.len() < DRAW_CALL_VERTEX_CAPACITY);
 }

@@ -11,16 +11,17 @@ use std::f32::consts::TAU;
 
 use macroquad::models::{
     Mesh,
-    Vertex,
-    draw_mesh, //
+    Vertex, //
 };
 use macroquad::prelude::{
     Color,
+    Mat4,
     Vec2,
     Vec3, //
 };
 
 use super::block::BlockShape;
+use super::gpu::GpuMesh;
 use super::outline::{
     Half,
     HalfOutline, //
@@ -35,6 +36,7 @@ use super::sprites::{
     with_alpha, //
 };
 use super::{
+    draw_plain,
     mix_color,
     shade, //
 };
@@ -182,7 +184,7 @@ pub struct Fire {
     /// The line the burner follows.
     path: HalfOutline,
     /// The burner itself.
-    burner: Mesh,
+    burner: GpuMesh,
     /// The glow on the floor and the port flames, round.
     glows: Sprites,
     /// The flame tongues.
@@ -205,7 +207,7 @@ impl Fire {
             unit,
             floor: shape.base,
             path,
-            burner: burner_mesh(path, unit, shape.base),
+            burner: GpuMesh::new(burner_mesh(path, unit, shape.base)),
             glows: Sprites::new(),
             flames: Sprites::new(),
             sparks: Sprites::new(),
@@ -214,7 +216,7 @@ impl Fire {
 
     /// The burner itself, solid; drawn with the engine.
     pub fn draw_burner(&self) {
-        draw_mesh(&self.burner);
+        draw_plain([&self.burner], Mat4::IDENTITY);
     }
 
     /// Lays out the flames for `heat` (see `heat_level`) at `seconds` on

@@ -21,7 +21,6 @@ use macroquad::models::{
 use macroquad::prelude::{
     Camera3D,
     Color,
-    Material,
     Vec2,
     Vec3,
     Vec4,
@@ -29,6 +28,10 @@ use macroquad::prelude::{
 };
 
 use super::block::BlockShape;
+use super::gpu::{
+    GpuMaterial,
+    GpuMesh, //
+};
 use super::sprites::unit_hash;
 use super::table::ground;
 use super::{
@@ -183,11 +186,11 @@ struct Puff {
 
 /// The cloud under the table.
 pub struct CloudFloor {
-    /// Every puff.
-    mesh: Mesh,
+    /// Every puff, on the graphics card.
+    mesh: GpuMesh,
     /// Made on the first draw (it needs a window); `Some(None)` where it
     /// cannot be built, and the cloud is drawn flat white.
-    material: Option<Option<Material>>,
+    material: Option<Option<GpuMaterial>>,
 }
 
 impl CloudFloor {
@@ -205,11 +208,11 @@ impl CloudFloor {
         assert!(vertices.len() <= DRAW_CALL_VERTEX_CAPACITY);
         assert!(indices.len() <= DRAW_CALL_INDEX_CAPACITY);
         Self {
-            mesh: Mesh {
+            mesh: GpuMesh::new(Mesh {
                 vertices,
                 indices,
                 texture: None,
-            },
+            }),
             material: None,
         }
     }

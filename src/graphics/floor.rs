@@ -5,18 +5,20 @@
 
 use macroquad::models::{
     Mesh,
-    Vertex,
-    draw_mesh, //
+    Vertex, //
 };
 use macroquad::prelude::{
     Color,
+    Mat4,
     Vec2,
     vec3, //
 };
 
+use super::gpu::GpuMesh;
 use super::{
     DRAW_CALL_INDEX_CAPACITY,
-    DRAW_CALL_VERTEX_CAPACITY, //
+    DRAW_CALL_VERTEX_CAPACITY,
+    draw_plain, //
 };
 
 /// Half the grid's width, in model units.
@@ -38,7 +40,7 @@ const GRID_OPACITY: f32 = 0.5;
 /// The floor grid.
 pub struct FloorGrid {
     /// The lines, as thin quads.
-    mesh: Mesh,
+    mesh: GpuMesh,
 }
 
 impl FloorGrid {
@@ -87,17 +89,17 @@ impl FloorGrid {
         assert!(vertices.len() < DRAW_CALL_VERTEX_CAPACITY);
         assert!(indices.len() < DRAW_CALL_INDEX_CAPACITY);
         Self {
-            mesh: Mesh {
+            mesh: GpuMesh::new(Mesh {
                 vertices,
                 indices,
                 texture: None,
-            },
+            }),
         }
     }
 
     /// Draws the grid.
     pub fn draw(&self) {
-        draw_mesh(&self.mesh);
+        draw_plain([&self.mesh], Mat4::IDENTITY);
     }
 }
 

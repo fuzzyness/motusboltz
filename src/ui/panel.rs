@@ -274,6 +274,10 @@ pub struct EnginePanel {
     thumb_grab: Option<f32>,
     /// A press that started on the panel is still held.
     gesture: bool,
+    /// The diagnostics build's timings, shown at the foot of the Advanced
+    /// view.
+    #[cfg(feature = "diagnostics")]
+    diagnostics: Vec<(&'static str, String)>,
 }
 
 impl EnginePanel {
@@ -294,6 +298,8 @@ impl EnginePanel {
             viewport_height: 0.0,
             thumb_grab: None,
             gesture: false,
+            #[cfg(feature = "diagnostics")]
+            diagnostics: Vec::new(),
         }
     }
 
@@ -305,7 +311,14 @@ impl EnginePanel {
         });
     }
 
+    /// Sets the diagnostics build's timings, shown from the next rebuild.
+    #[cfg(feature = "diagnostics")]
+    pub fn set_diagnostics(&mut self, rows: Vec<(&'static str, String)>) {
+        self.diagnostics = rows;
+    }
+
     /// Whether the Advanced view shows.
+    #[cfg(test)]
     pub fn advanced(&self) -> bool {
         self.mode == PanelMode::Advanced
     }
@@ -466,6 +479,9 @@ impl EnginePanel {
                 let y = advanced::draw(pen, &self.readout, origin);
                 let (y, side) = self.draw_loops(pen, engine, y + SECTION_GAP, origin);
                 let bottom = advanced::draw_totals(pen, &self.readout, y + SECTION_GAP);
+                #[cfg(feature = "diagnostics")]
+                let bottom =
+                    advanced::draw_diagnostics(pen, &self.diagnostics, bottom + SECTION_GAP);
                 (bottom, side)
             }
         };

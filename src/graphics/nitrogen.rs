@@ -24,7 +24,6 @@ use macroquad::models::Mesh;
 use macroquad::prelude::{
     Camera3D,
     Color,
-    Material,
     UniformType,
     Vec3,
     Vec4, //
@@ -37,6 +36,10 @@ use super::block::{
     key_light, //
 };
 use super::chamber::append_tube;
+use super::gpu::{
+    GpuMaterial,
+    GpuMesh, //
+};
 use super::outline::{
     Half,
     HalfOutline, //
@@ -237,7 +240,7 @@ enum Clear {
     /// Not built yet.
     Untried,
     /// Built.
-    Ready(Material),
+    Ready(GpuMaterial),
     /// Its shader could not be built.
     Unavailable,
 }
@@ -271,9 +274,12 @@ pub struct Nitrogen {
     /// near the floor.
     outlet: [Station; 3],
     /// The glass, frosted as it is now.
-    glass: Mesh,
+    glass: GpuMesh,
     /// The liquid, as far along as it has flowed; empty when there is none.
-    liquid: Mesh,
+    liquid: GpuMesh,
+    /// The setting the glass and liquid were last built for: they are
+    /// built again only when it changes.
+    tubes_cold: Option<f32>,
     /// Bubbles in the liquid.
     bubbles: Sprites,
     /// Frost on the floor, and mist.
@@ -346,8 +352,9 @@ impl Nitrogen {
             feed,
             stations,
             outlet,
-            glass: empty_mesh(),
-            liquid: empty_mesh(),
+            glass: GpuMesh::empty(),
+            liquid: GpuMesh::empty(),
+            tubes_cold: None,
             bubbles: Sprites::new(),
             mist: Sprites::new(),
             clear: Clear::Untried,
@@ -410,16 +417,22 @@ impl Nitrogen {
     /// Builds the glass, frosted the more the colder `cold` is, and the
     /// liquid filling the whole coil whenever the valve is open at all.
     fn build_tubes(&mut self, cold: f32) {
+        if self.tubes_cold == Some(cold) {
+            return;
+        }
+        self.tubes_cold = Some(cold);
         let frosted = blend(GLASS_TINT, FROSTED, cold);
         let mut path = self.stations.clone();
         path.extend_from_slice(&self.outlet[1..]);
-        self.glass = self.tube(&path, TUBE_RADIUS, &|_| frosted);
-        self.liquid = if cold > 0.0 {
+        let glass = self.tube(&path, TUBE_RADIUS, &|_| frosted);
+        let liquid = if cold > 0.0 {
             let liquid = with_alpha(LIQUID, LIQUID.a * smoothstep(0.0, FIRST_SHARE, cold));
             self.tube(&self.stations, LIQUID_SHARE * TUBE_RADIUS, &|_| liquid)
         } else {
             empty_mesh()
         };
+        *self.glass.edit() = glass;
+        *self.liquid.edit() = liquid;
     }
 
     /// A tube of `radius` (in bore radii) through `stations`, colored at

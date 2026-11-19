@@ -34,11 +34,11 @@ fn each_valve_stands_in_front_of_its_own_half() {
 fn a_turn_moves_only_the_wheel_about_its_stem() {
     let (_, mut valves) = valves();
     valves.pose((0.0, 0.0));
-    let shut = valves.mesh.vertices.clone();
+    let shut = valves.mesh.mesh().vertices.clone();
     valves.pose((1.0, 0.0));
     let wheel_start = valves.starts[0] + valves.built[0].wheel_start;
     let center = valves.wheels[0].center;
-    for (index, (before, after)) in shut.iter().zip(&valves.mesh.vertices).enumerate() {
+    for (index, (before, after)) in shut.iter().zip(&valves.mesh.mesh().vertices).enumerate() {
         let (before, after) = (before.position, after.position);
         let on_hot_wheel = (wheel_start..valves.starts[1]).contains(&index);
         if on_hot_wheel {
@@ -49,7 +49,7 @@ fn a_turn_moves_only_the_wheel_about_its_stem() {
             assert_eq!(after, before, "vertex {index} moved");
         }
     }
-    let first = valves.mesh.vertices[wheel_start].position;
+    let first = valves.mesh.mesh().vertices[wheel_start].position;
     assert!(
         first.distance(shut[wheel_start].position) > 1e-3,
         "the wheel turned"

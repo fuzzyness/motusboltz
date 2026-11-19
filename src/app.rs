@@ -68,7 +68,10 @@ use crate::graphics::{
     Scene,
     Scenery, //
 };
-use crate::sim::engine::ConnectedChambers;
+use crate::sim::engine::{
+    ConnectedChambers,
+    MAX_FRAME_TIME, //
+};
 use crate::sim::geometry::ChamberGeometry;
 use crate::sim::pistons::FORWARD;
 use crate::sim::reservoir::ReservoirSide;
@@ -94,6 +97,11 @@ use crate::ui::demos::{
     self,
     Scenario, //
 };
+use crate::ui::diagnostics::{
+    self,
+    Piece,
+    Section, //
+};
 use crate::ui::draw_target::{
     draw_moved,
     draw_to_screen, //
@@ -111,6 +119,7 @@ use crate::ui::first_person::{
     Walker, //
 };
 use crate::ui::fonts;
+use crate::ui::frame_clock::FrameClock;
 use crate::ui::frame_stats::{
     FrameStats,
     LIMITED_TEXT, //
@@ -160,6 +169,8 @@ use crate::ui::panel::{
     PanelPointer, //
 };
 use crate::ui::pen::Pen;
+use crate::ui::physics_budget::PhysicsBudget;
+use crate::ui::physics_runner::PhysicsRunner;
 use crate::ui::scene_labels;
 use crate::ui::shortcuts;
 use crate::ui::start_prompt::StartPrompt;
@@ -170,12 +181,22 @@ const BUILD_LABEL_GAP: f32 = 14.0;
 const SHORTCUTS_BOTTOM_ROOM: f32 = 140.0;
 /// Version and Git revision of this build (see build.rs), shown in the
 /// bottom-right corner so it is always clear which build is running.
+#[cfg(not(feature = "diagnostics"))]
 const BUILD_LABEL: &str = concat!(
     "v",
     env!("CARGO_PKG_VERSION"),
     " (",
     env!("MOTUSBOLTZ_REVISION"),
     ")"
+);
+/// The build label of the diagnostics build, which says so.
+#[cfg(feature = "diagnostics")]
+const BUILD_LABEL: &str = concat!(
+    "v",
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("MOTUSBOLTZ_REVISION"),
+    ") diagnostics"
 );
 /// Text size of the build label.
 const BUILD_LABEL_FONT_SIZE: f32 = 14.0;
@@ -189,8 +210,6 @@ const READOUT_DESCENT: f32 = 6.0;
 const CORNER_FONT_SIZE: f32 = 16.0;
 /// Distance between the corner readout's baselines.
 const CORNER_LINE_HEIGHT: f32 = 20.0;
-/// Color of the frame-rate line.
-const CORNER_TEXT_COLOR: Color = Color::from_rgba(150, 165, 180, 255);
 /// How far the shade behind loose text reaches past it at each end.
 const BACKING_PAD: f32 = 7.0;
 /// Height of the shade behind loose text, as a share of the text size,
@@ -275,15 +294,29 @@ pub async fn run() {
     srand(clock_seed());
     let mut app = App::new();
     loop {
+        #[cfg(feature = "diagnostics")]
+        diagnostics::read_keys();
+        let started = date::now();
         app.frame();
+        app.start_physics();
+        #[cfg(feature = "diagnostics")]
+        app.frame_stats.record_work(date::now() - started);
+        diagnostics::wait_for_card(Section::CardRest);
+        let handed_over = diagnostics::start();
         next_frame().await;
+        diagnostics::stop(Section::HandOff, handed_over);
+        #[cfg(feature = "diagnostics")]
+        diagnostics::end_frame();
+        let _ = started;
+        app.finish_physics();
     }
 }
 
 /// Everything the app keeps from frame to frame.
 struct App {
-    /// The engine.
-    simulation: ConnectedChambers,
+    /// The engine; a stand-in while the physics thread steps it (see
+    /// `PhysicsRunner`).
+    simulation: Box<ConnectedChambers>,
     /// The hot and cold walls' settings, from the sliders or the valves;
     /// the walls move toward them (see `handles::ramped`).
     settings: (f32, f32),
@@ -380,6 +413,17 @@ struct App {
     controls: Controls,
     /// The frame-rate readout and the warning.
     frame_stats: FrameStats,
+    /// Steadies each frame's time to the display's refresh.
+    clock: FrameClock,
+    /// This frame's time as the clock steadied it, in seconds.
+    frame_time: f32,
+    /// How much model time a frame may run, by the physics' cost.
+    physics_budget: PhysicsBudget,
+    /// Steps the engine, on a thread of its own where there can be one.
+    physics: PhysicsRunner,
+    /// The model time this frame's step is to run, and the time it would
+    /// have run had the physics' budget allowed, once `step` sets them.
+    step_due: Option<(f32, f32)>,
 }
 
 impl App {
@@ -432,6 +476,11 @@ impl App {
             scenery: Scenery::default(),
             start_prompt: StartPrompt::new(),
             frame_stats: FrameStats::new(),
+            clock: FrameClock::new(),
+            frame_time: 0.0,
+            physics_budget: PhysicsBudget::new(),
+            physics: PhysicsRunner::new(),
+            step_due: None,
             settings: (hot_kelvin, cold_kelvin),
             grab: None,
             drag: None,
@@ -442,7 +491,7 @@ impl App {
             escape_quiet: 0.0,
             full_screen: false,
             full_screen_waiting: false,
-            simulation,
+            simulation: Box::new(simulation),
         }
     }
 
@@ -575,7 +624,8 @@ impl App {
     /// The work of `frame`, which tells the page what was armed.
     fn run_frame(&mut self) {
         let keys = KeyCommands::read();
-        let dt = get_frame_time().min(MAX_ANIMATION_DT);
+        self.frame_time = self.clock.tick(get_frame_time());
+        let dt = self.frame_time.min(MAX_ANIMATION_DT);
         self.switch_full_screen();
         self.escape_quiet = (self.escape_quiet - dt).max(0.0);
         // In the browser, a capture let go (by Esc, as like as not) opens
@@ -591,21 +641,19 @@ impl App {
         } else if self.escape_pressed() {
             self.open_menu();
         }
-        self.menu.animate(get_frame_time().min(MAX_ANIMATION_DT));
+        self.menu.animate(dt);
         if self.walker.is_some() {
             self.first_person_frame(keys);
             return;
         }
         if self.menu.open {
             // The scene runs on behind it.
-            let dt = get_frame_time().min(MAX_ANIMATION_DT);
             self.animate(dt);
             self.step();
             self.draw();
             return;
         }
         let wheel = wheel_pixels();
-        let dt = get_frame_time().min(MAX_ANIMATION_DT);
         let events = self
             .controls
             .update(self.scene_area(), self.button_states(), dt);
@@ -642,7 +690,7 @@ impl App {
                 shift_down: shift_down(),
                 wheel_pixels: wheel,
             },
-            get_frame_time().min(MAX_CAMERA_DT),
+            self.frame_time.min(MAX_CAMERA_DT),
             screen_height(),
         );
         self.draw();
@@ -655,7 +703,7 @@ impl App {
         let Some(mut walker) = self.walker else {
             return;
         };
-        let dt = get_frame_time().min(MAX_ANIMATION_DT);
+        let dt = self.frame_time.min(MAX_ANIMATION_DT);
         let pointer = Vec2::from(mouse_position());
         let size = vec2(screen_width(), screen_height().max(1.0));
         let held = self.follow_capture(&mut walker);
@@ -673,7 +721,8 @@ impl App {
         self.animate(dt);
         self.step();
         let camera = walker.camera();
-        self.render_scene(&camera);
+        diagnostics::time(Section::Scene, || self.render_scene(&camera));
+        diagnostics::wait_for_card(Section::CardScene);
         let waiting = !self.menu.open && page::capture() == Capture::Free;
         for pen in [&mut Pen::warm(), &mut Pen::screen()] {
             first_person::draw_view(pen, size.x, size.y, waiting);
@@ -1238,10 +1287,10 @@ impl App {
             .collect();
     }
 
-    /// Steps the simulation by this frame's time and updates what follows
-    /// from it: the frame stats, Start and the panel.
+    /// Readies this frame's step of the simulation, which `start_physics`
+    /// starts once the frame is drawn, and updates what follows from the
+    /// engine as it stands: Start and the panel.
     fn step(&mut self) {
-        let physics_start = date::now();
         // A refill (a reset, or a demo set up) clears the followed
         // particles; a change of the fill keeps them.
         if self.tracers && self.simulation.tracers().is_none() {
@@ -1249,23 +1298,60 @@ impl App {
             self.simulation.follow_particles(FOLLOWED_PARTICLES, seed);
         }
         let pace = if self.slow { SLOW_MOTION_FACTOR } else { 1.0 };
+        // At most what the physics can run in its share of the frame (see
+        // `PhysicsBudget`), and at most one update's worth; running less
+        // than the frame's time limits it.
+        let wanted = pace * self.frame_time;
+        let interval = self.clock.interval().unwrap_or(self.frame_time);
+        let model = wanted
+            .min(self.physics_budget.allowance(interval))
+            .min(MAX_FRAME_TIME);
         if !self.paused {
             // The walls move toward their settings in model time.
-            let dt = pace * get_frame_time().min(MAX_ANIMATION_DT);
+            let dt = model.min(pace * MAX_ANIMATION_DT);
             let hot = ramped(self.simulation.hot_kelvin(), self.settings.0, dt);
             let cold = ramped(self.simulation.cold_kelvin(), self.settings.1, dt);
             self.simulation.set_hot_kelvin(hot);
             self.simulation.set_cold_kelvin(cold);
         }
-        let limited = !self.paused && self.simulation.update(pace * get_frame_time());
-        let physics_seconds = date::now() - physics_start;
+        self.step_due = (!self.paused).then_some((model, wanted));
         let now = get_time();
-        self.frame_stats.record(now, physics_seconds, limited);
         let start_fraction = self.simulation.power_pistons().start_speed_fraction();
         self.start_prompt.update(start_fraction, now);
+        #[cfg(feature = "diagnostics")]
+        self.panel.set_diagnostics(
+            self.frame_stats
+                .rows()
+                .into_iter()
+                .flatten()
+                .chain(diagnostics::rows().into_iter().flatten())
+                .chain([("Switched off (1 to 6)", diagnostics::switched_off())])
+                .collect(),
+        );
         if self.panel_visible() {
             self.panel.update(&self.simulation, now);
         }
+    }
+
+    /// Starts the step `step` readied, if any (see `PhysicsRunner`).
+    fn start_physics(&mut self) {
+        if let Some((model, _)) = self.step_due {
+            self.physics.start(&mut self.simulation, model);
+        }
+    }
+
+    /// Takes the engine back from the step `start_physics` started, if
+    /// any, and records the frame, with what the step ran.
+    fn finish_physics(&mut self) {
+        let ran = self.physics.finish(&mut self.simulation);
+        let mut limited = false;
+        let mut seconds = 0.0;
+        if let (Some(ran), Some((_, wanted))) = (ran, self.step_due.take()) {
+            self.physics_budget.record(ran.model, ran.seconds);
+            limited = ran.limited || ran.model < wanted;
+            seconds = ran.seconds;
+        }
+        self.frame_stats.record(get_time(), seconds, limited);
     }
 
     /// Draws the scene and everything over it.
@@ -1274,13 +1360,22 @@ impl App {
         // The scene fills the window, behind the panel and the sliders; the
         // camera keeps the engine at the window's middle.
         let camera = self.camera.camera();
-        self.render_scene(&camera);
+        diagnostics::time(Section::Scene, || self.render_scene(&camera));
+        diagnostics::wait_for_card(Section::CardScene);
+        diagnostics::time(Section::Overlay, || {
+            self.draw_overlays(area, camera.matrix())
+        });
+    }
 
+    /// Draws everything over the scene in `area`, the labels placed by
+    /// the camera's `view`.
+    fn draw_overlays(&mut self, area: SceneArea, view: Mat4) {
         // Measure every string first, then draw (see `Pen` for why).
         let panel_stale =
             self.panel_visible() && self.panel.needs_paint(self.status(), area.height);
-        let view = camera.matrix();
-        self.draw_overlay(&mut Pen::warm(), area, view, panel_stale);
+        diagnostics::time(Section::Measuring, || {
+            self.draw_overlay(&mut Pen::warm(), area, view, panel_stale);
+        });
         self.draw_overlay(&mut Pen::screen(), area, view, panel_stale);
         if self.menu.visible() {
             let pointer = Vec2::from(mouse_position());
@@ -1306,7 +1401,9 @@ impl App {
             on: [false, self.tracers],
             held: [held(Handle::ResetButton), held(Handle::TracersButton)],
         });
-        self.scene.render(&self.simulation, camera, self.scenery);
+        let seconds = self.clock.seconds();
+        self.scene
+            .render(&self.simulation, camera, self.scenery, seconds);
     }
 
     /// Everything over the scene, seen through `view`: the labels, the
@@ -1349,16 +1446,20 @@ impl App {
             let open_banner = banner.filter(|_| self.banner_slide.shown());
             let cards: Vec<Rect> = open_banner.into_iter().chain(strip).collect();
             let (simulation, shifts) = (&self.simulation, &mut self.tag_shifts);
-            scene_labels::draw(pen, simulation, view, area, &cards, &grown, shifts);
+            diagnostics::time(Section::Labels, || {
+                scene_labels::draw(pen, simulation, view, area, &cards, &grown, shifts);
+            });
         }
         let (panel_shift, sliders_shift) = self.drawer_shifts(width, area.height);
-        if let Some(shift) = panel_shift.filter(|_| shown) {
+        let panel_on = diagnostics::shown(Piece::Panel);
+        if let Some(shift) = panel_shift.filter(|_| shown && panel_on) {
             let panel_area = Rect::new(0.0, 0.0, PANEL_WIDTH, area.height);
             if pen.is_warming() {
                 if self.panel_layer.will_paint(panel_area, panel_stale) {
                     self.panel.draw(pen, &self.simulation, status, area.height);
                 }
             } else {
+                let started = diagnostics::start();
                 draw_moved(Vec2::ZERO, 1.0, vec2(shift, 0.0));
                 // Settled out, the card and its tab are one shape.
                 let card = controls::panel_card(area.height);
@@ -1366,9 +1467,12 @@ impl App {
                 drawer::draw_card(pen, card, Edge::Left, (shift == 0.0).then_some(tab));
                 let (panel, simulation) = (&mut self.panel, &self.simulation);
                 self.panel_layer.draw(panel_area, panel_stale, shift, || {
-                    panel.draw(&mut Pen::screen(), simulation, status, area.height);
+                    diagnostics::time(Section::PanelPaint, || {
+                        panel.draw(&mut Pen::screen(), simulation, status, area.height);
+                    });
                 });
                 draw_to_screen();
+                diagnostics::stop(Section::Panel, started);
             }
         }
         let motion = ControlMotion {
@@ -1378,7 +1482,9 @@ impl App {
             sliders_glow: motion::smooth(self.sliders_glow),
             menu: self.menu_dropped,
         };
-        self.controls.draw(pen, area, self.button_states(), motion);
+        diagnostics::time(Section::Controls, || {
+            self.controls.draw(pen, area, self.button_states(), motion);
+        });
         if self.hide_all {
             return;
         }
@@ -1475,20 +1581,13 @@ impl App {
         }
     }
 
-    /// The readout's lines: the frame rate and physics time in the Advanced
-    /// view, and the warning while it is held, each with its color.
+    /// The readout's lines: the warning while it is held, with its color.
     fn readout(&self) -> Vec<(String, Color)> {
-        let stats = self
-            .panel
-            .advanced()
-            .then(|| self.frame_stats.line())
-            .flatten()
-            .map(|line| (line, CORNER_TEXT_COLOR));
         let warning = self
             .frame_stats
             .limited(get_time())
             .then(|| (LIMITED_TEXT.to_owned(), WARNING_COLOR));
-        stats.into_iter().chain(warning).collect()
+        warning.into_iter().collect()
     }
 
     /// Draws the readout's `lines` right-aligned in `column`, the last

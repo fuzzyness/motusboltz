@@ -1,15 +1,30 @@
 //! Every particle as a small glossy sphere, colored by its kinetic energy,
 //! lit from the camera and faded a little with depth.
 //!
-//! Where the shader can be built, each sphere is lit per pixel, with a bright highlight and a
-//! rim of light, so even these few facets look round and shiny, like the
-//! balls in a PS2 demo; otherwise each vertex is shaded on the CPU.
+//! Where the shader can be built, each sphere is lit per pixel, with a
+//! bright highlight and a rim of light, so even these few facets look round
+//! and shiny, like the balls in a PS2 demo; otherwise each vertex is shaded
+//! on the CPU.
+//!
+//! Where the graphics card can draw a mesh many times over in one go, the
+//! sphere is sent to it once, and each frame only where each particle is,
+//! how big and what color: 20 bytes a particle rather than a sphere's
+//! worth of vertices. Otherwise the spheres are written out each frame.
 
 use std::f32::consts::{
     PI,
     TAU, //
 };
 
+use macroquad::miniquad::{
+    BufferLayout,
+    Comparison,
+    PipelineParams,
+    UniformType,
+    VertexAttribute,
+    VertexFormat,
+    VertexStep, //
+};
 use macroquad::models::{
     Mesh,
     Vertex, //
@@ -17,12 +32,18 @@ use macroquad::models::{
 use macroquad::prelude::{
     Camera3D,
     Color,
-    Material,
     Vec2,
     Vec3,
     vec3, //
 };
+use macroquad::window::get_internal_gl;
 
+use super::gpu::{
+    GpuMaterial,
+    GpuMesh,
+    InstanceBuffer,
+    vertex_attributes, //
+};
 use super::{
     CylinderDimensions,
     DRAW_CALL_INDEX_CAPACITY,
@@ -125,6 +146,52 @@ void main() {
     vec3 lit = color.rgb * (0.38 + 0.72 * diffuse) + (vec3(0.75 * shine) + color.rgb * rim * 0.35) * color.a;
     gl_FragColor = vec4(lit, 1.0) * texture2D(Texture, uv);
 }"#;
+
+/// Vertex shader for drawing the sphere at every particle at once: each
+/// copy is moved to its particle's `center`, sized by `size` and colored
+/// `tint`, alpha being the shine, and lit by `PARTICLE_FRAGMENT`.
+const INSTANCED_VERTEX: &str = r#"#version 100
+attribute vec3 position;
+attribute vec3 center;
+attribute float size;
+attribute vec4 tint;
+
+varying lowp vec4 color;
+varying lowp vec2 uv;
+varying vec3 world;
+varying vec3 surface_normal;
+
+uniform mat4 Model;
+uniform mat4 Projection;
+
+void main() {
+    // A unit sphere's points are its normals.
+    world = center + position * size;
+    surface_normal = position;
+    color = tint / 255.0;
+    uv = vec2(0.0);
+    gl_Position = Projection * vec4(world, 1.0);
+}"#;
+
+/// One particle as the graphics card reads it for `INSTANCED_VERTEX`: the
+/// second vertex buffer, stepped once per copy of the sphere.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+struct Instance {
+    /// Where its middle is.
+    center: [f32; 3],
+    /// Its radius.
+    size: f32,
+    /// Its color, alpha being its shine.
+    tint: [u8; 4],
+}
+
+/// The attributes `Instance` holds, in its order.
+const INSTANCE_ATTRIBUTES: [(&str, VertexFormat); 3] = [
+    ("center", VertexFormat::Float3),
+    ("size", VertexFormat::Float1),
+    ("tint", VertexFormat::Byte4),
+];
 
 /// Maps a particle's kinetic energy (reduced units) to blue, orange or red on
 /// a fixed scale: blue below the 300 K average, orange at it, red at 3x.
@@ -321,22 +388,47 @@ impl SphereTemplate {
     }
 }
 
-/// Draws every particle as a small shaded sphere, 256 per mesh.
+/// How the particles are drawn, once tried.
+enum Drawing {
+    /// Not tried yet (it needs a window).
+    Untried,
+    /// The sphere many times over in one go.
+    Instanced(Box<Instanced>),
+    /// Written out each frame, lit by `material` where it can be built.
+    Batches {
+        /// The per-pixel lighting, if it can be built.
+        material: Option<GpuMaterial>,
+    },
+}
+
+/// What drawing the sphere many times over in one go takes.
+struct Instanced {
+    /// The shader.
+    material: GpuMaterial,
+    /// The sphere, full and coarse, on the graphics card.
+    spheres: [GpuMesh; 2],
+    /// Each particle's copy, written each frame.
+    instances: InstanceBuffer,
+    /// The copies being written.
+    written: Vec<Instance>,
+}
+
+/// Draws every particle as a small shaded sphere: all at once where the
+/// graphics card can, or 256 to a mesh.
 ///
-/// Each frame rewrites vertex positions and colors in place: color from the
-/// particle's energy relative to the gas's mean motion, plus collision
-/// highlight, camera-relative lighting and depth fade. Meshes are rebuilt
-/// only when the particle count changes.
+/// Each frame works out each particle's color from its energy relative
+/// to the gas's mean motion, plus collision highlight and depth fade, and
+/// its size; written out, the spheres also take camera-relative lighting.
+/// Written-out meshes are rebuilt only when the particle count changes.
 pub struct ParticleRenderer {
     /// The sphere every particle is drawn as.
     template: SphereTemplate,
-    /// The per-pixel lighting, made on the first draw (it needs a window);
-    /// `Some(None)` where it cannot be built.
-    shader: Option<Option<Material>>,
+    /// How the particles are drawn.
+    drawing: Drawing,
     /// Whether the shader lights the spheres, so the CPU does not.
     shaded: bool,
-    /// The meshes, `PARTICLES_PER_BATCH` particles each.
-    batches: Vec<Mesh>,
+    /// The written-out meshes, `PARTICLES_PER_BATCH` particles each.
+    batches: Vec<GpuMesh>,
     /// Particles the meshes hold.
     particle_count: usize,
     /// Whether the meshes use the coarse sphere.
@@ -345,6 +437,21 @@ pub struct ParticleRenderer {
     followed: Vec<bool>,
     /// A cylinder enclosing the whole apparatus, for the depth fade.
     extent: CylinderDimensions,
+}
+
+/// One particle's place, size and colors as worked out each frame.
+#[derive(Clone, Copy)]
+struct Look {
+    /// Where its middle is.
+    center: Vec3,
+    /// Its radius.
+    size: f32,
+    /// Its color before the depth fade.
+    color: Color,
+    /// How far it fades toward the background.
+    fade: f32,
+    /// How much it shines, from 0 to 1.
+    shine: f32,
 }
 
 impl ParticleRenderer {
@@ -370,7 +477,7 @@ impl ParticleRenderer {
         );
         Self {
             template,
-            shader: None,
+            drawing: Drawing::Untried,
             shaded: false,
             batches: Vec::new(),
             particle_count: 0,
@@ -380,11 +487,66 @@ impl ParticleRenderer {
         }
     }
 
+    /// The way of drawing to use: all at once where the graphics card can
+    /// and the shader can be built, written out otherwise.
+    fn try_drawing() -> Drawing {
+        let gl = unsafe { get_internal_gl() };
+        let instancing = gl.quad_context.info().features.instancing;
+        let material = instancing.then(instanced_material).flatten();
+        match material {
+            Some(material) => Drawing::Instanced(Box::new(Instanced {
+                material,
+                spheres: [
+                    sphere_mesh(&SphereTemplate::new()),
+                    sphere_mesh(&SphereTemplate::with_segments(
+                        LOW_DETAIL_LATITUDE_SEGMENTS,
+                        LOW_DETAIL_LONGITUDE_SEGMENTS,
+                    )),
+                ],
+                instances: InstanceBuffer::new(),
+                written: Vec::new(),
+            })),
+            None => Drawing::Batches {
+                material: load_lit(PARTICLE_FRAGMENT, &[]),
+            },
+        }
+    }
+
     /// Rebuilds the meshes for `particle_count` particles, if that changed.
     fn resize_batches(&mut self, particle_count: usize) {
         if particle_count == self.particle_count {
             return;
         }
+        self.set_detail(particle_count);
+        let vertices_per_particle = self.template.positions.len();
+        self.batches.clear();
+        for start in (0..particle_count).step_by(PARTICLES_PER_BATCH) {
+            let count = (particle_count - start).min(PARTICLES_PER_BATCH);
+            let mut vertices = Vec::with_capacity(count * vertices_per_particle);
+            let mut indices = Vec::with_capacity(count * self.template.indices.len());
+            for particle_index in 0..count {
+                // Colors and positions are overwritten in `write_batches`.
+                for &position in &self.template.positions {
+                    // A unit sphere's points are its normals.
+                    let mut vertex = Vertex::new2(position, Vec2::ZERO, NORMAL_COLOR);
+                    vertex.normal = position.extend(0.0);
+                    vertices.push(vertex);
+                }
+                let base = (particle_index * vertices_per_particle) as u16;
+                indices.extend(self.template.indices.iter().map(|&index| base + index));
+            }
+            self.batches.push(GpuMesh::new(Mesh {
+                vertices,
+                indices,
+                texture: None,
+            }));
+        }
+        self.particle_count = particle_count;
+    }
+
+    /// Uses the coarse sphere for `particle_count` particles or more than
+    /// `LOW_DETAIL_PARTICLE_THRESHOLD`, the full one otherwise.
+    fn set_detail(&mut self, particle_count: usize) {
         let low_detail = particle_count >= LOW_DETAIL_PARTICLE_THRESHOLD;
         if low_detail != self.low_detail {
             self.template = if low_detail {
@@ -396,30 +558,6 @@ impl ParticleRenderer {
             };
             self.low_detail = low_detail;
         }
-        let vertices_per_particle = self.template.positions.len();
-        self.batches.clear();
-        for start in (0..particle_count).step_by(PARTICLES_PER_BATCH) {
-            let count = (particle_count - start).min(PARTICLES_PER_BATCH);
-            let mut vertices = Vec::with_capacity(count * vertices_per_particle);
-            let mut indices = Vec::with_capacity(count * self.template.indices.len());
-            for particle_index in 0..count {
-                // Colors and positions are overwritten in prepare().
-                for &position in &self.template.positions {
-                    // A unit sphere's points are its normals.
-                    let mut vertex = Vertex::new2(position, Vec2::ZERO, NORMAL_COLOR);
-                    vertex.normal = position.extend(0.0);
-                    vertices.push(vertex);
-                }
-                let base = (particle_index * vertices_per_particle) as u16;
-                indices.extend(self.template.indices.iter().map(|&index| base + index));
-            }
-            self.batches.push(Mesh {
-                vertices,
-                indices,
-                texture: None,
-            });
-        }
-        self.particle_count = particle_count;
     }
 
     /// Draws the particles of `simulation` for `camera`, the distant ones
@@ -427,26 +565,58 @@ impl ParticleRenderer {
     ///
     /// With tracers on, the followed particles stand out.
     pub fn draw(&mut self, simulation: &ConnectedChambers, camera: &Camera3D, background: Color) {
-        let shader = self
-            .shader
-            .get_or_insert_with(|| load_lit(PARTICLE_FRAGMENT, &[]));
-        self.shaded = shader.is_some();
-        self.prepare(simulation, camera, background);
-        let material = self.shader.as_ref().and_then(Option::as_ref);
-        draw_lit(
-            &self.batches,
-            material,
-            camera,
-            camera_light_direction(camera),
-        );
+        if let Drawing::Untried = self.drawing {
+            self.drawing = Self::try_drawing();
+        }
+        let light = camera_light_direction(camera);
+        let looks = self.looks(simulation, camera);
+        match &mut self.drawing {
+            Drawing::Instanced(instanced) => {
+                let Instanced {
+                    material,
+                    spheres,
+                    instances,
+                    written,
+                } = &mut **instanced;
+                written.clear();
+                written.extend(looks.map(|look| {
+                    let mut lit = mix_color(look.color, background, look.fade);
+                    lit.a = look.shine;
+                    Instance {
+                        center: look.center.to_array(),
+                        size: look.size,
+                        tint: lit.into(),
+                    }
+                }));
+                instances.write(written);
+                let sphere = &spheres[usize::from(self.low_detail)];
+                material.set_uniform("Eye", camera.position);
+                material.set_uniform("Light", light);
+                material.draw_instanced(sphere, instances);
+            }
+            Drawing::Batches { material } => {
+                let material = material.as_ref();
+                self.shaded = material.is_some();
+                let looks: Vec<Look> = looks.collect();
+                self.write_batches(&looks, camera, background);
+                let Drawing::Batches { material } = &self.drawing else {
+                    unreachable!();
+                };
+                draw_lit(&self.batches, material.as_ref(), camera, light);
+            }
+            Drawing::Untried => unreachable!("tried above"),
+        }
     }
 
-    /// Writes the vertices for the particles of `simulation`, separately
-    /// from submitting them to the GPU.
-    fn prepare(&mut self, simulation: &ConnectedChambers, camera: &Camera3D, background: Color) {
+    /// Each particle of `simulation`'s place, size and colors for `camera`.
+    fn looks<'a>(
+        &mut self,
+        simulation: &'a ConnectedChambers,
+        camera: &Camera3D,
+    ) -> impl Iterator<Item = Look> + 'a {
         let particles = &simulation.particles;
         let flashes = simulation.collision_flashes();
-        self.resize_batches(particles.len());
+        self.set_detail(particles.len());
         self.followed.clear();
         self.followed.resize(particles.len(), false);
         let tracers = simulation.tracers();
@@ -454,22 +624,39 @@ impl ParticleRenderer {
             self.followed[index] = true;
         }
         let tracing = tracers.is_some();
-        self.template.update_lighting(camera);
         let depth_fade = DepthFade::new(camera, self.extent.radius, self.extent.height);
         let mean_velocity = gas::mean_velocity(particles);
-        let vertices_per_particle = self.template.positions.len();
-        for (index, particle) in particles.iter().enumerate() {
+        let followed = self.followed.clone();
+        particles.iter().enumerate().map(move |(index, particle)| {
             // Ignore the gas's bulk drift: only relative kinetic energy
             // should determine its color.
             let energy = gas::particle_kinetic_energy(particle.velocity - mean_velocity);
             let color = collision_color(kinetic_energy_color(energy), flashes[index]);
             let fade = || depth_fade.amount(particle.position);
-            let (color, fade, size, shine) = match (tracing, self.followed[index]) {
+            let (color, fade, size, shine) = match (tracing, followed[index]) {
                 (true, true) => (color, 0.0, PARTICLE_RADIUS * FOLLOWED_SIZE, 1.0),
                 (true, false) => (muted(color), fade(), PARTICLE_RADIUS, UNFOLLOWED_SHINE),
                 (false, _) => (color, fade(), PARTICLE_RADIUS, 1.0),
             };
-            let batch = &mut self.batches[index / PARTICLES_PER_BATCH];
+            Look {
+                center: particle.position,
+                size,
+                color,
+                fade,
+                shine,
+            }
+        })
+    }
+
+    /// Writes the spheres of `looks` out into the meshes, lit for `camera`
+    /// on the CPU unless the shader lights them, fading toward
+    /// `background`.
+    fn write_batches(&mut self, looks: &[Look], camera: &Camera3D, background: Color) {
+        self.resize_batches(looks.len());
+        self.template.update_lighting(camera);
+        let vertices_per_particle = self.template.positions.len();
+        for (index, look) in looks.iter().enumerate() {
+            let batch = self.batches[index / PARTICLES_PER_BATCH].edit();
             let first = index % PARTICLES_PER_BATCH * vertices_per_particle;
             let vertices = &mut batch.vertices[first..first + vertices_per_particle];
             let template = self
@@ -477,17 +664,80 @@ impl ParticleRenderer {
                 .positions
                 .iter()
                 .zip(&self.template.brightness);
-            for (vertex, (&offset, &brightness)) in vertices.iter_mut().zip(template) {
-                let brightness = if self.shaded { 1.0 } else { brightness };
-                vertex.position = particle.position + offset * size;
-                let mut lit = mix_color(shade(color, brightness), background, fade);
-                // The shader reads alpha as shine; drawn plainly, alpha
-                // would be transparency.
-                lit.a = if self.shaded { shine } else { 1.0 };
-                vertex.color = lit.into();
+            if self.shaded {
+                // The shader lights each pixel, so every point of the
+                // sphere takes one color, worked out once. It reads alpha
+                // as shine.
+                let mut lit = mix_color(look.color, background, look.fade);
+                lit.a = look.shine;
+                let lit: [u8; 4] = lit.into();
+                for (vertex, (&offset, _)) in vertices.iter_mut().zip(template) {
+                    vertex.position = look.center + offset * look.size;
+                    vertex.color = lit;
+                }
+            } else {
+                for (vertex, (&offset, &brightness)) in vertices.iter_mut().zip(template) {
+                    vertex.position = look.center + offset * look.size;
+                    // Drawn plainly, alpha would be transparency.
+                    let mut lit = mix_color(shade(look.color, brightness), background, look.fade);
+                    lit.a = 1.0;
+                    vertex.color = lit.into();
+                }
             }
         }
     }
+}
+
+/// The material that draws the sphere at every particle at once, or
+/// `None` if its shader cannot be built.
+fn instanced_material() -> Option<GpuMaterial> {
+    let layout = [
+        BufferLayout::default(),
+        BufferLayout {
+            step_func: VertexStep::PerInstance,
+            ..Default::default()
+        },
+    ];
+    let attributes: Vec<VertexAttribute> = vertex_attributes()
+        .into_iter()
+        .chain(
+            INSTANCE_ATTRIBUTES
+                .iter()
+                .map(|&(name, format)| VertexAttribute::with_buffer(name, format, 1)),
+        )
+        .collect();
+    let params = PipelineParams {
+        depth_write: true,
+        depth_test: Comparison::LessOrEqual,
+        ..Default::default()
+    };
+    let lighting = [("Eye", UniformType::Float3), ("Light", UniformType::Float3)];
+    GpuMaterial::with_layout(
+        INSTANCED_VERTEX,
+        PARTICLE_FRAGMENT,
+        &lighting,
+        params,
+        &layout,
+        &attributes,
+    )
+}
+
+/// `template` as a mesh of one sphere at the origin, of radius 1.
+fn sphere_mesh(template: &SphereTemplate) -> GpuMesh {
+    let vertices = template
+        .positions
+        .iter()
+        .map(|&position| {
+            let mut vertex = Vertex::new2(position, Vec2::ZERO, NORMAL_COLOR);
+            vertex.normal = position.extend(0.0);
+            vertex
+        })
+        .collect();
+    GpuMesh::new(Mesh {
+        vertices,
+        indices: template.indices.clone(),
+        texture: None,
+    })
 }
 
 #[cfg(test)]

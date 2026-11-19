@@ -29,18 +29,22 @@ fn trails_are_camera_facing_ribbons_that_fade_with_age() {
 
     let mut renderer = TrailRenderer::new();
     renderer.build(&tracers, &particles, eye);
-    assert_eq!(renderer.mesh.vertices.len(), 3 * VERTICES_PER_SEGMENT);
-    assert_eq!(renderer.mesh.indices.len(), 3 * INDICES_PER_SEGMENT);
+    assert_eq!(
+        renderer.mesh.mesh().vertices.len(),
+        3 * VERTICES_PER_SEGMENT
+    );
+    assert_eq!(renderer.mesh.mesh().indices.len(), 3 * INDICES_PER_SEGMENT);
     assert!(
         renderer
             .mesh
+            .mesh()
             .indices
             .iter()
-            .all(|&index| (index as usize) < renderer.mesh.vertices.len())
+            .all(|&index| (index as usize) < renderer.mesh.mesh().vertices.len())
     );
     // Each quad is TRAIL_WIDTH across, and its width points neither along
     // the segment nor toward the eye, so the ribbon faces the camera.
-    for quad in renderer.mesh.vertices.chunks(VERTICES_PER_SEGMENT) {
+    for quad in renderer.mesh.mesh().vertices.chunks(VERTICES_PER_SEGMENT) {
         let across = quad[0].position - quad[1].position;
         let along = quad[2].position - quad[0].position;
         let middle = (quad[0].position + quad[3].position) / 2.0;
@@ -48,8 +52,8 @@ fn trails_are_camera_facing_ribbons_that_fade_with_age() {
         assert!(across.dot(along).abs() < 1e-6);
         assert!(across.dot(eye - middle).abs() < 1e-5);
     }
-    let first = renderer.mesh.vertices.first().unwrap().color[3];
-    let last = renderer.mesh.vertices.last().unwrap().color[3];
+    let first = renderer.mesh.mesh().vertices.first().unwrap().color[3];
+    let last = renderer.mesh.mesh().vertices.last().unwrap().color[3];
     assert!(last > first, "the newest end is the most opaque");
 }
 
@@ -59,5 +63,5 @@ fn a_still_particle_draws_nothing() {
     let tracers = Tracers::new(&[0], &particles);
     let mut renderer = TrailRenderer::new();
     renderer.build(&tracers, &particles, Vec3::Z * 10.0);
-    assert!(renderer.mesh.indices.is_empty());
+    assert!(renderer.mesh.mesh().indices.is_empty());
 }

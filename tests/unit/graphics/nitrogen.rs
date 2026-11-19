@@ -35,11 +35,11 @@ fn cold_level_runs_from_none_at_room_temperature_to_full_at_the_bottom() {
 fn the_coil_is_empty_and_still_at_300_k() {
     let (_, mut nitrogen) = nitrogen();
     nitrogen.build(cold_level(MAX_COLD_KELVIN), 3.0, facing(), EYE);
-    assert!(nitrogen.liquid.indices.is_empty());
+    assert!(nitrogen.liquid.mesh().indices.is_empty());
     assert_eq!(nitrogen.mist.len(), 0);
     assert_eq!(nitrogen.bubbles.len(), 0);
     assert!(
-        !nitrogen.glass.indices.is_empty(),
+        !nitrogen.glass.mesh().indices.is_empty(),
         "the glass is always there"
     );
 }
@@ -49,12 +49,12 @@ fn the_coil_is_empty_and_still_at_300_k() {
 #[test]
 fn the_liquid_always_fills_the_whole_coil() {
     let (_, mut nitrogen) = nitrogen();
-    let outlet_rings = nitrogen.glass.vertices.len() / (nitrogen.stations.len() + 2);
+    let outlet_rings = nitrogen.glass.mesh().vertices.len() / (nitrogen.stations.len() + 2);
     for kelvin in [295.0, 230.0, 130.0, MIN_COLD_KELVIN] {
         nitrogen.build(cold_level(kelvin), 0.0, facing(), EYE);
         assert_eq!(
-            nitrogen.liquid.vertices.len() + 2 * outlet_rings,
-            nitrogen.glass.vertices.len(),
+            nitrogen.liquid.mesh().vertices.len() + 2 * outlet_rings,
+            nitrogen.glass.mesh().vertices.len(),
             "{kelvin} K"
         );
         assert!(nitrogen.mist.len() > 0 && nitrogen.bubbles.len() > 0);
@@ -106,7 +106,7 @@ fn the_coil_winds_up_the_cold_half_outside_the_block() {
     for pair in nitrogen.stations.windows(2) {
         assert!(pair[1].along >= pair[0].along);
     }
-    for vertex in &nitrogen.glass.vertices {
+    for vertex in &nitrogen.glass.mesh().vertices {
         let position = vertex.position;
         let seen_from_above = Vec2::new(position.x, position.z);
         assert!(outside_block(shape.offset, shape.outer, seen_from_above) > 0.0);

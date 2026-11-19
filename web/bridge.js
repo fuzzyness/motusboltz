@@ -24,6 +24,8 @@
 //
 // Add ?debug to the page's address to log what happens, to the console
 // and to a list in the page's corner, which a screenshot can show.
+//
+// The page also gives the simulation a finer clock than gl.js's own.
 function motusboltzBridge(simulation, hint) {
 	"use strict";
 
@@ -94,6 +96,14 @@ function motusboltzBridge(simulation, hint) {
 		name: "motusboltz_page",
 		version: 2,
 		register_plugin: (importObject) => {
+			// gl.js tells the time from Date.now(), in whole milliseconds,
+			// which can step back when the computer's clock is set, so
+			// frames measured by it come out 16 or 17 ms at 60 Hz.
+			// performance.now() is finer and only goes forward; counted
+			// from the page's start on the same clock, it still gives the
+			// date, which seeds the simulation.
+			const origin = performance.timeOrigin || Date.now() - performance.now();
+			importObject.env.now = () => (origin + performance.now()) / 1000.0;
 			importObject.env.motusboltz_arm = (what) => {
 				if (what !== armed) {
 					log("armed:", what);

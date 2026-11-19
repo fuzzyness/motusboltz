@@ -10,12 +10,12 @@
 use macroquad::models::Vertex;
 use macroquad::prelude::{
     Color,
-    Material,
     Vec2,
     Vec3,
     Vec4, //
 };
 
+use super::gpu::GpuMaterial;
 use super::load_lit;
 
 /// Fragment shader for lit metal.
@@ -57,7 +57,7 @@ void main() {
 }"#;
 
 /// The lit-metal material, or `None` if its shader cannot be built.
-pub fn load_metal() -> Option<Material> {
+pub fn load_metal() -> Option<GpuMaterial> {
     load_lit(METAL_FRAGMENT, &[])
 }
 

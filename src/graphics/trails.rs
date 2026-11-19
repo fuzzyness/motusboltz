@@ -3,19 +3,21 @@
 
 use macroquad::models::{
     Mesh,
-    Vertex,
-    draw_mesh, //
+    Vertex, //
 };
 use macroquad::prelude::{
     Camera3D,
     Color,
+    Mat4,
     Vec2,
     Vec3, //
 };
 
+use super::gpu::GpuMesh;
 use super::{
     DRAW_CALL_INDEX_CAPACITY,
-    DRAW_CALL_VERTEX_CAPACITY, //
+    DRAW_CALL_VERTEX_CAPACITY,
+    draw_plain, //
 };
 use crate::sim::gas::Particle;
 use crate::sim::tracers::{
@@ -38,19 +40,15 @@ const INDICES_PER_SEGMENT: usize = 6;
 
 /// The trail mesh, rebuilt every frame in reused buffers.
 pub struct TrailRenderer {
-    /// The ribbons.
-    mesh: Mesh,
+    /// The ribbons, sent to the graphics card again each frame.
+    mesh: GpuMesh,
 }
 
 impl TrailRenderer {
     /// A renderer with nothing built yet.
     pub fn new() -> Self {
         Self {
-            mesh: Mesh {
-                vertices: Vec::new(),
-                indices: Vec::new(),
-                texture: None,
-            },
+            mesh: GpuMesh::empty(),
         }
     }
 
@@ -58,15 +56,14 @@ impl TrailRenderer {
     /// where the particle is now.
     pub fn draw(&mut self, tracers: &Tracers, particles: &[Particle], camera: &Camera3D) {
         self.build(tracers, particles, camera.position);
-        if !self.mesh.indices.is_empty() {
-            draw_mesh(&self.mesh);
-        }
+        draw_plain([&self.mesh], Mat4::IDENTITY);
     }
 
     /// Rebuilds the ribbons, turned to face `eye`.
     fn build(&mut self, tracers: &Tracers, particles: &[Particle], eye: Vec3) {
-        self.mesh.vertices.clear();
-        self.mesh.indices.clear();
+        let mesh = self.mesh.edit();
+        mesh.vertices.clear();
+        mesh.indices.clear();
         let now = tracers.time();
         for (index, points) in tracers.paths() {
             let current = PathPoint {
@@ -76,22 +73,25 @@ impl TrailRenderer {
             let mut previous = None;
             for point in points.iter().copied().chain([current]) {
                 if let Some(start) = previous.replace(point) {
-                    self.add_segment(start, point, now, eye);
+                    add_segment(mesh, start, point, now, eye);
                 }
             }
         }
     }
+}
 
-    /// Adds one ribbon quad from `start` to `end`, turned to face `eye`.
-    ///
-    /// Each end's opacity falls with its age at time `now`.
-    fn add_segment(&mut self, start: PathPoint, end: PathPoint, now: f64, eye: Vec3) {
+/// Adds to `mesh` one ribbon quad from `start` to `end`, turned to face
+/// `eye`.
+///
+/// Each end's opacity falls with its age at time `now`.
+fn add_segment(mesh: &mut Mesh, start: PathPoint, end: PathPoint, now: f64, eye: Vec3) {
+    {
         let along = end.position - start.position;
         let middle = (start.position + end.position) / 2.0;
         let side = along.cross(eye - middle).normalize_or_zero() * (TRAIL_WIDTH / 2.0);
         if side == Vec3::ZERO
-            || self.mesh.vertices.len() + VERTICES_PER_SEGMENT > DRAW_CALL_VERTEX_CAPACITY
-            || self.mesh.indices.len() + INDICES_PER_SEGMENT > DRAW_CALL_INDEX_CAPACITY
+            || mesh.vertices.len() + VERTICES_PER_SEGMENT > DRAW_CALL_VERTEX_CAPACITY
+            || mesh.indices.len() + INDICES_PER_SEGMENT > DRAW_CALL_INDEX_CAPACITY
         {
             return;
         }
@@ -102,16 +102,15 @@ impl TrailRenderer {
                 ..TRAIL_COLOR
             }
         };
-        let first = self.mesh.vertices.len() as u16;
+        let first = mesh.vertices.len() as u16;
         for point in [start, end] {
             for offset in [side, -side] {
                 let vertex =
                     Vertex::new2(point.position + offset, Vec2::ZERO, color_at(point.time));
-                self.mesh.vertices.push(vertex);
+                mesh.vertices.push(vertex);
             }
         }
-        self.mesh
-            .indices
+        mesh.indices
             .extend([first, first + 1, first + 2, first + 1, first + 3, first + 2]);
     }
 }

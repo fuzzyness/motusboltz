@@ -22,32 +22,26 @@ use macroquad::miniquad::{
     BlendValue,
     Equation, //
 };
-use macroquad::models::{
-    Mesh,
-    Vertex,
-    draw_mesh, //
-};
+use macroquad::models::Mesh;
 use macroquad::prelude::{
     Camera3D,
     Color,
     Comparison,
-    Material,
-    MaterialParams,
+    Mat4,
     PipelineParams,
     Quat,
-    ShaderSource,
-    UniformDesc,
     UniformType,
     Vec3,
-    gl_use_default_material,
-    gl_use_material,
-    load_material,
     vec3, //
 };
 
 use super::block::{
     BlockShape,
     key_light, //
+};
+use super::gpu::{
+    GpuMaterial,
+    GpuMesh, //
 };
 use super::solid::{
     Frame,
@@ -60,7 +54,7 @@ use super::sprites::smoothstep;
 use super::{
     DRAW_CALL_INDEX_CAPACITY,
     DRAW_CALL_VERTEX_CAPACITY,
-    draw_lit, //
+    draw_lit_placed, //
 };
 
 /// The cartridge's radius against the opening's, so it slides in.
@@ -207,10 +201,11 @@ fn build(shape: BlockShape) -> Solid {
 
 /// The cartridge and where it is on its trip.
 pub struct Cartridge {
-    /// Its shape as built, middle at the origin, axis upright.
-    built: Vec<Vertex>,
-    /// As posed this frame.
-    mesh: Mesh,
+    /// Its shape as built, middle at the origin, axis upright, on the
+    /// graphics card; it is moved into place as it is drawn.
+    mesh: GpuMesh,
+    /// Where the last `draw` placed it.
+    placed: Mat4,
     /// How far along its trip into the opening it is, from 0 to 1.
     progress: f32,
     /// The clock at the last pose, if there was one.
@@ -218,9 +213,9 @@ pub struct Cartridge {
     /// The block it goes into.
     shape: BlockShape,
     /// The lit-metal material, if it can be built.
-    material: Option<Material>,
+    material: Option<GpuMaterial>,
     /// The ghost's material, if it can be built.
-    ghost: Option<Material>,
+    ghost: Option<GpuMaterial>,
 }
 
 impl Cartridge {
@@ -232,11 +227,7 @@ impl Cartridge {
         cartridge.ghost = load_ghost();
         if cartridge.material.is_none() {
             // Drawn in plain colors, alpha means transparency: make it solid.
-            for vertex in cartridge
-                .built
-                .iter_mut()
-                .chain(&mut cartridge.mesh.vertices)
-            {
+            for vertex in &mut cartridge.mesh.edit().vertices {
                 vertex.color[3] = u8::MAX;
             }
         }
@@ -253,12 +244,12 @@ impl Cartridge {
         assert!(solid.vertices.len() < DRAW_CALL_VERTEX_CAPACITY);
         assert!(solid.indices.len() < DRAW_CALL_INDEX_CAPACITY);
         Self {
-            built: solid.vertices.clone(),
-            mesh: Mesh {
+            mesh: GpuMesh::new(Mesh {
                 vertices: solid.vertices,
                 indices: solid.indices,
                 texture: None,
-            },
+            }),
+            placed: Mat4::IDENTITY,
             progress: if seated { 1.0 } else { 0.0 },
             last_seconds: None,
             shape,
@@ -287,12 +278,15 @@ impl Cartridge {
     /// Draws it seen from `camera`, on the table, on its way or seated.
     pub fn draw(&mut self, camera: &Camera3D) {
         let (center, turn) = pose(self.shape, self.progress);
-        for (vertex, built) in self.mesh.vertices.iter_mut().zip(&self.built) {
-            vertex.position = center + turn * built.position;
-            vertex.normal = (turn * built.normal.truncate()).extend(0.0);
-        }
+        self.placed = Mat4::from_rotation_translation(turn, center);
         let light = key_light(camera.position);
-        draw_lit([&self.mesh], self.material.as_ref(), camera, light);
+        draw_lit_placed(
+            [&self.mesh],
+            self.material.as_ref(),
+            camera,
+            light,
+            self.placed,
+        );
     }
 
     /// Draws it again, faintly, over everything drawn so far, as posed by
@@ -302,35 +296,26 @@ impl Cartridge {
             return;
         };
         material.set_uniform("Opacity", GHOST_OPACITY);
-        gl_use_material(material);
-        draw_mesh(&self.mesh);
-        gl_use_default_material();
+        material.draw([&self.mesh], self.placed);
     }
 }
 
 /// The ghost's material, blended over everything and hidden by nothing, or
 /// `None` if its shader cannot be built.
-fn load_ghost() -> Option<Material> {
-    let source = ShaderSource::Glsl {
-        vertex: GHOST_VERTEX,
-        fragment: GHOST_FRAGMENT,
-    };
+fn load_ghost() -> Option<GpuMaterial> {
     let blend = BlendState::new(
         Equation::Add,
         BlendFactor::Value(BlendValue::SourceAlpha),
         BlendFactor::OneMinusValue(BlendValue::SourceAlpha),
     );
-    let params = MaterialParams {
-        pipeline_params: PipelineParams {
-            depth_test: Comparison::Always,
-            depth_write: false,
-            color_blend: Some(blend),
-            ..Default::default()
-        },
-        uniforms: vec![UniformDesc::new("Opacity", UniformType::Float1)],
+    let params = PipelineParams {
+        depth_test: Comparison::Always,
+        depth_write: false,
+        color_blend: Some(blend),
         ..Default::default()
     };
-    load_material(source, params).ok()
+    let uniforms = [("Opacity", UniformType::Float1)];
+    GpuMaterial::new(GHOST_VERTEX, GHOST_FRAGMENT, &uniforms, params)
 }
 
 #[cfg(test)]

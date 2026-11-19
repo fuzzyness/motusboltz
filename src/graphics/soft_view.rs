@@ -79,7 +79,13 @@ vec2 bent(vec2 at) {
 }
 
 void main() {
-    gl_FragColor = vec4(texture2D(Texture, bent(uv)).rgb, 1.0);
+    // Bent only while there are waves, so the plain copy, made every
+    // frame over every pixel, does no more than copy.
+    vec2 at = uv;
+    if (Warp > 0.0) {
+        at = bent(uv);
+    }
+    gl_FragColor = vec4(texture2D(Texture, at).rgb, 1.0);
 }"#;
 
 /// How strongly the view is bent into waves as it is laid on the screen,

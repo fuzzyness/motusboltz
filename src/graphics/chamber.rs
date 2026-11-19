@@ -186,7 +186,7 @@ enum Block {
     /// Not built yet.
     Untried,
     /// Built.
-    Ready(EngineBlock),
+    Ready(Box<EngineBlock>),
     /// Its shader could not be built.
     Unavailable,
 }
@@ -227,7 +227,7 @@ impl ConnectedChamberVisual {
     pub fn draw(&mut self, camera: &Camera3D) {
         if let Block::Untried = self.block {
             self.block = match EngineBlock::new(self.geometry) {
-                Some(block) => Block::Ready(block),
+                Some(block) => Block::Ready(Box::new(block)),
                 None => Block::Unavailable,
             };
         }

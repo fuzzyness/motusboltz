@@ -19,7 +19,6 @@ use macroquad::prelude::{
     Camera3D,
     Color,
     Mat3,
-    Material,
     Vec3,
     vec3, //
 };
@@ -27,6 +26,10 @@ use macroquad::prelude::{
 use super::block::{
     BlockShape,
     key_light, //
+};
+use super::gpu::{
+    GpuMaterial,
+    GpuMesh, //
 };
 use super::nitrogen::coil_inlet_x;
 use super::solid::{
@@ -130,12 +133,15 @@ pub struct Valves {
     wheels: [ValveWheel; 2],
     /// Each valve as built, hot first.
     built: [Built; 2],
-    /// Both valves as posed, one mesh.
-    mesh: Mesh,
+    /// Both valves as posed, one mesh, on the graphics card.
+    mesh: GpuMesh,
+    /// The wheels' turns as last posed: the mesh is posed again only when
+    /// one changes.
+    posed: Option<(f32, f32)>,
     /// Where each valve's vertices start in the mesh.
     starts: [usize; 2],
     /// The lit-metal material, if it can be built.
-    material: Option<Material>,
+    material: Option<GpuMaterial>,
 }
 
 impl Valves {
@@ -148,7 +154,7 @@ impl Valves {
         valves.material = load_metal();
         if valves.material.is_none() {
             // Drawn in plain colors, alpha means transparency: make it solid.
-            for vertex in &mut valves.mesh.vertices {
+            for vertex in &mut valves.mesh.edit().vertices {
                 vertex.color[3] = u8::MAX;
             }
         }
@@ -181,7 +187,8 @@ impl Valves {
         Self {
             wheels,
             built,
-            mesh,
+            mesh: GpuMesh::new(mesh),
+            posed: None,
             starts,
             material: None,
         }
@@ -190,13 +197,18 @@ impl Valves {
     /// Turns the hot valve's wheel `turns.0` from shut and the cold one's
     /// `turns.1`, in radians counterclockwise seen from above.
     fn pose(&mut self, turns: (f32, f32)) {
+        if self.posed == Some(turns) {
+            return;
+        }
+        self.posed = Some(turns);
+        let vertices = &mut self.mesh.edit().vertices;
         for (index, angle) in [turns.0, turns.1].into_iter().enumerate() {
             let (center, valve) = (self.wheels[index].center, &self.built[index]);
             // A positive turn about +y is counterclockwise seen from above.
             let turn = Mat3::from_rotation_y(angle);
             let start = self.starts[index];
             for (offset, built) in valve.vertices.iter().enumerate().skip(valve.wheel_start) {
-                let vertex = &mut self.mesh.vertices[start + offset];
+                let vertex = &mut vertices[start + offset];
                 vertex.position = center + turn * (built.position - center);
                 vertex.normal = (turn * built.normal.truncate()).extend(0.0);
             }

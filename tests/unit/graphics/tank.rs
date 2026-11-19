@@ -30,7 +30,7 @@ fn the_tank_stands_clear_beyond_the_cold_end() {
     }
     assert!(place.gauge.y > shape.base + place.height / 2.0);
     let tank = Tank::build(shape, port);
-    assert!(!tank.body.vertices.is_empty());
+    assert!(!tank.body.mesh().vertices.is_empty());
 }
 
 /// The gauge reads lower the more gas the engine holds, and the needle
