@@ -25,7 +25,8 @@
 // Add ?debug to the page's address to log what happens, to the console
 // and to a list in the page's corner, which a screenshot can show.
 //
-// The page also gives the simulation a finer clock than gl.js's own.
+// The page also gives the simulation a finer clock than gl.js's own, and
+// the time zone for the desk clock.
 function motusboltzBridge(simulation, hint) {
 	"use strict";
 
@@ -139,6 +140,11 @@ function motusboltzBridge(simulation, hint) {
 				return was ? 1 : 0;
 			};
 			importObject.env.motusboltz_full_screen = () => (fullScreen() ? 1 : 0);
+			// The desk clock shows the time in the computer's time zone,
+			// which the simulation cannot ask for itself here: seconds
+			// east of UTC, as getTimezoneOffset counts minutes west.
+			importObject.env.motusboltz_zone_offset = () =>
+				-new Date().getTimezoneOffset() * 60;
 			// Macroquad repeats its own idea of the capture to gl.js every
 			// frame, and that idea lags the page's: the frame after a click
 			// captured the mouse, it still says free, and would let it go at

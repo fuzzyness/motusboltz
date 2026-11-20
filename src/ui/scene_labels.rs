@@ -34,6 +34,7 @@ use crate::graphics::buttons::{
     button_boxes, //
 };
 use crate::graphics::cartridge;
+use crate::graphics::clock::clock_place;
 use crate::graphics::tank::tank_place;
 use crate::graphics::valves::{
     ValveWheel,
@@ -285,6 +286,9 @@ const TANK_HIGH: f32 = 0.75;
 /// How far round each of its two middles the helium tank counts as under
 /// the pointer, in the bottle's radii.
 const TANK_REACH: f32 = 1.4;
+/// How far round its case's middle the desk clock counts as under the
+/// pointer, in the case's radii.
+const CLOCK_REACH: f32 = 1.3;
 /// How far round a valve's handwheel counts as over the valve, in the
 /// wheel's radii.
 const VALVE_REACH: f32 = 1.3;
@@ -458,6 +462,20 @@ pub fn tags(engine: &ConnectedChambers) -> Vec<Tag> {
                 radius: TANK_REACH * tank.radius,
             })
             .to_vec(),
+    });
+    let clock = clock_place(shape);
+    let top = clock.middle() + Vec3::Y * clock.radius();
+    tags.push(Tag {
+        key: "clock",
+        name: "Desk clock",
+        role: "click for slow motion, hold to pause",
+        anchor: top,
+        also: None,
+        outward: away(top, out) + Vec3::Y * out,
+        spots: vec![Spot::Ball {
+            center: clock.middle(),
+            radius: CLOCK_REACH * clock.radius(),
+        }],
     });
     if !engine.regenerator().is_enabled() {
         let rest = cartridge::rest(shape);

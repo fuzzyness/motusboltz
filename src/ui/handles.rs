@@ -1,7 +1,8 @@
 //! The engine's own controls, grabbed and turned with the mouse: the hand
 //! crank on the shaft, the two valves and the helium tank's knob; and the
 //! parts pressed with it:
-//! the Reset and Tracers buttons and the regenerator's cartridge.
+//! the Reset and Tracers buttons, the regenerator's cartridge and the desk
+//! clock.
 //!
 //! A press near a part's handle, on screen, grabs it; while the button is
 //! held, the pointer is followed onto the plane the part turns in, and the
@@ -68,6 +69,9 @@ pub enum Handle {
     Cartridge,
     /// The helium tank's knob.
     TankKnob,
+    /// The desk clock: a click turns slow motion on or off, a long press
+    /// pauses or resumes (see `ui::desk_clock`).
+    Clock,
 }
 
 impl Handle {

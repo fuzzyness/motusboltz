@@ -60,6 +60,7 @@ use crate::graphics::buttons::{
     button_boxes, //
 };
 use crate::graphics::cartridge;
+use crate::graphics::clock::clock_place;
 use crate::graphics::table;
 use crate::graphics::tank::tank_place;
 use crate::graphics::valves::valve_wheels;
@@ -96,6 +97,10 @@ use crate::ui::controls::{
 use crate::ui::demos::{
     self,
     Scenario, //
+};
+use crate::ui::desk_clock::{
+    DeskClock,
+    PressEnd, //
 };
 use crate::ui::diagnostics::{
     self,
@@ -340,8 +345,11 @@ struct App {
     /// The window is to switch to or from full screen once the mouse
     /// button is let go (see `switch_full_screen`).
     full_screen_waiting: bool,
-    /// The crank, valve, button or cartridge held with the mouse, if any.
+    /// The crank, valve, button, cartridge or clock held with the mouse, if
+    /// any.
     grab: Option<Grab>,
+    /// The desk clock's time and the press on it, if any.
+    desk_clock: DeskClock,
     /// The simulation is paused.
     paused: bool,
     /// Slow motion is on.
@@ -449,6 +457,7 @@ impl App {
                 simulation.cold_kelvin(),
                 DEFAULT_CONCENTRATION,
             ),
+            desk_clock: DeskClock::new(),
             paused: false,
             slow: false,
             tracers: false,
@@ -1034,17 +1043,26 @@ impl App {
         }
     }
 
-    /// Grabs a crank, valve, button or cartridge pressed at `pointer`
-    /// (unless the press is `over_controls`), presses a button or the
-    /// cartridge at once, lets go when the button is up, and turns a crank
-    /// or valve held with the pointer over `dt` seconds of wall time.
+    /// Grabs a crank, valve, button, cartridge or the clock pressed at
+    /// `pointer` (unless the press is `over_controls`), presses a button or
+    /// the cartridge at once, lets go when the button is up, and turns a
+    /// crank or valve held with the pointer over `dt` seconds of wall time.
+    /// The clock pauses or resumes once held long enough, or turns slow
+    /// motion on or off if let go before.
     ///
     /// `button` is whether the left button is down, and whether it went
     /// down this frame.
     fn turn_grabbed(&mut self, pointer: Vec2, button: (bool, bool), over_controls: bool, dt: f32) {
         let (down, pressed) = button;
         if !down {
-            self.grab = None;
+            let clock = self
+                .grab
+                .take()
+                .is_some_and(|grab| grab.handle == Handle::Clock);
+            if clock && self.desk_clock.release() == Some(PressEnd::Click) {
+                self.slow = !self.slow;
+                self.controls.press(Action::ToggleSlow);
+            }
             return;
         }
         let matrix = self.camera.camera().matrix();
@@ -1070,10 +1088,14 @@ impl App {
                 (Handle::TracersButton, tracers.dome_top()),
                 (Handle::Cartridge, cartridge),
                 (Handle::TankKnob, knob),
+                (Handle::Clock, clock_place(shape).face()),
             ];
             self.grab = pick(&handles, matrix, size, pointer).map(Grab::new);
             if let Some(handle) = self.grab.map(|grab| grab.handle).filter(|h| h.presses()) {
                 self.press(handle);
+            }
+            if self.grab.is_some_and(|grab| grab.handle == Handle::Clock) {
+                self.desk_clock.press();
             }
         }
         let Some(mut grab) = self.grab else {
@@ -1128,6 +1150,14 @@ impl App {
                     self.demo = None;
                 }
             }
+            // Held long enough, the clock pauses or resumes, and rings.
+            Handle::Clock => {
+                if self.desk_clock.hold(dt) {
+                    self.paused = !self.paused;
+                    self.controls.press(Action::TogglePause);
+                    self.scene.ring_clock();
+                }
+            }
             // Pressed once when grabbed; held, they only keep the camera
             // still.
             Handle::ResetButton | Handle::TracersButton | Handle::Cartridge => {}
@@ -1151,7 +1181,7 @@ impl App {
                 // The demo's banner would no longer be true.
                 self.demo = None;
             }
-            Handle::Crank | Handle::Valve(_) | Handle::TankKnob => {}
+            Handle::Crank | Handle::Valve(_) | Handle::TankKnob | Handle::Clock => {}
         }
     }
 
@@ -1298,6 +1328,11 @@ impl App {
             self.simulation.follow_particles(FOLLOWED_PARTICLES, seed);
         }
         let pace = if self.slow { SLOW_MOTION_FACTOR } else { 1.0 };
+        // The desk clock keeps time with the engine: slower in slow motion,
+        // stopped while paused.
+        let clock_pace = if self.paused { 0.0 } else { pace };
+        self.desk_clock
+            .advance(f64::from(self.frame_time), f64::from(clock_pace));
         // At most what the physics can run in its share of the frame (see
         // `PhysicsBudget`), and at most one update's worth; running less
         // than the frame's time limits it.
@@ -1401,6 +1436,8 @@ impl App {
             on: [false, self.tracers],
             held: [held(Handle::ResetButton), held(Handle::TracersButton)],
         });
+        self.scene
+            .set_clock_hands(self.desk_clock.hands(date::now()));
         let seconds = self.clock.seconds();
         self.scene
             .render(&self.simulation, camera, self.scenery, seconds);

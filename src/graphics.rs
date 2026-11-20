@@ -13,6 +13,7 @@ pub mod block;
 pub mod buttons;
 pub mod cartridge;
 pub mod chamber;
+pub mod clock;
 pub mod cloud;
 pub mod fire;
 pub mod floor;
@@ -54,6 +55,7 @@ use macroquad::prelude::{
 use macroquad::window::get_internal_gl;
 
 use crate::sim::engine::ConnectedChambers;
+use crate::ui::desk_clock::HandAngles;
 use crate::ui::diagnostics::{
     self,
     Piece, //
@@ -72,6 +74,7 @@ use buttons::{
 };
 use cartridge::Cartridge;
 use chamber::ConnectedChamberVisual;
+use clock::Clock;
 use cloud::CloudFloor;
 use fire::Fire;
 use floor::FloorGrid;
@@ -391,6 +394,10 @@ pub struct Scene {
     tank: Tank,
     /// The tank's knob's turn (see `set_knob_turn`).
     knob_turn: f32,
+    /// The desk clock.
+    clock: Clock,
+    /// Where the desk clock's hands point.
+    clock_hands: HandAngles,
     /// Twinkles where heat crosses the walls.
     heat_sparks: HeatSparks,
     /// `None` where the sprite shader cannot be built: the burner and nitrogen
@@ -452,6 +459,8 @@ impl Scene {
             cartridge: Cartridge::new(shape, simulation.regenerator().is_enabled()),
             tank: Tank::new(shape, simulation.port()),
             knob_turn: 0.0,
+            clock: Clock::new(shape),
+            clock_hands: HandAngles::default(),
             heat_sparks: HeatSparks::new(geometry),
             sprite_materials: SpriteMaterials::load(),
             backdrop: Backdrop::new(geometry),
@@ -479,6 +488,16 @@ impl Scene {
     /// seen from above, for the frames to come.
     pub fn set_knob_turn(&mut self, turn: f32) {
         self.knob_turn = turn;
+    }
+
+    /// Points the desk clock's hands at `hands`, for the frames to come.
+    pub fn set_clock_hands(&mut self, hands: HandAngles) {
+        self.clock_hands = hands;
+    }
+
+    /// Rattles the desk clock's hammer between its bells.
+    pub fn ring_clock(&mut self) {
+        self.clock.ring();
     }
 
     /// Lights the Reset and Tracers buttons while their switches are on
@@ -631,6 +650,7 @@ impl Scene {
         self.buttons.draw_bodies(camera);
         self.cartridge.draw(camera);
         self.tank.draw(camera);
+        self.clock.draw(self.clock_hands, seconds, camera);
         if scenery == Scenery::Sky {
             self.cloud.draw(camera, light);
         }

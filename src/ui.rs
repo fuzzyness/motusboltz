@@ -7,6 +7,7 @@ pub mod button;
 pub mod camera;
 pub mod controls;
 pub mod demos;
+pub mod desk_clock;
 pub mod diagnostics;
 pub mod draw_target;
 pub mod drawer;
