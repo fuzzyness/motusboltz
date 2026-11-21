@@ -116,8 +116,14 @@ void main() {
 
 /// Fragment shader of the sky scenery.
 ///
-/// Each pixel's line of sight comes from `Unproject` (the camera's view
-/// and projection, inverted). Above the horizon: the sky, brighter toward
+/// Each pixel's line of sight comes from `Unproject`: the camera's view and
+/// projection inverted, with the camera moved to the origin, so a point
+/// unprojected from the window is the line of sight itself. Taken from
+/// the camera where it stands, two points a fraction of a centimeter
+/// apart in front of it, among coordinates of tens of centimeters, lost
+/// enough precision to the near plane of first person that the line of
+/// sight wobbled from frame to frame as the camera moved, and the clouds,
+/// read far along it, flickered. Above the horizon: the sky, brighter toward
 /// the sun, with thin clouds on a high layer. Below it: the tops of a sea
 /// of clouds on a layer under the engine, lit from the sun's side and
 /// fading into haze in the distance. The noise is value noise whose values
@@ -178,9 +184,8 @@ vec3 glow(vec4 spot, vec3 color) {
 
 void main() {
     vec2 ndc = vec2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
-    vec4 near = Unproject * vec4(ndc, -1.0, 1.0);
-    vec4 far = Unproject * vec4(ndc, 0.0, 1.0);
-    vec3 ray = normalize(far.xyz / far.w - near.xyz / near.w);
+    vec4 sight = Unproject * vec4(ndc, 0.0, 1.0);
+    vec3 ray = normalize(sight.xyz / sight.w);
     vec3 sun = normalize(SUN);
     float toward_sun = max(dot(ray, sun), 0.0);
     vec3 sky = mix(HORIZON, ZENITH, smoothstep(0.0, 0.6, ray.y));
@@ -272,6 +277,18 @@ const HOT_GLOW: f32 = 0.38;
 const COLD_GLOW: f32 = 0.3;
 /// A glow's radius against the cylinder's height on the screen.
 const GLOW_REACH: f32 = 1.0;
+/// Distance in front of the camera, in the cylinder's heights, inside
+/// which its glow starts to fade.
+///
+/// A cylinder close beside the camera, as it is when walking past it in
+/// first person, projects almost to infinity: its glow grew to cover the
+/// whole sky, and as each step carried the cylinder to and fro across the
+/// camera's side, flashed over it for a frame at a time. The glow is for
+/// the engine seen from outside, and fades away as the camera comes close.
+const GLOW_FADE_FAR: f32 = 1.5;
+/// Distance in front of the camera, in the cylinder's heights, inside
+/// which its glow is gone.
+const GLOW_FADE_NEAR: f32 = 0.75;
 
 /// Where a glow goes on the window and how far it reaches, both in shares
 /// of the window (see the shader).
@@ -281,11 +298,21 @@ pub struct Spot {
     pub center: Vec2,
     /// Reach of the glow.
     pub radius: f32,
+    /// How much of its strength the glow keeps, from 0 to 1: less with the
+    /// cylinder close to the camera.
+    pub share: f32,
 }
 
 /// Projects the cylinder whose axis is at `axis_x`, from `bottom` to
-/// `top`, through `matrix`; `None` if it is behind the camera.
+/// `top`, through `matrix`; `None` if it is behind the camera or so close
+/// in front that its glow is gone (see `GLOW_FADE_FAR`).
 pub fn spot(matrix: Mat4, axis_x: f32, bottom: f32, top: f32) -> Option<Spot> {
+    let height = (top - bottom).abs().max(f32::EPSILON);
+    let ahead = (matrix * vec3(axis_x, (bottom + top) / 2.0, 0.0).extend(1.0)).w / height;
+    let share = ((ahead - GLOW_FADE_NEAR) / (GLOW_FADE_FAR - GLOW_FADE_NEAR)).clamp(0.0, 1.0);
+    if share <= 0.0 {
+        return None;
+    }
     let project = |point: Vec3| {
         let clip = matrix * point.extend(1.0);
         (clip.w > f32::EPSILON).then(|| {
@@ -299,6 +326,7 @@ pub fn spot(matrix: Mat4, axis_x: f32, bottom: f32, top: f32) -> Option<Spot> {
     Some(Spot {
         center: middle,
         radius: GLOW_REACH * (low - high).length(),
+        share: share * share * (3.0 - 2.0 * share),
     })
 }
 
@@ -406,7 +434,12 @@ impl Backdrop {
         let top = self.geometry.cylinder_height / 2.0;
         let uniform = |axis_x: f32, strength: f32| {
             spot(matrix, axis_x, floor, top).map_or(Vec4::ZERO, |spot| {
-                Vec4::new(spot.center.x, spot.center.y, spot.radius, strength)
+                Vec4::new(
+                    spot.center.x,
+                    spot.center.y,
+                    spot.radius,
+                    strength * spot.share,
+                )
             })
         };
         let hot = uniform(self.geometry.hot_center_x(), HOT_GLOW * levels.heat);
@@ -416,7 +449,9 @@ impl Backdrop {
         material.set_uniform("Aspect", size.x / size.y.max(1.0));
         if let (Scenery::Sky, Some(_), Some(noise)) = (scenery, &self.sky, &self.noise) {
             material.set_texture("Noise", noise.clone());
-            material.set_uniform("Unproject", matrix.inverse());
+            // The view turned but not moved: the camera at the origin.
+            let turned = matrix * Mat4::from_translation(camera.position);
+            material.set_uniform("Unproject", turned.inverse());
             material.set_uniform("Eye", camera.position);
             // Wrapped, so the clouds stay smooth however long it runs.
             material.set_uniform("Time", (seconds % 100_000.0) as f32);

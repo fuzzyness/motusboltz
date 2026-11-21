@@ -260,7 +260,6 @@ impl ClockPlace {
     }
 
     /// The height of the handle's top above the table.
-    #[cfg(test)]
     pub fn height(self) -> f32 {
         case_center(self.unit).y + HANDLE_TOP * self.unit
     }

@@ -87,3 +87,15 @@ fn the_sky_noise_repeats_seamlessly() {
 fn the_sky_shader_knows_the_noise_size() {
     assert!(SKY_FRAGMENT.contains(&format!("const float NOISE_CELLS = {NOISE_CELLS}.0;")));
 }
+
+/// A cylinder close beside the camera, as when walking past it, has no
+/// glow, rather than one projected to cover the window; further off it
+/// glows in full.
+#[test]
+fn a_cylinder_beside_the_camera_has_no_glow() {
+    // Looking along -z; the cylinder a little ahead and far to the side.
+    let beside = matrix(vec3(0.0, 0.0, 0.5), vec3(0.0, 0.0, -10.0));
+    assert_eq!(spot(beside, 5.0, -1.0, 1.0), None);
+    let far = matrix(vec3(0.0, 0.0, 20.0), Vec3::ZERO);
+    assert_eq!(spot(far, 0.0, -1.0, 1.0).unwrap().share, 1.0);
+}

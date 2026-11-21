@@ -108,7 +108,11 @@ fn a_full_batch_stays_within_one_draw_call() {
 
 #[test]
 fn shaders_are_glsl_100() {
-    assert!(SPRITE_VERTEX.starts_with("#version 100\n"));
+    let vertex = sprite_vertex();
+    assert!(vertex.starts_with("#version 100\n"));
+    // The near fade's distances made it into the shader, in order.
+    assert!(vertex.contains("smoothstep(2.500, 8.000, gl_Position.w)"));
+    const { assert!(NEAR_FADE_NEAR < NEAR_FADE_FAR) };
     for shader in [SPRITE_FRAGMENT, FLAME_FRAGMENT, SPARKLE_FRAGMENT] {
         assert!(shader.starts_with("#version 100\n"));
         assert!(

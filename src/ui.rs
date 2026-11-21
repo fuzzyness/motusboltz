@@ -33,3 +33,4 @@ pub mod scene_labels;
 pub mod shortcuts;
 pub mod slider;
 pub mod start_prompt;
+pub mod walking;

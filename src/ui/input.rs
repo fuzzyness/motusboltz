@@ -52,7 +52,8 @@ const DOWN: Vec2 = Vec2::new(0.0, -1.0);
 const LEFT: Vec2 = Vec2::new(-1.0, 0.0);
 /// Camera direction right.
 const RIGHT: Vec2 = Vec2::new(1.0, 0.0);
-/// Camera keys and the direction each one turns or moves the camera.
+/// Camera keys and the direction each one turns or moves the camera; in
+/// first person they walk the figure, up ahead and right to the right.
 const CAMERA_DIRECTION_KEYS: [(KeyCode, Vec2); 8] = [
     (KeyCode::W, UP),
     (KeyCode::Up, UP),
@@ -196,11 +197,7 @@ impl CameraKeys {
     /// Opposite keys cancel, and two keys for the same direction count
     /// once.
     pub fn from_held(held: impl Fn(KeyCode) -> bool) -> Self {
-        let direction = CAMERA_DIRECTION_KEYS
-            .into_iter()
-            .filter(|&(key, _)| held(key))
-            .fold(Vec2::ZERO, |sum, (_, direction)| sum + direction);
-        let direction = direction.clamp(Vec2::NEG_ONE, Vec2::ONE);
+        let direction = walk_keys_from(&held);
         let zoom_in = ZOOM_IN_KEYS.into_iter().any(&held);
         let zoom_out = ZOOM_OUT_KEYS.into_iter().any(&held);
         let shift = SHIFT_KEYS.into_iter().any(&held);
@@ -210,6 +207,46 @@ impl CameraKeys {
             zoom: f32::from(zoom_in) - f32::from(zoom_out),
         }
     }
+}
+
+/// Keys that crouch in first person while held. C is there too because in
+/// the browser Ctrl with W, a walking key, closes the page, which the page
+/// cannot stop.
+const CROUCH_KEYS: [KeyCode; 3] = [KeyCode::LeftControl, KeyCode::RightControl, KeyCode::C];
+
+/// The keys first person has, which are only the basics: walking with WASD
+/// or the arrows, jumping with Space and crouching with Ctrl. Every other
+/// shortcut is the orbit view's.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FirstPersonKeys {
+    /// The way the walking keys point, x to the right and y ahead, each
+    /// -1, 0 or 1.
+    pub way: Vec2,
+    /// Whether Space was pressed this frame.
+    pub jump: bool,
+    /// Whether a crouch key is held.
+    pub crouch: bool,
+}
+
+impl FirstPersonKeys {
+    /// The first-person keys this frame.
+    pub fn read() -> Self {
+        Self {
+            way: walk_keys_from(is_key_down),
+            jump: is_key_pressed(GO_KEY),
+            crouch: CROUCH_KEYS.into_iter().any(is_key_down),
+        }
+    }
+}
+
+/// The way the walking keys that `held` reports point: opposite keys
+/// cancel, and two keys for the same way count once.
+pub fn walk_keys_from(held: impl Fn(KeyCode) -> bool) -> Vec2 {
+    CAMERA_DIRECTION_KEYS
+        .into_iter()
+        .filter(|&(key, _)| held(key))
+        .fold(Vec2::ZERO, |sum, (_, direction)| sum + direction)
+        .clamp(Vec2::NEG_ONE, Vec2::ONE)
 }
 
 /// Whether either Shift key is held.

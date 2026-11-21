@@ -182,6 +182,11 @@ impl ButtonBox {
         self.base + Vec3::Y * height * self.unit
     }
 
+    /// Half the box's width; it is square from above.
+    pub fn half_width(self) -> f32 {
+        BOX_HALF_WIDTH * self.unit
+    }
+
     /// `local`, a point built with the box's base at the origin and its
     /// engraved side toward +z, placed in the world.
     fn place(self, local: Vec3) -> Vec3 {

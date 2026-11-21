@@ -121,6 +121,7 @@ use crate::ui::energy_strip;
 use crate::ui::figure::{self, Drag};
 use crate::ui::first_person::{
     self,
+    Walked,
     Walker, //
 };
 use crate::ui::fonts;
@@ -148,6 +149,7 @@ use crate::ui::handles::{
 };
 use crate::ui::input::{
     CameraKeys,
+    FirstPersonKeys,
     KeyCommands,
     shift_down,
     wheel_pixels, //
@@ -179,6 +181,7 @@ use crate::ui::physics_runner::PhysicsRunner;
 use crate::ui::scene_labels;
 use crate::ui::shortcuts;
 use crate::ui::start_prompt::StartPrompt;
+use crate::ui::walking::WalkMap;
 
 /// Gap between the build label and Hide all, at its left.
 const BUILD_LABEL_GAP: f32 = 14.0;
@@ -652,7 +655,7 @@ impl App {
         }
         self.menu.animate(dt);
         if self.walker.is_some() {
-            self.first_person_frame(keys);
+            self.first_person_frame();
             return;
         }
         if self.menu.open {
@@ -706,9 +709,9 @@ impl App {
     }
 
     /// Runs one frame in first person: the head turns with the captured
-    /// mouse and the keys act as ever, unless the menu is open; the engine
-    /// runs on either way.
-    fn first_person_frame(&mut self, keys: KeyCommands) {
+    /// mouse and the figure walks, jumps and crouches with its own few keys,
+    /// unless the menu is open; the engine runs on either way.
+    fn first_person_frame(&mut self) {
         let Some(mut walker) = self.walker else {
             return;
         };
@@ -716,6 +719,9 @@ impl App {
         let pointer = Vec2::from(mouse_position());
         let size = vec2(screen_width(), screen_height().max(1.0));
         let held = self.follow_capture(&mut walker);
+        // First person has only the basics (see `FirstPersonKeys`); the
+        // other shortcuts are the orbit view's.
+        let mut moves = FirstPersonKeys::default();
         if !self.menu.open {
             if held {
                 walker.look(pointer, self.menu.sensitivity);
@@ -724,7 +730,16 @@ impl App {
                 // by Esc, a click on the view captures it again.
                 self.armed = Arm::Capture;
             }
-            self.apply(keys, ControlEvents::default());
+            moves = FirstPersonKeys::read();
+        }
+        // With the menu open it stops, or goes on falling.
+        let shape = BlockShape::new(self.simulation.geometry());
+        let seated = self.simulation.regenerator().is_enabled();
+        let map = WalkMap::new(shape, self.simulation.port(), seated);
+        if walker.walk(moves, dt, &map) == Walked::Fell {
+            // Back at the start, facing the engine, the mouse as it was.
+            walker = Walker::standing(shape);
+            self.scene.dissolve(FIRST_PERSON_DISSOLVE);
         }
         self.walker = Some(walker);
         self.animate(dt);

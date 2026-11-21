@@ -40,8 +40,21 @@ use super::{
     DRAW_CALL_VERTEX_CAPACITY, //
 };
 
-/// Vertex shader shared by every sprite.
-const SPRITE_VERTEX: &str = r#"#version 100
+/// Distance from the camera, in scene units (centimeters), inside which a
+/// sprite starts to fade: in first person a puff of mist or the tank's
+/// puff can come right up to the eye, and one soft sprite would then fill
+/// the whole view with a flash of white.
+const NEAR_FADE_FAR: f32 = 8.0;
+/// Distance from the camera, in scene units, inside which a sprite is
+/// gone.
+const NEAR_FADE_NEAR: f32 = 2.5;
+
+/// Vertex shader shared by every sprite: it fades sprites near the camera
+/// (see `NEAR_FADE_FAR`), by their distance along the view, which the
+/// projection leaves in `gl_Position.w`.
+fn sprite_vertex() -> String {
+    format!(
+        r#"#version 100
 attribute vec3 position;
 attribute vec2 texcoord;
 attribute vec4 color0;
@@ -52,11 +65,14 @@ varying lowp vec2 uv;
 uniform mat4 Model;
 uniform mat4 Projection;
 
-void main() {
+void main() {{
     gl_Position = Projection * Model * vec4(position, 1);
     color = color0 / 255.0;
+    color.a *= smoothstep({NEAR_FADE_NEAR:.3}, {NEAR_FADE_FAR:.3}, gl_Position.w);
     uv = texcoord;
-}"#;
+}}"#
+    )
+}
 
 /// Round sprite: full strength in the middle, falling smoothly to nothing
 /// at the rim.
@@ -175,7 +191,8 @@ impl SpriteMaterials {
     pub fn load() -> Option<Self> {
         let alpha = BlendFactor::Value(BlendValue::SourceAlpha);
         let behind = BlendFactor::OneMinusValue(BlendValue::SourceAlpha);
-        let load = |params, fragment| GpuMaterial::new(SPRITE_VERTEX, fragment, &[], params);
+        let vertex = sprite_vertex();
+        let load = |params, fragment| GpuMaterial::new(&vertex, fragment, &[], params);
         let material = |source, behind, fragment| load(sprite_pipeline(source, behind), fragment);
         let overlay = PipelineParams {
             depth_test: Comparison::Always,
