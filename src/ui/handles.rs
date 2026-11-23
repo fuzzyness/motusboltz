@@ -9,8 +9,8 @@
 //! part turns with it. The crank drives the shaft forward as a ratchet (see
 //! `PowerPistons::crank`). A valve's wheel sets its side's temperature: shut
 //! for 300 K, fully open after `VALVE_TURNS` turns for the slider's far
-//! end. The walls then move toward a new setting at
-//! `RAMP_KELVIN_PER_SECOND`, as a burner or a nitrogen line takes time to
+//! end. The walls then move toward a new setting, crossing their whole
+//! range in `RAMP_SECONDS`, as a burner or a nitrogen line takes time to
 //! heat or cool them, whether it was set by a valve or a slider. The tank's
 //! knob sets the helium the pump works toward: shut for the least fill,
 //! fully open after `KNOB_TURNS` turns for the most, as the helium slider
@@ -45,9 +45,10 @@ use crate::ui::scene_labels::project;
 pub const VALVE_TURNS: f32 = 1.5;
 /// Turns of the helium tank's knob from the least fill to the most.
 pub const KNOB_TURNS: f32 = 1.5;
-/// How fast a wall's temperature moves toward its setting, in kelvin per
-/// second of model time.
-pub const RAMP_KELVIN_PER_SECOND: f32 = 150.0;
+/// Seconds of model time a wall's temperature takes to cross its whole
+/// range toward a new setting, between 300 K and the slider's far end: the
+/// same for both sides, so the flames die down as fast as the frost goes.
+pub const RAMP_SECONDS: f32 = 1.5;
 /// How near a handle, on screen, a press grabs it, in points.
 const GRAB_RADIUS: f32 = 30.0;
 /// Least slant between the pointer's ray and a part's plane, below which
@@ -131,10 +132,20 @@ pub fn knob_turn(concentration: f32) -> f32 {
     knob_opening(concentration) * KNOB_TURNS * TAU
 }
 
-/// `current` moved toward `target` over `dt` seconds of model time at
-/// `RAMP_KELVIN_PER_SECOND`, without passing it.
-pub fn ramped(current: f32, target: f32, dt: f32) -> f32 {
-    let step = RAMP_KELVIN_PER_SECOND * dt.max(0.0);
+/// How fast `side`'s wall moves toward its setting, in kelvin per second
+/// of model time: its whole range in `RAMP_SECONDS`.
+pub fn ramp_rate(side: ReservoirSide) -> f32 {
+    let range = match side {
+        ReservoirSide::Hot => MAX_HOT_KELVIN - MIN_HOT_KELVIN,
+        ReservoirSide::Cold => MAX_COLD_KELVIN - MIN_COLD_KELVIN,
+    };
+    range / RAMP_SECONDS
+}
+
+/// `side`'s wall at `current` moved toward `target` over `dt` seconds of
+/// model time at `ramp_rate`, without passing it.
+pub fn ramped(side: ReservoirSide, current: f32, target: f32, dt: f32) -> f32 {
+    let step = ramp_rate(side) * dt.max(0.0);
     current + (target - current).clamp(-step, step)
 }
 

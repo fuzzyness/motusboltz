@@ -277,3 +277,23 @@ fn a_turnaround_is_held_by_static_friction() {
     assert_eq!(pistons.angular_velocity(), 0.0);
     assert!(pistons.drag_loss() >= energy);
 }
+
+/// The hand crank turns the shaft backward too, with a ratchet that way,
+/// up to the starting speed and no faster, booking it as starter work.
+#[test]
+fn the_crank_drives_either_way_up_to_the_starting_speed() {
+    let mut pistons = free_pistons();
+    let start_speed = pistons.start_speed;
+    assert!(pistons.crank_either_way(-0.3 * start_speed));
+    assert!((pistons.start_speed_fraction() + 0.3).abs() < 1e-9);
+    assert!(
+        !pistons.crank_either_way(-0.2 * start_speed),
+        "a slower hand slips"
+    );
+    assert!(pistons.crank_either_way(-5.0 * start_speed));
+    assert!((pistons.start_speed_fraction() + 1.0).abs() < 1e-9);
+    assert!(pistons.starter_work > 0.0);
+    // Forward it catches the backward shaft at once.
+    assert!(pistons.crank_either_way(0.1 * start_speed));
+    assert!((pistons.start_speed_fraction() - 0.1).abs() < 1e-9);
+}

@@ -29,6 +29,7 @@ pub mod panel;
 pub mod pen;
 pub mod physics_budget;
 pub mod physics_runner;
+pub mod reach;
 pub mod scene_labels;
 pub mod shortcuts;
 pub mod slider;

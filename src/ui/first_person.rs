@@ -105,6 +105,27 @@ const TUCK: f32 = 0.7;
 /// up or down at once, as on a step up or a tuck: the view glides
 /// instead of jolting.
 const EYE_GLIDE_SECONDS: f32 = 0.07;
+/// How far the view moves freely from where it was while the figure grips
+/// a valve, the knob or the crank, in radians each way: about 15 degrees.
+/// Within it the view stays where the mouse leaves it.
+const GRIP_LIMIT: f32 = 0.26;
+/// How much further the view gives, pushed past `GRIP_LIMIT`, in radians:
+/// about 5 degrees, harder the further it goes.
+const GRIP_GIVE: f32 = 0.09;
+/// Seconds for a gripped view pushed past `GRIP_LIMIT` to spring most of
+/// the way back to it.
+const GRIP_SPRING_SECONDS: f32 = 0.25;
+/// Seconds for a view let go to spring most of the way back to where it
+/// was; the mouse turns it again at once meanwhile.
+const GRIP_RETURN_SECONDS: f32 = 0.06;
+/// Share of `GRIP_LIMIT` a gripped view pushed sideways must reach to be at
+/// its edge, where it leans on what it grips (see `Walker::grip_lean`).
+const GRIP_EDGE_SHARE: f32 = 0.97;
+/// Most push kept past `GRIP_LIMIT`, as a share of `GRIP_GIVE`: the give
+/// is nearly used up there.
+const GRIP_PUSH_MOST: f32 = 2.0;
+/// Least push left, in radians, below which a view let go is back.
+const GRIP_SETTLED: f32 = 1e-3;
 /// How far below the table's top a figure that has stepped off its edge
 /// falls before it is put back at the start, in bore radii.
 const FALL_DEPTH: f32 = 5.0;
@@ -145,8 +166,20 @@ const CROSSHAIR_RING: f32 = 4.5;
 const CROSSHAIR: Color = Color::new(1.0, 1.0, 1.0, 0.85);
 /// The ring around it, so it shows on light surfaces too.
 const CROSSHAIR_SHADE: Color = Color::new(0.0, 0.0, 0.0, 0.35);
+/// Radius of the ring the crosshair grows over something within reach, in
+/// points.
+const AIM_RING: f32 = 10.0;
+/// Thickness of that ring, in points.
+const AIM_RING_THICKNESS: f32 = 2.0;
+/// Pieces the ring is drawn in.
+const AIM_RING_PIECES: usize = 24;
+/// Size of the caption under the crosshair, in points.
+const CAPTION_SIZE: f32 = 17.0;
+/// How far under the crosshair the caption's baseline is, in points.
+const CAPTION_BELOW: f32 = 40.0;
 /// The hint at the bottom of the view.
-const HINT: &str = "WASD: walk \u{b7} Space: jump \u{b7} Ctrl: crouch \u{b7} Esc: menu";
+const HINT: &str =
+    "WASD: walk \u{b7} Space: jump \u{b7} Ctrl: crouch \u{b7} E or click: use \u{b7} Esc: menu";
 /// The hint while the mouse is let go in the browser, with the menu
 /// closed: a click on the view captures it again.
 const WAITING_HINT: &str = "Click to look around \u{b7} Esc: menu";
@@ -156,6 +189,22 @@ const HINT_SIZE: f32 = 14.0;
 const HINT_BOTTOM: f32 = 22.0;
 /// Room round the hint's text, in points.
 const HINT_PAD: f32 = 7.0;
+
+/// A view held while the figure grips a valve, the knob or the crank (see
+/// `Walker::grip`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Grip {
+    /// The yaw the view was at, and springs back to.
+    yaw: f32,
+    /// The pitch the view was at, and springs back to.
+    pitch: f32,
+    /// How far the mouse has pushed the view since, in yaw and pitch, before
+    /// the push past `GRIP_LIMIT` is softened. The mouse pushes it the
+    /// other way to its moves, as it turns the view.
+    push: Vec2,
+    /// Whether the figure still grips.
+    holding: bool,
+}
 
 /// What a step of walking came to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -172,6 +221,10 @@ pub enum Walked {
 pub struct Walker {
     /// Its eyes.
     pub eye: Vec3,
+    /// While it grips something, or a gripped view springs back: the
+    /// angles the view was at, how far the mouse has pushed it since in
+    /// yaw and pitch, and whether it still grips.
+    grip: Option<Grip>,
     /// The middle of its feet.
     feet: Vec3,
     /// How fast and which way it moves.
@@ -243,6 +296,7 @@ impl Walker {
             pitch: look.y.asin(),
             last: None,
             settling: SETTLE_MOVES,
+            grip: None,
         }
     }
 
@@ -272,6 +326,7 @@ impl Walker {
     pub fn walk(&mut self, keys: FirstPersonKeys, dt: f32, map: &WalkMap) -> Walked {
         let dt = dt.max(0.0);
         let unit = self.unit;
+        self.spring_view(dt);
         self.eye_lag *= (-dt / EYE_GLIDE_SECONDS).exp();
         self.crouch_for(keys.crouch, dt, map);
         // Along the table.
@@ -427,24 +482,124 @@ impl Walker {
     }
 
     /// Turns the head by how far the captured mouse moved to `pointer`
-    /// since the last call, `sensitivity` times the usual. The first call after a capture only notes where
-    /// it is, the first moves after it are ignored, and a single frame's
-    /// turn is held to `MAX_LOOK_STEP`.
-    pub fn look(&mut self, pointer: Vec2, sensitivity: f32) {
+    /// since the last call, `sensitivity` times the usual, and returns how
+    /// far it moved, in points. The first call after a capture only notes
+    /// where it is, the first moves after it are ignored, and a single
+    /// frame's move is held to `MAX_LOOK_STEP`. While the figure grips
+    /// something, the mouse moves the view freely within `GRIP_LIMIT` of
+    /// where it was, and past it only a little, against a spring.
+    pub fn look(&mut self, pointer: Vec2, sensitivity: f32) -> Vec2 {
         let moved = self.last.map(|last| pointer - last);
-        if let Some(moved) = moved.filter(|moved| *moved != Vec2::ZERO) {
-            if self.settling > 0 {
-                self.settling -= 1;
-                self.last = Some(pointer);
-                return;
-            }
-            let moved = moved.clamp_length_max(MAX_LOOK_STEP);
-            let turn = LOOK_SENSITIVITY * sensitivity;
-            self.yaw -= moved.x * turn;
-            let limit = FRAC_PI_2 - LOOK_MARGIN;
-            self.pitch = (self.pitch - moved.y * turn).clamp(-limit, limit);
-        }
         self.last = Some(pointer);
+        let Some(moved) = moved.filter(|moved| *moved != Vec2::ZERO) else {
+            return Vec2::ZERO;
+        };
+        if self.settling > 0 {
+            self.settling -= 1;
+            return Vec2::ZERO;
+        }
+        let moved = moved.clamp_length_max(MAX_LOOK_STEP);
+        let turn = LOOK_SENSITIVITY * sensitivity;
+        let limit = FRAC_PI_2 - LOOK_MARGIN;
+        match self.grip.as_mut() {
+            Some(grip) if grip.holding => {
+                // Past this the give is all but used up anyway, and a push
+                // stored beyond it would only keep the view from springing
+                // back in time.
+                let most = Vec2::splat(GRIP_LIMIT + GRIP_PUSH_MOST * GRIP_GIVE);
+                grip.push = (grip.push - moved * turn).clamp(-most, most);
+            }
+            // Let go and springing back, the view turns with the mouse at
+            // once, the spring easing out on top.
+            Some(grip) => {
+                grip.yaw -= moved.x * turn;
+                grip.pitch = (grip.pitch - moved.y * turn).clamp(-limit, limit);
+            }
+            None => {
+                self.yaw -= moved.x * turn;
+                self.pitch = (self.pitch - moved.y * turn).clamp(-limit, limit);
+            }
+        }
+        moved
+    }
+
+    /// Grips something: from now the mouse pushes the view against a
+    /// spring rather than turning it (see `look`).
+    pub fn grip(&mut self) {
+        let (yaw, pitch) = match self.grip {
+            // Gripped again while springing back: from where it was.
+            Some(grip) => (grip.yaw, grip.pitch),
+            None => (self.yaw, self.pitch),
+        };
+        let push = self.grip.map_or(Vec2::ZERO, |grip| grip.push);
+        self.grip = Some(Grip {
+            yaw,
+            pitch,
+            push,
+            holding: true,
+        });
+    }
+
+    /// Lets go of what it grips; the view springs back to where it was.
+    pub fn let_go(&mut self) {
+        if let Some(grip) = self.grip.as_mut() {
+            grip.holding = false;
+        }
+    }
+
+    /// Whether it grips something.
+    pub fn gripping(&self) -> bool {
+        self.grip.is_some_and(|grip| grip.holding)
+    }
+
+    /// How hard a gripped view leans on the edge of its room sideways, the
+    /// way the mouse went to get there: 0 short of the edge, 1 at it, and up
+    /// to `1 + GRIP_PUSH_MOST` pushed into the give past it; positive to
+    /// the right. Held at the edge, a valve keeps turning.
+    pub fn grip_lean(&self) -> f32 {
+        let Some(grip) = self.grip.filter(|grip| grip.holding) else {
+            return 0.0;
+        };
+        let side = grip.push.x.abs();
+        if side < GRIP_EDGE_SHARE * GRIP_LIMIT {
+            return 0.0;
+        }
+        let into_give = ((side - GRIP_LIMIT) / GRIP_GIVE).clamp(0.0, GRIP_PUSH_MOST);
+        // The push is the other way to the mouse.
+        -grip.push.x.signum() * (1.0 + into_give)
+    }
+
+    /// Springs a gripped view pushed past `GRIP_LIMIT` back to it, or a
+    /// let-go view back to where it was, for `dt` seconds, and turns the
+    /// head to it.
+    fn spring_view(&mut self, dt: f32) {
+        let Some(mut grip) = self.grip else {
+            return;
+        };
+        let seconds = if grip.holding {
+            GRIP_SPRING_SECONDS
+        } else {
+            GRIP_RETURN_SECONDS
+        };
+        let decay = (-dt.max(0.0) / seconds).exp();
+        // Held, the view stays anywhere within the limit; let go, it goes
+        // all the way back.
+        let rest = if grip.holding {
+            grip.push
+                .clamp(Vec2::splat(-GRIP_LIMIT), Vec2::splat(GRIP_LIMIT))
+        } else {
+            Vec2::ZERO
+        };
+        grip.push = rest + (grip.push - rest) * decay;
+        let held = vec2(grip_view(grip.push.x), grip_view(grip.push.y));
+        self.yaw = grip.yaw + held.x;
+        self.pitch = grip.pitch + held.y;
+        let settled = !grip.holding && grip.push.length() < GRIP_SETTLED;
+        self.grip = (!settled).then_some(grip);
+        if settled {
+            self.yaw = grip.yaw;
+            self.pitch = grip.pitch;
+        }
     }
 
     /// Forgets the mouse, which is let go; once captured again, its first
@@ -468,13 +623,52 @@ impl Walker {
     }
 }
 
-/// Draws the crosshair in the middle of a window `width` by `height`, and
-/// the hint under it, saying a click captures the mouse while `waiting`
-/// for one.
-pub fn draw_view(pen: &mut Pen, width: f32, height: f32, waiting: bool) {
+/// What the crosshair is on, for drawing it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Aim {
+    /// The caption under it: what is aimed at and what E does, or what to
+    /// do with what is in use; nothing if it is on nothing.
+    pub caption: Option<&'static str>,
+    /// Whether something is in use, gripped, held or carried.
+    pub using: bool,
+}
+
+/// Draws the crosshair in the middle of a window `width` by `height`, grown
+/// into a ring over something within reach and filled while it is in use,
+/// with `aim`'s caption under it, and the hint at the bottom, saying a
+/// click captures the mouse while `waiting` for one.
+pub fn draw_view(pen: &mut Pen, width: f32, height: f32, waiting: bool, aim: Aim) {
     let middle = vec2(width, height) / 2.0;
+    if aim.caption.is_some() || aim.using {
+        let ring = |radius: f32, color: Color| {
+            for piece in 0..AIM_RING_PIECES {
+                let angle = |at: usize| std::f32::consts::TAU * at as f32 / AIM_RING_PIECES as f32;
+                let from = middle + Vec2::from_angle(angle(piece)) * radius;
+                let to = middle + Vec2::from_angle(angle(piece + 1)) * radius;
+                pen.line(from, to, AIM_RING_THICKNESS, color);
+            }
+        };
+        ring(AIM_RING + AIM_RING_THICKNESS / 2.0, CROSSHAIR_SHADE);
+        ring(AIM_RING, CROSSHAIR);
+        if aim.using {
+            pen.circle(middle, AIM_RING / 2.0, CROSSHAIR);
+        }
+    }
     pen.circle(middle, CROSSHAIR_RING, CROSSHAIR_SHADE);
     pen.circle(middle, CROSSHAIR_RADIUS, CROSSHAIR);
+    if let Some(caption) = aim.caption.filter(|caption| !caption.is_empty()) {
+        let text = pen.measure(caption, CAPTION_SIZE);
+        let baseline = middle.y + CAPTION_BELOW;
+        let left = middle.x - text / 2.0;
+        let shade = Rect::new(
+            left - HINT_PAD,
+            baseline - CAPTION_SIZE - HINT_PAD / 2.0,
+            text + 2.0 * HINT_PAD,
+            CAPTION_SIZE + 2.0 * HINT_PAD,
+        );
+        pen.round_rect(shade, shade.h / 2.0, BACKING);
+        pen.text(caption, left, baseline, CAPTION_SIZE, CROSSHAIR);
+    }
     let hint = if waiting { WAITING_HINT } else { HINT };
     let text = pen.measure(hint, HINT_SIZE);
     let baseline = height - HINT_BOTTOM;
@@ -487,6 +681,18 @@ pub fn draw_view(pen: &mut Pen, width: f32, height: f32, waiting: bool) {
     );
     pen.round_rect(shade, shade.h / 2.0, BACKING);
     pen.text(hint, left, baseline, HINT_SIZE, QUIET);
+}
+
+/// How far a gripped view turns for a `push` of the mouse, in radians:
+/// all of it within `GRIP_LIMIT`, and past it a little more, never past
+/// `GRIP_GIVE` further.
+fn grip_view(push: f32) -> f32 {
+    let past = push.abs() - GRIP_LIMIT;
+    if past <= 0.0 {
+        push
+    } else {
+        push.signum() * (GRIP_LIMIT + GRIP_GIVE * (past / GRIP_GIVE).tanh())
+    }
 }
 
 #[cfg(test)]

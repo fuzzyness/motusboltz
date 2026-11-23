@@ -67,7 +67,7 @@ fn the_hints_can_be_drawn() {
 /// The table under the default engine, the cartridge seated.
 fn table_map(shape: BlockShape) -> WalkMap {
     use crate::sim::port::Port;
-    WalkMap::new(shape, Port::new(DEFAULT_GEOMETRY), true)
+    WalkMap::new(shape, Port::new(DEFAULT_GEOMETRY), None)
 }
 
 /// The keys held to walk toward `way` and nothing else.
@@ -398,7 +398,11 @@ fn a_crouched_jump_never_jolts_the_view() {
 #[test]
 fn stepping_up_glides_the_view() {
     let shape = BlockShape::new(DEFAULT_GEOMETRY);
-    let map = WalkMap::new(shape, crate::sim::port::Port::new(DEFAULT_GEOMETRY), false);
+    let map = WalkMap::new(
+        shape,
+        crate::sim::port::Port::new(DEFAULT_GEOMETRY),
+        Some(crate::graphics::cartridge::rest(shape)),
+    );
     let rest = crate::graphics::cartridge::rest(shape);
     let mut walker = Walker::standing(shape);
     let toward = (rest - walker.feet()).with_y(0.0).normalize();
@@ -438,4 +442,123 @@ fn a_crouched_jump_clears_the_clock() {
     };
     assert!(reach(true) > clock + 0.3 * shape.bore, "crouched");
     assert!(reach(false) < clock, "plain");
+}
+
+/// Gripping something, the mouse pushes the view against a spring past
+/// `GRIP_LIMIT`, never more than `GRIP_GIVE` further however far it
+/// moves; let go, the view springs back to where it was.
+#[test]
+fn a_grip_holds_the_view_near_where_it_was() {
+    let shape = BlockShape::new(DEFAULT_GEOMETRY);
+    let map = table_map(shape);
+    let mut walker = Walker::standing(shape);
+    let (yaw, pitch) = (walker.yaw, walker.pitch);
+    walker.look(vec2(100.0, 100.0), 1.0);
+    walker.settling = 0;
+    walker.grip();
+    assert!(walker.gripping());
+    let mut x = 100.0;
+    for _ in 0..30 {
+        x += 100.0;
+        let moved = walker.look(vec2(x, 100.0), 1.0);
+        assert!(moved.x > 0.0, "the mouse's move is told");
+        walker.walk(FirstPersonKeys::default(), FRAME, &map);
+        assert!((walker.yaw - yaw).abs() <= GRIP_LIMIT + GRIP_GIVE + 1e-5);
+    }
+    assert!(
+        (walker.yaw - yaw).abs() > GRIP_LIMIT,
+        "pushed against the spring"
+    );
+    for _ in 0..120 {
+        walker.walk(FirstPersonKeys::default(), FRAME, &map);
+    }
+    assert!(
+        ((walker.yaw - yaw).abs() - GRIP_LIMIT).abs() < 1e-3,
+        "back to the limit, still held there"
+    );
+    walker.let_go();
+    assert!(!walker.gripping());
+    for _ in 0..120 {
+        walker.walk(FirstPersonKeys::default(), FRAME, &map);
+    }
+    assert_eq!(
+        (walker.yaw, walker.pitch),
+        (yaw, pitch),
+        "back where it was"
+    );
+}
+
+/// Gripping something, the view moved within `GRIP_LIMIT` stays where the
+/// mouse leaves it rather than drifting back.
+#[test]
+fn a_grip_keeps_the_view_where_it_is_left_within_the_limit() {
+    let shape = BlockShape::new(DEFAULT_GEOMETRY);
+    let map = table_map(shape);
+    let mut walker = Walker::standing(shape);
+    let yaw = walker.yaw;
+    walker.look(vec2(100.0, 100.0), 1.0);
+    walker.settling = 0;
+    walker.grip();
+    // Half the limit's worth of mouse.
+    let points = 0.5 * GRIP_LIMIT / LOOK_SENSITIVITY;
+    walker.look(vec2(100.0 + points, 100.0), 1.0);
+    walker.walk(FirstPersonKeys::default(), FRAME, &map);
+    let pushed = walker.yaw - yaw;
+    assert!((pushed.abs() - 0.5 * GRIP_LIMIT).abs() < 1e-3);
+    for _ in 0..120 {
+        walker.walk(FirstPersonKeys::default(), FRAME, &map);
+    }
+    assert!((walker.yaw - yaw - pushed).abs() < 1e-5, "still there");
+}
+
+/// Gripping something, the view leans on the edge of its room only once
+/// pushed to it, the way the mouse went, and still does once the push
+/// past the edge has sprung back.
+#[test]
+fn a_grip_leans_on_its_edge_the_way_the_mouse_went() {
+    let shape = BlockShape::new(DEFAULT_GEOMETRY);
+    let map = table_map(shape);
+    let mut walker = Walker::standing(shape);
+    walker.look(vec2(100.0, 100.0), 1.0);
+    walker.settling = 0;
+    walker.grip();
+    let points = 0.5 * GRIP_LIMIT / LOOK_SENSITIVITY;
+    walker.look(vec2(100.0 + points, 100.0), 1.0);
+    assert_eq!(walker.grip_lean(), 0.0, "short of the edge");
+    // Well past it, to the right.
+    walker.look(vec2(100.0 + 4.0 * points, 100.0), 1.0);
+    assert!(walker.grip_lean() > 1.0, "pushed into the give");
+    for _ in 0..120 {
+        walker.walk(FirstPersonKeys::default(), FRAME, &map);
+    }
+    assert!((walker.grip_lean() - 1.0).abs() < 1e-3, "held at the edge");
+    walker.let_go();
+    assert_eq!(walker.grip_lean(), 0.0, "let go");
+}
+
+/// Let go, the view turns with the mouse at once while it springs back.
+#[test]
+fn a_view_let_go_turns_with_the_mouse_at_once() {
+    let shape = BlockShape::new(DEFAULT_GEOMETRY);
+    let map = table_map(shape);
+    let mut walker = Walker::standing(shape);
+    let yaw = walker.yaw;
+    walker.look(vec2(100.0, 100.0), 1.0);
+    walker.settling = 0;
+    walker.grip();
+    let points = 0.5 * GRIP_LIMIT / LOOK_SENSITIVITY;
+    walker.look(vec2(100.0 + points, 100.0), 1.0);
+    walker.walk(FirstPersonKeys::default(), FRAME, &map);
+    walker.let_go();
+    // The same again the other way, just after letting go.
+    walker.look(vec2(100.0, 100.0), 1.0);
+    for _ in 0..30 {
+        walker.walk(FirstPersonKeys::default(), FRAME, &map);
+    }
+    let turned = walker.yaw - yaw;
+    assert!(
+        (turned - 0.5 * GRIP_LIMIT).abs() < 1e-3,
+        "turned by the mouse, not lost to the spring: {turned}"
+    );
+    assert!(!walker.gripping());
 }

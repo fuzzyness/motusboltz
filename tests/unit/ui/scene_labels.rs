@@ -3,11 +3,18 @@
 
 use super::*;
 use crate::app::initial_camera;
+use crate::graphics::cartridge;
 use crate::sim::geometry::DEFAULT_GEOMETRY;
 use crate::sim::units::DEFAULT_PARTICLES;
 use crate::ui::controls::row_top;
 use crate::ui::fonts::tests::drawable;
 use crate::ui::layout::scene_span;
+
+/// Where the cartridge of `engine` lies, if it is out: where it starts.
+fn lying(engine: &ConnectedChambers) -> Option<Vec3> {
+    let shape = BlockShape::new(engine.geometry());
+    (!engine.regenerator().is_enabled()).then(|| cartridge::rest(shape))
+}
 
 /// A filled engine of the default size.
 fn engine() -> ConnectedChambers {
@@ -38,7 +45,7 @@ fn matrix(width: f32, height: f32) -> Mat4 {
 
 #[test]
 fn the_hot_tag_is_left_of_the_cold_one() {
-    let tags = tags(&engine());
+    let tags = tags(&engine(), lying(&engine()));
     let (width, height) = (1440.0, 900.0);
     let size = vec2(width, height);
     let hot = project(matrix(width, height), size, tags[1].anchor).unwrap();
@@ -63,7 +70,7 @@ fn a_point_behind_the_camera_has_no_place() {
 #[test]
 fn the_tags_stay_in_the_scene_apart() {
     let engine = engine();
-    let tags = tags(&engine);
+    let tags = tags(&engine, lying(&engine));
     for (width, height) in [(1440.0, 900.0), (1280.0, 580.0)] {
         let area = area(width, height);
         // A card as wide as the sliders' in the scene's bottom-left
@@ -107,7 +114,10 @@ fn a_tag_grows_out_of_its_dot() {
 fn the_parts_to_press_have_tags() {
     let mut engine = engine();
     let names = |engine: &ConnectedChambers| -> Vec<&str> {
-        tags(engine).iter().map(|tag| tag.name).collect()
+        tags(engine, lying(engine))
+            .iter()
+            .map(|tag| tag.name)
+            .collect()
     };
     let out = names(&engine);
     assert!(out.contains(&"Reset") && out.contains(&"Tracers"));
@@ -173,7 +183,7 @@ fn inside(spot: Spot, eye: Vec3) -> Vec3 {
 #[test]
 fn one_tag_is_under_the_pointer_over_its_part() {
     let engine = engine();
-    let tags = tags(&engine);
+    let tags = tags(&engine, lying(&engine));
     for name in ["Hand crank", "Gas valve", "Nitrogen valve"] {
         assert!(tags.iter().any(|tag| tag.name == name), "{name}");
     }
@@ -208,7 +218,7 @@ fn one_tag_is_under_the_pointer_over_its_part() {
 #[test]
 fn the_opening_and_the_walls_keep_apart() {
     let engine = engine();
-    let tags = tags(&engine);
+    let tags = tags(&engine, lying(&engine));
     let (width, height) = (1440.0, 900.0);
     let (matrix, size) = (matrix(width, height), vec2(width, height));
     let opening = tags.iter().position(|tag| tag.name == "Opening").unwrap();
@@ -238,7 +248,10 @@ fn the_opening_and_the_walls_keep_apart() {
 fn each_tag_keeps_its_own_key() {
     let mut engine = engine();
     let keys = |engine: &ConnectedChambers| -> Vec<&str> {
-        tags(engine).iter().map(|tag| tag.key).collect()
+        tags(engine, lying(engine))
+            .iter()
+            .map(|tag| tag.key)
+            .collect()
     };
     let out = keys(&engine);
     let mut unique = out.clone();
@@ -247,7 +260,7 @@ fn each_tag_keeps_its_own_key() {
     assert_eq!(unique.len(), out.len());
     assert!(out.contains(&CARTRIDGE_KEY));
     engine.set_regenerator(true);
-    let opening = tags(&engine)
+    let opening = tags(&engine, lying(&engine))
         .into_iter()
         .find(|tag| tag.name == "Regenerator")
         .unwrap();

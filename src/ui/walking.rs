@@ -25,7 +25,6 @@ use macroquad::prelude::{
 
 use crate::graphics::block::BlockShape;
 use crate::graphics::buttons::button_boxes;
-use crate::graphics::cartridge;
 use crate::graphics::clock::clock_place;
 use crate::graphics::table::{
     TOP_HALF_DEPTH,
@@ -141,8 +140,8 @@ pub struct WalkMap {
 
 impl WalkMap {
     /// The table under a block of `shape` with the tank's `port`, with the
-    /// cartridge on it unless it is `seated` in the block.
-    pub fn new(shape: BlockShape, port: Port, seated: bool) -> Self {
+    /// cartridge lying on it with its middle at `cartridge`, if it does.
+    pub fn new(shape: BlockShape, port: Port, cartridge: Option<Vec3>) -> Self {
         let unit = shape.bore;
         let level = |point: Vec3| vec2(point.x, point.z);
         let stand = |footprint, top| Obstacle { footprint, top };
@@ -202,9 +201,8 @@ impl WalkMap {
             },
             clock.base.y + clock.height(),
         ));
-        if !seated {
+        if let Some(rest) = cartridge {
             // It lies flat, its middle half its thickness up.
-            let rest = cartridge::rest(shape);
             obstacles.push(stand(
                 Footprint::Round {
                     center: level(rest),
@@ -219,6 +217,12 @@ impl WalkMap {
             floor: shape.base,
             step: STEP_UP * unit,
         }
+    }
+
+    /// `point` brought onto the table, with room round it for `radius`.
+    pub fn onto_table(&self, point: Vec2, radius: f32) -> Vec2 {
+        let room = (self.half_size - Vec2::splat(radius)).max(Vec2::ZERO);
+        point.clamp(-room, room)
     }
 
     /// Whether a figure whose middle is at `point` stands on the table.

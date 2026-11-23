@@ -8,8 +8,15 @@
 //! and slides into the opening. Take it out and it flies back the same
 //! way. Seated, it stands behind the gas in the cold cylinder from most
 //! views, so after the gas is drawn it is drawn again faintly over it,
-//! like a ghost seen through it. Drawing only: what a press does is the
-//! app's.
+//! like a ghost seen through it.
+//!
+//! In first person it can also be carried: picked up from the table or
+//! taken out of the opening into the figure's hands, it floats a little
+//! ahead of the eyes, lagging the view. Brought near the front of the
+//! opening it flies the rest of the way in from there; let go anywhere
+//! else, it falls onto the table and lies where it lands, and flies back
+//! there when the regenerator is next taken out. Drawing only: what a
+//! press does is the app's.
 
 use std::f32::consts::{
     FRAC_PI_2,
@@ -58,7 +65,7 @@ use super::{
 };
 
 /// The cartridge's radius against the opening's, so it slides in.
-const FIT: f32 = 0.97;
+pub const FIT: f32 = 0.97;
 /// Thickness of the cartridge, in bore radii: the shared wall's, so it
 /// fills the opening's length when seated.
 const THICKNESS: f32 = 0.2;
@@ -116,6 +123,25 @@ const ARC_HEIGHT: f32 = 1.6;
 const FLIGHT_SHARE: f32 = 0.65;
 /// Seconds the whole trip takes.
 pub const TRIP_SECONDS: f32 = 1.2;
+/// How far its flight arcs above a straight line, as a share of the
+/// line's length, for a flight shorter than `ARC_HEIGHT` would suit.
+const ARC_SHARE: f32 = 0.5;
+/// Seconds for a carried cartridge to catch up most of the way with where
+/// it is carried to: it lags the view a little.
+const CARRY_LAG_SECONDS: f32 = 0.08;
+/// How fast a dropped cartridge falls, in bore radii a second each second.
+const DROP_GRAVITY: f32 = 40.0;
+/// How far from the front of the opening a carried cartridge flies in by
+/// itself, in bore radii.
+const SNAP_REACH: f32 = 1.3;
+/// How far from the front of the opening a cartridge taken out of it must
+/// be carried before bringing it back flies it in, as a share of
+/// `SNAP_REACH`: it leaves the opening first rather than flying straight
+/// back in.
+const SNAP_REARM: f32 = 1.5;
+/// How near where it is carried to a cartridge must be to be in the
+/// hands, rather than still on its way out of the opening, in bore radii.
+const IN_HANDS: f32 = 0.2;
 /// The steel ring.
 const RING_STEEL: Color = finish(176, 184, 198, 0.75);
 /// The wire mesh.
@@ -138,22 +164,33 @@ pub fn seat(shape: BlockShape) -> Vec3 {
 
 /// Where the cartridge lines up with the opening, in front of the block's
 /// face.
-fn line_up(shape: BlockShape) -> Vec3 {
+pub fn line_up(shape: BlockShape) -> Vec3 {
     seat(shape) + Vec3::Z * (shape.outer + LINE_UP_OUT * shape.bore)
 }
 
 /// Where the cartridge's middle is and how it is turned `progress` of the
-/// way (0 on the table, 1 seated) along its trip into a block of `shape`.
+/// way (0 on the table, 1 seated) along its trip into a block of `shape`
+/// from where it first lies.
+#[cfg(test)]
 pub fn pose(shape: BlockShape, progress: f32) -> (Vec3, Quat) {
+    trip_pose(shape, (rest(shape), Quat::IDENTITY), progress)
+}
+
+/// Where the cartridge's middle is and how it is turned `progress` of the
+/// way along its trip into a block of `shape` from `from`, its middle and
+/// turn where the trip starts: lying on the table, or carried.
+pub fn trip_pose(shape: BlockShape, from: (Vec3, Quat), progress: f32) -> (Vec3, Quat) {
     let progress = progress.clamp(0.0, 1.0);
     // Lying flat on the table its axis is upright; in the opening it runs
     // along the shaft.
     let seated = Quat::from_rotation_z(-FRAC_PI_2);
+    let (start, turned) = from;
     if progress < FLIGHT_SHARE {
         let share = smoothstep(0.0, 1.0, progress / FLIGHT_SHARE);
-        let arc = (PI * share).sin() * ARC_HEIGHT * shape.bore;
-        let center = rest(shape).lerp(line_up(shape), share) + Vec3::Y * arc;
-        (center, Quat::IDENTITY.slerp(seated, share))
+        let height = (ARC_HEIGHT * shape.bore).min(ARC_SHARE * start.distance(line_up(shape)));
+        let arc = (PI * share).sin() * height;
+        let center = start.lerp(line_up(shape), share) + Vec3::Y * arc;
+        (center, turned.slerp(seated, share))
     } else {
         let share = smoothstep(0.0, 1.0, (progress - FLIGHT_SHARE) / (1.0 - FLIGHT_SHARE));
         (line_up(shape).lerp(seat(shape), share), seated)
@@ -208,6 +245,19 @@ pub struct Cartridge {
     placed: Mat4,
     /// How far along its trip into the opening it is, from 0 to 1.
     progress: f32,
+    /// Where its middle lies on the table when it is out.
+    lying: Vec3,
+    /// Its middle and turn where its trip starts: lying on the table, or
+    /// where it was let go of to fly in.
+    from: (Vec3, Quat),
+    /// Its middle and turn while carried.
+    carried: Option<(Vec3, Quat)>,
+    /// Whether, carried, it flies in once brought near the opening: not
+    /// until it has been carried away from it after being taken out.
+    snaps: bool,
+    /// A fall onto the table under way: its middle and turn when let go,
+    /// and seconds since.
+    falling: Option<((Vec3, Quat), f32)>,
     /// The clock at the last pose, if there was one.
     last_seconds: Option<f64>,
     /// The block it goes into.
@@ -251,6 +301,11 @@ impl Cartridge {
             }),
             placed: Mat4::IDENTITY,
             progress: if seated { 1.0 } else { 0.0 },
+            lying: rest(shape),
+            from: (rest(shape), Quat::IDENTITY),
+            carried: None,
+            snaps: false,
+            falling: None,
             last_seconds: None,
             shape,
             material: None,
@@ -260,24 +315,131 @@ impl Cartridge {
 
     /// Whether it is all the way into the opening.
     pub fn seated(&self) -> bool {
-        self.progress >= 1.0
+        self.progress >= 1.0 && self.carried.is_none()
+    }
+
+    /// Whether it lies still on the table, out of the opening.
+    pub fn lies_on_table(&self) -> bool {
+        self.progress <= 0.0 && self.carried.is_none() && self.falling.is_none()
+    }
+
+    /// Where its middle lies on the table when it is out, or will once it
+    /// has landed.
+    pub fn lying(&self) -> Vec3 {
+        self.lying
+    }
+
+    /// Where its middle is while it is carried.
+    pub fn carried(&self) -> Option<Vec3> {
+        self.carried.map(|(center, _)| center)
+    }
+
+    /// Where its middle is and how it is turned now.
+    fn now(&self) -> (Vec3, Quat) {
+        if let Some(carried) = self.carried {
+            return carried;
+        }
+        if let Some(((start, turned), seconds)) = self.falling {
+            // Down onto where it will lie, settling flat as it falls.
+            let height = (start.y - self.lying.y).max(0.0);
+            let fall = (DROP_GRAVITY * self.shape.bore * seconds * seconds / 2.0).min(height);
+            let share = if height > 0.0 { fall / height } else { 1.0 };
+            let level = start.lerp(self.lying, share);
+            let center = vec3(level.x, start.y - fall, level.z);
+            return (center, turned.slerp(Quat::IDENTITY, share));
+        }
+        trip_pose(self.shape, self.from, self.progress)
+    }
+
+    /// Takes it into the figure's hands from wherever it is: off the table,
+    /// or out of the opening.
+    pub fn pick_up(&mut self) {
+        // Off the table it may fly in at once; out of the opening, not
+        // until it has been carried away (see `carry`).
+        self.snaps = self.progress <= 0.0;
+        self.carried = Some(self.now());
+        self.falling = None;
+        self.progress = 0.0;
+        self.from = (self.lying, Quat::IDENTITY);
+    }
+
+    /// Carries it for `dt` seconds toward `center`, turned `turn`, lagging
+    /// a little behind.
+    pub fn carry(&mut self, center: Vec3, turn: Quat, dt: f32) {
+        let Some((at, turned)) = self.carried else {
+            return;
+        };
+        let share = 1.0 - (-dt.max(0.0) / CARRY_LAG_SECONDS).exp();
+        let at = at.lerp(center, share);
+        self.carried = Some((at, turned.slerp(turn, share)));
+        let in_hands = at.distance(center) < IN_HANDS * self.shape.bore;
+        self.snaps |= in_hands && !self.near_opening(at, SNAP_REARM);
+    }
+
+    /// Whether `at` is within `share` of `SNAP_REACH` of the front of the
+    /// opening.
+    fn near_opening(&self, at: Vec3, share: f32) -> bool {
+        at.distance(line_up(self.shape)) < share * SNAP_REACH * self.shape.bore
+    }
+
+    /// Whether it is carried near enough the opening to fly in: within
+    /// `SNAP_REACH` of its front, and carried away from it first if it was
+    /// taken out of it.
+    pub fn by_opening(&self) -> bool {
+        self.snaps && self.carried().is_some_and(|at| self.near_opening(at, 1.0))
+    }
+
+    /// Lets go of it to fall onto the table with its middle at `spot`, where
+    /// it then lies.
+    pub fn drop_onto(&mut self, spot: Vec3) {
+        if let Some(carried) = self.carried.take() {
+            self.lying = vec3(spot.x, rest(self.shape).y, spot.z);
+            self.from = (self.lying, Quat::IDENTITY);
+            self.falling = Some((carried, 0.0));
+        }
+    }
+
+    /// Lets go of it to fly into the opening from where it is carried; the
+    /// regenerator goes in with it.
+    pub fn fly_in(&mut self) {
+        if let Some(carried) = self.carried.take() {
+            self.from = carried;
+            self.progress = 0.0;
+        }
     }
 
     /// Moves it along its trip toward the opening while `inside` and back
-    /// to the table otherwise, at `seconds` on the clock.
+    /// to the table otherwise, at `seconds` on the clock; carried, it
+    /// stays in hand, and let go, it falls.
     pub fn follow(&mut self, inside: bool, seconds: f64) {
-        let step = self
+        let dt = self
             .last_seconds
-            .map_or(0.0, |last| (seconds - last).max(0.0) as f32 / TRIP_SECONDS);
+            .map_or(0.0, |last| (seconds - last).max(0.0) as f32);
         self.last_seconds = Some(seconds);
+        if self.carried.is_some() {
+            return;
+        }
+        if let Some((start, fallen)) = self.falling {
+            let fallen = fallen + dt;
+            let height = (start.0.y - self.lying.y).max(0.0);
+            let done = DROP_GRAVITY * self.shape.bore * fallen * fallen / 2.0 >= height;
+            self.falling = (!done).then_some((start, fallen));
+            return;
+        }
+        let step = dt / TRIP_SECONDS;
         // Turned back halfway, a trip starts back from where it is.
         let target = if inside { 1.0 } else { 0.0 };
         self.progress += (target - self.progress).clamp(-step, step);
+        // Seated, a trip out goes back to where it lies on the table.
+        if self.progress >= 1.0 {
+            self.from = (self.lying, Quat::IDENTITY);
+        }
     }
 
-    /// Draws it seen from `camera`, on the table, on its way or seated.
+    /// Draws it seen from `camera`, on the table, on its way, seated,
+    /// carried or falling.
     pub fn draw(&mut self, camera: &Camera3D) {
-        let (center, turn) = pose(self.shape, self.progress);
+        let (center, turn) = self.now();
         self.placed = Mat4::from_rotation_translation(turn, center);
         let light = key_light(camera.position);
         draw_lit_placed(

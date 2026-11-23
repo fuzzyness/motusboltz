@@ -33,7 +33,6 @@ use crate::graphics::buttons::{
     ButtonBox,
     button_boxes, //
 };
-use crate::graphics::cartridge;
 use crate::graphics::clock::clock_place;
 use crate::graphics::tank::tank_place;
 use crate::graphics::valves::{
@@ -295,8 +294,9 @@ const VALVE_REACH: f32 = 1.3;
 
 /// The tags for the engine of `engine`, the system's first and the
 /// buttons' and cartridge's last: where two would overlap, the later one
-/// gives way. The cartridge has one only while it lies on the table.
-pub fn tags(engine: &ConnectedChambers) -> Vec<Tag> {
+/// gives way. The cartridge has one only while it lies on the table, its
+/// middle at `cartridge`.
+pub fn tags(engine: &ConnectedChambers, cartridge: Option<Vec3>) -> Vec<Tag> {
     let geometry = engine.geometry();
     let outer = geometry.cylinder_radius + WALL_THICKNESS;
     let shaft = engine.power_pistons().shaft_height();
@@ -477,8 +477,7 @@ pub fn tags(engine: &ConnectedChambers) -> Vec<Tag> {
             radius: CLOCK_REACH * clock.radius(),
         }],
     });
-    if !engine.regenerator().is_enabled() {
-        let rest = cartridge::rest(shape);
+    if let Some(rest) = cartridge {
         tags.push(Tag {
             key: CARTRIDGE_KEY,
             name: "Regenerator",
@@ -712,7 +711,7 @@ pub fn grown_from(dot: Vec2, rect: Rect, grown: f32) -> Rect {
     )
 }
 
-/// Draws the tags of `engine` seen through `matrix` in `area`, clear of
+/// Draws `tags`, of the engine, seen through `matrix` in `area`, clear of
 /// `cards`, each grown out of its dot by its share in `grown`, in the
 /// order of `tags`, from 0 (gone) to 1 (full size).
 ///
@@ -723,7 +722,7 @@ pub fn grown_from(dot: Vec2, rect: Rect, grown: f32) -> Rect {
 /// `shifts` was ticked for, its move kept there from frame to frame.
 pub fn draw(
     pen: &mut Pen,
-    engine: &ConnectedChambers,
+    tags: &[Tag],
     matrix: Mat4,
     area: SceneArea,
     cards: &[Rect],
@@ -731,8 +730,9 @@ pub fn draw(
     shifts: &mut Shifts,
 ) {
     // Only the tags that show take room.
-    let (tags, grown): (Vec<Tag>, Vec<f32>) = tags(engine)
-        .into_iter()
+    let (tags, grown): (Vec<Tag>, Vec<f32>) = tags
+        .iter()
+        .cloned()
         .zip(grown.iter().copied())
         .filter(|&(_, grown)| grown > 0.0)
         .unzip();

@@ -1,6 +1,7 @@
 //! Tests for what stands in the figure's way, `src/ui/walking.rs`.
 
 use super::*;
+use crate::graphics::cartridge;
 use crate::sim::geometry::DEFAULT_GEOMETRY;
 use crate::sim::port::Port;
 use crate::ui::first_person::{
@@ -14,7 +15,11 @@ fn map(seated: bool) -> (BlockShape, WalkMap) {
     let shape = BlockShape::new(DEFAULT_GEOMETRY);
     (
         shape,
-        WalkMap::new(shape, Port::new(DEFAULT_GEOMETRY), seated),
+        WalkMap::new(
+            shape,
+            Port::new(DEFAULT_GEOMETRY),
+            (!seated).then(|| cartridge::rest(shape)),
+        ),
     )
 }
 

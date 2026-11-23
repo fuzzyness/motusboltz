@@ -3,9 +3,12 @@
 
 use macroquad::prelude::{
     KeyCode,
+    MouseButton,
     Vec2,
     is_key_down,
     is_key_pressed,
+    is_mouse_button_down,
+    is_mouse_button_pressed,
     mouse_wheel, //
 };
 
@@ -214,9 +217,15 @@ impl CameraKeys {
 /// cannot stop.
 const CROUCH_KEYS: [KeyCode; 3] = [KeyCode::LeftControl, KeyCode::RightControl, KeyCode::C];
 
+/// The key that uses things in first person; the orbit view has it put the
+/// regenerator in or take it out.
+const USE_KEY: KeyCode = REGENERATOR_KEY;
+/// Uses things in first person as E does, to try which suits better.
+const USE_BUTTON: MouseButton = MouseButton::Left;
+
 /// The keys first person has, which are only the basics: walking with WASD
-/// or the arrows, jumping with Space and crouching with Ctrl. Every other
-/// shortcut is the orbit view's.
+/// or the arrows, jumping with Space, crouching with Ctrl and using things
+/// with E. Every other shortcut is the orbit view's.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FirstPersonKeys {
     /// The way the walking keys point, x to the right and y ahead, each
@@ -226,15 +235,23 @@ pub struct FirstPersonKeys {
     pub jump: bool,
     /// Whether a crouch key is held.
     pub crouch: bool,
+    /// Whether E or the left mouse button, which use things, is held.
+    pub use_held: bool,
+    /// Whether E or the left mouse button was pressed this frame.
+    pub use_pressed: bool,
 }
 
 impl FirstPersonKeys {
-    /// The first-person keys this frame.
-    pub fn read() -> Self {
+    /// The first-person keys this frame, with the left mouse button only
+    /// while the mouse is `captured`: until then a click captures it.
+    pub fn read(captured: bool) -> Self {
+        let button = |read: fn(MouseButton) -> bool| captured && read(USE_BUTTON);
         Self {
             way: walk_keys_from(is_key_down),
             jump: is_key_pressed(GO_KEY),
             crouch: CROUCH_KEYS.into_iter().any(is_key_down),
+            use_held: is_key_down(USE_KEY) || button(is_mouse_button_down),
+            use_pressed: is_key_pressed(USE_KEY) || button(is_mouse_button_pressed),
         }
     }
 }

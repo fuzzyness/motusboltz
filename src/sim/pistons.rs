@@ -467,6 +467,30 @@ impl PowerPistons {
         true
     }
 
+    /// Turns the shaft by hand at `speed` (radians per second of model
+    /// time) either way: forward, in the heat-engine direction, for a
+    /// positive speed, as `crank` does, and backward for a negative one,
+    /// with a ratchet that way too.
+    ///
+    /// Backward it likewise catches only a shaft turning backward slower
+    /// than the hand, or forward, and never drives it past the starting
+    /// speed. The change in flywheel energy is booked as starter work.
+    /// Returns whether the speed changed.
+    pub fn crank_either_way(&mut self, speed: f64) -> bool {
+        if speed >= 0.0 {
+            return self.crank(speed);
+        }
+        let speed = (-speed).min(self.start_speed);
+        if -self.angular_velocity * FORWARD >= speed {
+            return false;
+        }
+        self.let_go();
+        let before = self.kinetic_energy();
+        self.angular_velocity = -FORWARD * speed;
+        self.starter_work += self.kinetic_energy() - before;
+        true
+    }
+
     /// Adds a fixed change in speed in the heat-engine direction, worth
     /// `STARTER_ENERGY` from rest.
     ///
@@ -497,6 +521,12 @@ impl PowerPistons {
     /// Signed angular speed, in radians per second of model time.
     pub fn angular_velocity(&self) -> f32 {
         self.angular_velocity as f32
+    }
+
+    /// The speed Start gives, and the most the hand crank does, in radians
+    /// per second of model time.
+    pub fn start_speed(&self) -> f64 {
+        self.start_speed
     }
 
     /// Speed in the heat-engine direction as a share of the speed Start

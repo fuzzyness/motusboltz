@@ -30,6 +30,7 @@ use macroquad::prelude::{
     KeyCode,
     Mat4,
     MouseButton,
+    Quat,
     Rect,
     Vec2,
     Vec3,
@@ -121,6 +122,7 @@ use crate::ui::energy_strip;
 use crate::ui::figure::{self, Drag};
 use crate::ui::first_person::{
     self,
+    Aim,
     Walked,
     Walker, //
 };
@@ -178,7 +180,27 @@ use crate::ui::panel::{
 use crate::ui::pen::Pen;
 use crate::ui::physics_budget::PhysicsBudget;
 use crate::ui::physics_runner::PhysicsRunner;
-use crate::ui::scene_labels;
+use crate::ui::reach::{
+    BUTTON_AIM,
+    CARRY_AHEAD,
+    CARRY_BELOW,
+    CARTRIDGE_AIM,
+    CRANK_AIM,
+    CartridgeState,
+    EDGE_TURN_PER_SECOND,
+    KNOB_AIM,
+    REACH,
+    TURN_PER_POINT,
+    Usable,
+    VALVE_AIM,
+    aimed,
+    caption,
+    using_caption, //
+};
+use crate::ui::scene_labels::{
+    self,
+    project, //
+};
 use crate::ui::shortcuts;
 use crate::ui::start_prompt::StartPrompt;
 use crate::ui::walking::WalkMap;
@@ -235,6 +257,17 @@ const MAX_CAMERA_DT: f32 = 0.1;
 /// passes per frame, never the physics, and it also lightens the work per
 /// frame.
 const SLOW_MOTION_FACTOR: f32 = 0.25;
+/// Share of the starting speed the hand crank brings the shaft to, either
+/// way, at which the engine has caught and the crank lets go.
+const CAUGHT_SHARE: f64 = 0.999;
+/// How far the hand crank's handle turns in one grab before it takes up
+/// the shaft at all, in radians, about 15 degrees: a slight move of the
+/// mouse does not start the engine.
+const CRANK_SLACK: f32 = 0.26;
+/// How far past `CRANK_SLACK` the handle turns, one way, before the crank
+/// can bring the shaft up to the starting speed, in radians, about 45
+/// degrees, the speed it can give growing along the way.
+const CRANK_WIND_UP: f32 = 0.8;
 /// How many particles tracers follow: enough to catch both cylinders and the
 /// opening, few enough to follow by eye.
 const FOLLOWED_PARTICLES: usize = 6;
@@ -321,6 +354,18 @@ pub async fn run() {
 }
 
 /// Everything the app keeps from frame to frame.
+/// What the figure uses with E in first person.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Using {
+    /// What is in use.
+    handle: Handle,
+    /// The crank's turn, followed as a grab with the mouse is.
+    grab: Grab,
+    /// Where on the screen a pointer the mouse moves would be, for the
+    /// crank, starting on its handle.
+    pointer: Vec2,
+}
+
 struct App {
     /// The engine; a stand-in while the physics thread steps it (see
     /// `PhysicsRunner`).
@@ -353,6 +398,17 @@ struct App {
     grab: Option<Grab>,
     /// The desk clock's time and the press on it, if any.
     desk_clock: DeskClock,
+    /// Whether the hand crank is locked: once it brings the engine up to
+    /// its starting speed the engine has caught and runs by itself, and the
+    /// crank cannot be grabbed again until the engine is refilled or comes
+    /// to rest, when the Start prompt shows again.
+    crank_locked: bool,
+    /// How far the crank's handle has been turned one way in the grab under
+    /// way, in radians, signed as the shaft's angle is counted: it starts
+    /// the shaft only gradually (see `CRANK_SLACK` and `CRANK_WIND_UP`).
+    crank_wound: f32,
+    /// What the figure uses with E in first person, if anything.
+    using: Option<Using>,
     /// The simulation is paused.
     paused: bool,
     /// Slow motion is on.
@@ -461,6 +517,9 @@ impl App {
                 DEFAULT_CONCENTRATION,
             ),
             desk_clock: DeskClock::new(),
+            crank_locked: false,
+            crank_wound: 0.0,
+            using: None,
             paused: false,
             slow: false,
             tracers: false,
@@ -722,20 +781,26 @@ impl App {
         // First person has only the basics (see `FirstPersonKeys`); the
         // other shortcuts are the orbit view's.
         let mut moves = FirstPersonKeys::default();
+        let mut moved = Vec2::ZERO;
         if !self.menu.open {
             if held {
-                walker.look(pointer, self.menu.sensitivity);
+                moved = walker.look(pointer, self.menu.sensitivity);
             } else {
                 // In the browser, with the mouse let go and the menu closed
                 // by Esc, a click on the view captures it again.
                 self.armed = Arm::Capture;
             }
-            moves = FirstPersonKeys::read();
+            moves = FirstPersonKeys::read(held);
+        }
+        let aim = self.use_things(&mut walker, moves, moved, dt, size);
+        // Gripping something, it stands still to turn it.
+        if walker.gripping() {
+            moves.way = Vec2::ZERO;
+            moves.jump = false;
         }
         // With the menu open it stops, or goes on falling.
         let shape = BlockShape::new(self.simulation.geometry());
-        let seated = self.simulation.regenerator().is_enabled();
-        let map = WalkMap::new(shape, self.simulation.port(), seated);
+        let map = WalkMap::new(shape, self.simulation.port(), self.cartridge_on_table());
         if walker.walk(moves, dt, &map) == Walked::Fell {
             // Back at the start, facing the engine, the mouse as it was.
             walker = Walker::standing(shape);
@@ -749,7 +814,7 @@ impl App {
         diagnostics::wait_for_card(Section::CardScene);
         let waiting = !self.menu.open && page::capture() == Capture::Free;
         for pen in [&mut Pen::warm(), &mut Pen::screen()] {
-            first_person::draw_view(pen, size.x, size.y, waiting);
+            first_person::draw_view(pen, size.x, size.y, waiting, aim);
             self.menu.draw(pen, size, pointer, true);
         }
     }
@@ -955,6 +1020,10 @@ impl App {
 
     /// Dissolves back to the orbit view as it was left, and frees the mouse.
     fn leave_first_person(&mut self) {
+        // Whatever is in use is let go: the cartridge falls.
+        if let (Some(using), Some(mut walker)) = (self.using.take(), self.walker) {
+            self.stop_using(using.handle, &mut walker);
+        }
         self.walker = None;
         // Told first, so the page does not take the mouse let go below for
         // a wish to open the menu.
@@ -1074,9 +1143,8 @@ impl App {
                 .grab
                 .take()
                 .is_some_and(|grab| grab.handle == Handle::Clock);
-            if clock && self.desk_clock.release() == Some(PressEnd::Click) {
-                self.slow = !self.slow;
-                self.controls.press(Action::ToggleSlow);
+            if clock {
+                self.release_clock();
             }
             return;
         }
@@ -1093,10 +1161,9 @@ impl App {
             let cartridge = if self.simulation.regenerator().is_enabled() {
                 cartridge::seat(shape)
             } else {
-                cartridge::rest(shape)
+                self.scene.cartridge().lying()
             };
-            let handles = [
-                (Handle::Crank, crank.handle(pistons.angle())),
+            let mut handles = vec![
                 (Handle::Valve(ReservoirSide::Hot), wheels[0].center),
                 (Handle::Valve(ReservoirSide::Cold), wheels[1].center),
                 (Handle::ResetButton, reset.dome_top()),
@@ -1105,7 +1172,13 @@ impl App {
                 (Handle::TankKnob, knob),
                 (Handle::Clock, clock_place(shape).face()),
             ];
+            // A crank the engine has caught turns by itself; it cannot be
+            // grabbed until the engine is refilled or comes to rest.
+            if !self.crank_locked {
+                handles.push((Handle::Crank, crank.handle(pistons.angle())));
+            }
             self.grab = pick(&handles, matrix, size, pointer).map(Grab::new);
+            self.crank_wound = 0.0;
             if let Some(handle) = self.grab.map(|grab| grab.handle).filter(|h| h.presses()) {
                 self.press(handle);
             }
@@ -1125,12 +1198,10 @@ impl App {
                 let plane = crank.handle(pistons.angle());
                 let point = ray.and_then(|ray| ray.meet(plane, Vec3::X));
                 let turn = grab.turned(point.map(|point| crank.angle_of(point)));
-                let pace = if self.slow { SLOW_MOTION_FACTOR } else { 1.0 };
-                let model_dt = (dt * pace) as f64;
-                // The shaft's angle falls as it turns forward.
-                let speed = turn as f64 * FORWARD / model_dt;
-                if model_dt > 0.0 && speed > 0.0 && self.simulation.crank_engine(speed) {
-                    self.paused = false;
+                if self.turn_crank(turn, dt) {
+                    // Caught: the engine runs on by itself now.
+                    self.grab = None;
+                    return;
                 }
             }
             Handle::Valve(side) => {
@@ -1140,39 +1211,14 @@ impl App {
                 };
                 let point = ray.and_then(|ray| ray.meet(wheel.center, Vec3::Y));
                 let turn = grab.turned(point.map(|point| wheel_angle(wheel.center, point)));
-                if turn != 0.0 {
-                    let setting = match side {
-                        ReservoirSide::Hot => &mut self.settings.0,
-                        ReservoirSide::Cold => &mut self.settings.1,
-                    };
-                    let opening = valve_opening(side, *setting) + turn / (VALVE_TURNS * TAU);
-                    *setting = valve_kelvin(side, opening);
-                    self.controls.set_kelvin(self.settings.0, self.settings.1);
-                    // The demo's banner would no longer be true.
-                    self.demo = None;
-                }
+                self.turn_valve(side, turn);
             }
             Handle::TankKnob => {
                 let point = ray.and_then(|ray| ray.meet(knob, Vec3::Y));
                 let turn = grab.turned(point.map(|point| wheel_angle(knob, point)));
-                if turn != 0.0 {
-                    let current = self.controls.concentration();
-                    let opening = knob_opening(current) + turn / (KNOB_TURNS * TAU);
-                    let concentration = knob_concentration(opening);
-                    self.controls.set_concentration(concentration);
-                    self.simulation.set_concentration(concentration);
-                    // The demo's banner would no longer be true.
-                    self.demo = None;
-                }
+                self.turn_knob(turn);
             }
-            // Held long enough, the clock pauses or resumes, and rings.
-            Handle::Clock => {
-                if self.desk_clock.hold(dt) {
-                    self.paused = !self.paused;
-                    self.controls.press(Action::TogglePause);
-                    self.scene.ring_clock();
-                }
-            }
+            Handle::Clock => self.hold_clock(dt),
             // Pressed once when grabbed; held, they only keep the camera
             // still.
             Handle::ResetButton | Handle::TracersButton | Handle::Cartridge => {}
@@ -1191,13 +1237,358 @@ impl App {
             }
             Handle::TracersButton => self.toggle_tracers(),
             Handle::Cartridge => {
-                let on = !self.simulation.regenerator().is_enabled();
-                self.simulation.set_regenerator(on);
-                // The demo's banner would no longer be true.
-                self.demo = None;
+                // Not while it is carried or falling.
+                if self.scene.cartridge().carried().is_none() {
+                    let on = !self.simulation.regenerator().is_enabled();
+                    self.simulation.set_regenerator(on);
+                    // The demo's banner would no longer be true.
+                    self.demo = None;
+                }
             }
             Handle::Crank | Handle::Valve(_) | Handle::TankKnob | Handle::Clock => {}
         }
+    }
+
+    /// The parts within reach of a figure on a block of `shape` to use with
+    /// E, with the points to aim at.
+    fn usables(&self, shape: BlockShape) -> Vec<Usable> {
+        let unit = shape.bore;
+        let wheels = valve_wheels(shape);
+        let [reset, tracers] = button_boxes(shape);
+        let clock = clock_place(shape);
+        let usable = |handle, point, radius| Usable {
+            handle,
+            point,
+            radius,
+        };
+        let mut usables = vec![
+            usable(
+                Handle::Valve(ReservoirSide::Hot),
+                wheels[0].center,
+                VALVE_AIM * wheels[0].radius,
+            ),
+            usable(
+                Handle::Valve(ReservoirSide::Cold),
+                wheels[1].center,
+                VALVE_AIM * wheels[1].radius,
+            ),
+            usable(
+                Handle::ResetButton,
+                reset.dome_top(),
+                BUTTON_AIM * reset.half_width(),
+            ),
+            usable(
+                Handle::TracersButton,
+                tracers.dome_top(),
+                BUTTON_AIM * tracers.half_width(),
+            ),
+            usable(
+                Handle::TankKnob,
+                tank_place(shape, self.simulation.port()).knob,
+                KNOB_AIM * unit,
+            ),
+            usable(Handle::Clock, clock.middle(), clock.radius()),
+        ];
+        if !self.crank_locked {
+            let pistons = self.simulation.power_pistons();
+            let crank = hand_crank(self.simulation.geometry(), pistons);
+            usables.push(usable(
+                Handle::Crank,
+                crank.handle(pistons.angle()),
+                CRANK_AIM * unit,
+            ));
+        }
+        let cartridge = self.scene.cartridge();
+        let inside = self.simulation.regenerator().is_enabled();
+        let spot = if inside && cartridge.seated() {
+            // Its face in the opening, at the block's front.
+            Some(cartridge::seat(shape) + Vec3::Z * shape.outer)
+        } else {
+            (!inside && cartridge.lies_on_table()).then(|| cartridge.lying())
+        };
+        if let Some(spot) = spot {
+            usables.push(usable(
+                Handle::Cartridge,
+                spot,
+                CARTRIDGE_AIM * shape.opening,
+            ));
+        }
+        usables
+    }
+
+    /// Uses whatever E is on in first person, for `walker` looking around
+    /// with the mouse `moved` points this frame, over `dt` seconds, in a
+    /// window of `size`, with the first-person `keys`: starts using what is
+    /// aimed at when E is pressed, keeps using it while E is held, and
+    /// stops when it is let go, but for the cartridge, carried until E is
+    /// pressed again. Returns what the crosshair is on.
+    fn use_things(
+        &mut self,
+        walker: &mut Walker,
+        keys: FirstPersonKeys,
+        moved: Vec2,
+        dt: f32,
+        size: Vec2,
+    ) -> Aim {
+        let shape = BlockShape::new(self.simulation.geometry());
+        // The cartridge stays in the hands until E is pressed again; the
+        // rest are used while E is held.
+        let carried = self
+            .using
+            .is_some_and(|using| using.handle == Handle::Cartridge);
+        let done = if carried {
+            keys.use_pressed
+        } else {
+            !keys.use_held
+        };
+        let mut pressed = keys.use_pressed;
+        if done && let Some(using) = self.using.take() {
+            self.stop_using(using.handle, walker);
+            // The press that put it down uses nothing else.
+            pressed &= !carried;
+        }
+        let usables = self.usables(shape);
+        let aimed = aimed(walker.eye, walker.forward(), &usables, REACH * shape.bore);
+        if let (true, None, Some(handle)) = (pressed, self.using, aimed) {
+            self.start_using(handle, walker, size);
+        }
+        if let Some(mut using) = self.using {
+            let going_on = self.keep_using(&mut using, walker, moved, dt, size);
+            self.using = going_on.then_some(using);
+            if !going_on {
+                walker.let_go();
+            }
+        }
+        let cartridge = if self.scene.cartridge().seated() {
+            CartridgeState::Seated
+        } else {
+            CartridgeState::Lying
+        };
+        match self.using {
+            Some(using) => Aim {
+                caption: Some(using_caption(using.handle)),
+                using: true,
+            },
+            None => Aim {
+                caption: aimed.map(|handle| caption(handle, cartridge)),
+                using: false,
+            },
+        }
+    }
+
+    /// Starts using `handle` with E, for `walker` in a window of `size`.
+    fn start_using(&mut self, handle: Handle, walker: &mut Walker, size: Vec2) {
+        let using = |pointer| {
+            Some(Using {
+                handle,
+                grab: Grab::new(handle),
+                pointer,
+            })
+        };
+        let middle = size / 2.0;
+        match handle {
+            Handle::ResetButton | Handle::TracersButton => self.press(handle),
+            Handle::Clock => {
+                self.desk_clock.press();
+                self.using = using(middle);
+            }
+            Handle::Valve(_) | Handle::TankKnob => {
+                walker.grip();
+                self.using = using(middle);
+            }
+            Handle::Crank => {
+                let pistons = self.simulation.power_pistons();
+                let crank = hand_crank(self.simulation.geometry(), pistons);
+                let matrix = walker.camera().matrix();
+                let on_handle = project(matrix, size, crank.handle(pistons.angle()));
+                walker.grip();
+                self.crank_wound = 0.0;
+                self.using = using(on_handle.unwrap_or(middle));
+            }
+            Handle::Cartridge => {
+                if self.simulation.regenerator().is_enabled() {
+                    // Out of the opening, into the hands.
+                    self.simulation.set_regenerator(false);
+                    self.demo = None;
+                }
+                self.scene.cartridge_mut().pick_up();
+                self.using = using(middle);
+            }
+        }
+    }
+
+    /// Goes on using what `using` holds with E for `dt` seconds, the mouse
+    /// having `moved` points, in a window of `size`; returns whether it is
+    /// still in use, which a crank the engine catches, or a cartridge
+    /// brought to the opening, no longer is.
+    fn keep_using(
+        &mut self,
+        using: &mut Using,
+        walker: &Walker,
+        moved: Vec2,
+        dt: f32,
+        size: Vec2,
+    ) -> bool {
+        let shape = BlockShape::new(self.simulation.geometry());
+        // Moving the mouse right turns a wheel clockwise seen from above, to
+        // shut it or lower it.
+        // Held at the edge of the view's room, it keeps turning.
+        let leaning = walker.grip_lean() * EDGE_TURN_PER_SECOND * dt;
+        let wheel_turn = -(moved.x * TURN_PER_POINT * self.menu.sensitivity + leaning);
+        match using.handle {
+            Handle::Valve(side) => self.turn_valve(side, wheel_turn),
+            Handle::TankKnob => self.turn_knob(wheel_turn),
+            Handle::Clock => self.hold_clock(dt),
+            Handle::Crank => {
+                // A pointer moved by the mouse, followed onto the plane the
+                // handle sweeps, as a grab with the mouse is.
+                using.pointer = (using.pointer + moved).clamp(Vec2::ZERO, size);
+                let pistons = self.simulation.power_pistons();
+                let crank = hand_crank(self.simulation.geometry(), pistons);
+                let matrix = walker.camera().matrix();
+                let plane = crank.handle(pistons.angle());
+                let ray = Ray::through(matrix, size, using.pointer);
+                let point = ray.and_then(|ray| ray.meet(plane, Vec3::X));
+                let turn = using.grab.turned(point.map(|point| crank.angle_of(point)));
+                if self.turn_crank(turn, dt) {
+                    return false;
+                }
+            }
+            Handle::Cartridge => {
+                let unit = shape.bore;
+                let forward = walker.forward();
+                // Below the middle of the view, whichever way it looks.
+                let up = (Vec3::Y - forward * forward.y).normalize_or(Vec3::Z);
+                let held = walker.eye + forward * CARRY_AHEAD * unit - up * CARRY_BELOW * unit;
+                // Its face toward the eyes.
+                let turn = Quat::from_rotation_arc(Vec3::Y, -forward);
+                let cartridge = self.scene.cartridge_mut();
+                cartridge.carry(held, turn, dt);
+                if cartridge.by_opening() {
+                    cartridge.fly_in();
+                    self.simulation.set_regenerator(true);
+                    self.demo = None;
+                    return false;
+                }
+            }
+            Handle::ResetButton | Handle::TracersButton => return false,
+        }
+        true
+    }
+
+    /// Stops using `handle` with E, for `walker`: the clock is let go, the
+    /// cartridge falls onto the table below it, and a grip is let go.
+    fn stop_using(&mut self, handle: Handle, walker: &mut Walker) {
+        walker.let_go();
+        match handle {
+            Handle::Clock => self.release_clock(),
+            Handle::Cartridge => {
+                let shape = BlockShape::new(self.simulation.geometry());
+                let Some(at) = self.scene.cartridge().carried() else {
+                    return;
+                };
+                let map = WalkMap::new(shape, self.simulation.port(), None);
+                let radius = cartridge::FIT * shape.opening;
+                let level = map.onto_table(vec2(at.x, at.z), radius);
+                let (spot, _) = map.push_out(level, radius, shape.base);
+                self.scene
+                    .cartridge_mut()
+                    .drop_onto(vec3(spot.x, shape.base, spot.y));
+            }
+            Handle::Crank
+            | Handle::Valve(_)
+            | Handle::TankKnob
+            | Handle::ResetButton
+            | Handle::TracersButton => {}
+        }
+    }
+
+    /// Turns the hand crank by `turn` radians, as the shaft's angle is
+    /// counted, over `dt` seconds of wall time, either way, and returns
+    /// whether that brought the engine up to its starting speed: it has
+    /// caught, and the crank is let go and locked (see `crank_locked`).
+    fn turn_crank(&mut self, turn: f32, dt: f32) -> bool {
+        let pace = if self.slow { SLOW_MOTION_FACTOR } else { 1.0 };
+        let model_dt = f64::from(dt * pace);
+        if self.crank_locked || model_dt <= 0.0 || turn == 0.0 {
+            return false;
+        }
+        // Turned back the other way, it unwinds rather than drives.
+        let backing = self.crank_wound != 0.0 && turn.signum() != self.crank_wound.signum();
+        self.crank_wound += turn;
+        if backing {
+            return false;
+        }
+        let wound = ((self.crank_wound.abs() - CRANK_SLACK) / CRANK_WIND_UP).clamp(0.0, 1.0);
+        let most = f64::from(wound) * self.simulation.power_pistons().start_speed();
+        // The shaft's angle falls as it turns forward.
+        let speed = (f64::from(turn) / model_dt).clamp(-most, most) * FORWARD;
+        if most <= 0.0 || !self.simulation.crank_engine_either_way(speed) {
+            return false;
+        }
+        self.paused = false;
+        let caught = self.simulation.power_pistons().start_speed_fraction().abs() >= CAUGHT_SHARE;
+        self.crank_locked |= caught;
+        caught
+    }
+
+    /// Turns `side`'s valve by `turn` radians, counterclockwise seen from
+    /// above to open it.
+    fn turn_valve(&mut self, side: ReservoirSide, turn: f32) {
+        if turn == 0.0 {
+            return;
+        }
+        let setting = match side {
+            ReservoirSide::Hot => &mut self.settings.0,
+            ReservoirSide::Cold => &mut self.settings.1,
+        };
+        let opening = valve_opening(side, *setting) + turn / (VALVE_TURNS * TAU);
+        *setting = valve_kelvin(side, opening);
+        self.controls.set_kelvin(self.settings.0, self.settings.1);
+        // The demo's banner would no longer be true.
+        self.demo = None;
+    }
+
+    /// Turns the helium tank's knob by `turn` radians, counterclockwise seen
+    /// from above for more helium.
+    fn turn_knob(&mut self, turn: f32) {
+        if turn == 0.0 {
+            return;
+        }
+        let current = self.controls.concentration();
+        let opening = knob_opening(current) + turn / (KNOB_TURNS * TAU);
+        let concentration = knob_concentration(opening);
+        self.controls.set_concentration(concentration);
+        self.simulation.set_concentration(concentration);
+        // The demo's banner would no longer be true.
+        self.demo = None;
+    }
+
+    /// Holds the desk clock down for `dt` seconds more: held long enough,
+    /// it pauses or resumes the engine, and rings.
+    fn hold_clock(&mut self, dt: f32) {
+        if self.desk_clock.hold(dt) {
+            self.paused = !self.paused;
+            self.controls.press(Action::TogglePause);
+            self.scene.ring_clock();
+        }
+    }
+
+    /// Lets go of the desk clock: let go before it was a long press, it
+    /// turns slow motion on or off.
+    fn release_clock(&mut self) {
+        if self.desk_clock.release() == Some(PressEnd::Click) {
+            self.slow = !self.slow;
+            self.controls.press(Action::ToggleSlow);
+        }
+    }
+
+    /// Where the cartridge's middle lies on the table, if it is out there,
+    /// or falling onto it.
+    fn cartridge_on_table(&self) -> Option<Vec3> {
+        let cartridge = self.scene.cartridge();
+        let out = !self.simulation.regenerator().is_enabled() && cartridge.carried().is_none();
+        out.then(|| cartridge.lying())
     }
 
     /// Turns the tracers on or off.
@@ -1303,7 +1694,7 @@ impl App {
     /// the part under `pointer`, while the pointer is free over the scene.
     /// The Demos menu puts them all away.
     fn grow_labels(&mut self, pointer: Vec2, dt: f32) {
-        let tags = scene_labels::tags(&self.simulation);
+        let tags = scene_labels::tags(&self.simulation, self.cartridge_on_table());
         let free = self.walker.is_none()
             && !self.menu.open
             && self.drag.is_none()
@@ -1359,15 +1750,26 @@ impl App {
         if !self.paused {
             // The walls move toward their settings in model time.
             let dt = model.min(pace * MAX_ANIMATION_DT);
-            let hot = ramped(self.simulation.hot_kelvin(), self.settings.0, dt);
-            let cold = ramped(self.simulation.cold_kelvin(), self.settings.1, dt);
+            let (hot_side, cold_side) = (ReservoirSide::Hot, ReservoirSide::Cold);
+            let hot = ramped(hot_side, self.simulation.hot_kelvin(), self.settings.0, dt);
+            let cold = ramped(
+                cold_side,
+                self.simulation.cold_kelvin(),
+                self.settings.1,
+                dt,
+            );
             self.simulation.set_hot_kelvin(hot);
             self.simulation.set_cold_kelvin(cold);
         }
         self.step_due = (!self.paused).then_some((model, wanted));
         let now = get_time();
+        // Cranked backward, the shaft runs too.
         let start_fraction = self.simulation.power_pistons().start_speed_fraction();
-        self.start_prompt.update(start_fraction, now);
+        self.start_prompt.update(start_fraction.abs(), now);
+        // At rest again, or refilled, the crank can be grabbed again.
+        if self.start_prompt.shown() {
+            self.crank_locked = false;
+        }
         #[cfg(feature = "diagnostics")]
         self.panel.set_diagnostics(
             self.frame_stats
@@ -1490,7 +1892,8 @@ impl App {
         let in_column = strip.filter(|card| card.x == column.x);
         let banner_bottom = in_column.map_or(floor, |card| card.y - STACK_GAP);
         let banner = demo.map(|demo| demos::banner(pen, width, demo, start, banner_bottom));
-        let grown: Vec<f32> = scene_labels::tags(&self.simulation)
+        let lying = self.cartridge_on_table();
+        let grown: Vec<f32> = scene_labels::tags(&self.simulation, lying)
             .iter()
             .map(|tag| motion::smooth(self.tag_growth(tag.key)))
             .collect();
@@ -1499,7 +1902,8 @@ impl App {
             let cards: Vec<Rect> = open_banner.into_iter().chain(strip).collect();
             let (simulation, shifts) = (&self.simulation, &mut self.tag_shifts);
             diagnostics::time(Section::Labels, || {
-                scene_labels::draw(pen, simulation, view, area, &cards, &grown, shifts);
+                let tags = scene_labels::tags(simulation, lying);
+                scene_labels::draw(pen, &tags, view, area, &cards, &grown, shifts);
             });
         }
         let (panel_shift, sliders_shift) = self.drawer_shifts(width, area.height);

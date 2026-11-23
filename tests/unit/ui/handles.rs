@@ -38,16 +38,35 @@ fn shut_valves_leave_room_temperature_and_open_ones_the_sliders_far_ends() {
     assert_eq!(valve_range(ReservoirSide::Cold).1, MIN_COLD_KELVIN);
 }
 
+/// Each wall crosses its whole range in `RAMP_SECONDS`, so both sides'
+/// effects come and go together, never passing the setting.
 #[test]
 fn walls_move_toward_their_settings_at_a_steady_pace_without_passing_them() {
-    let second = 1.0;
-    assert_eq!(
-        ramped(300.0, 1_200.0, second),
-        300.0 + RAMP_KELVIN_PER_SECOND
+    let (hot, cold) = (ReservoirSide::Hot, ReservoirSide::Cold);
+    let close = |a: f32, b: f32| (a - b).abs() < 1e-3;
+    assert!(close(
+        ramped(hot, MIN_HOT_KELVIN, MAX_HOT_KELVIN, RAMP_SECONDS),
+        MAX_HOT_KELVIN
+    ));
+    assert!(close(
+        ramped(cold, MAX_COLD_KELVIN, MIN_COLD_KELVIN, RAMP_SECONDS),
+        MIN_COLD_KELVIN
+    ));
+    let half = 0.5 * RAMP_SECONDS;
+    let hot_share = (ramped(hot, MAX_HOT_KELVIN, MIN_HOT_KELVIN, half) - MIN_HOT_KELVIN)
+        / (MAX_HOT_KELVIN - MIN_HOT_KELVIN);
+    let cold_share = (MAX_COLD_KELVIN - ramped(cold, MIN_COLD_KELVIN, MAX_COLD_KELVIN, half))
+        / (MAX_COLD_KELVIN - MIN_COLD_KELVIN);
+    assert!(
+        close(hot_share, 0.5) && close(cold_share, 0.5),
+        "both halfway"
     );
-    assert_eq!(ramped(300.0, 77.0, second), 300.0 - RAMP_KELVIN_PER_SECOND);
-    assert_eq!(ramped(1_190.0, 1_200.0, second), 1_200.0);
-    assert_eq!(ramped(500.0, 1_200.0, -1.0), 500.0, "time never runs back");
+    assert_eq!(ramped(hot, 1_190.0, 1_200.0, 1.0), 1_200.0);
+    assert_eq!(
+        ramped(hot, 500.0, 1_200.0, -1.0),
+        500.0,
+        "time never runs back"
+    );
 }
 
 #[test]

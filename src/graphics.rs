@@ -495,6 +495,16 @@ impl Scene {
         self.clock_hands = hands;
     }
 
+    /// The regenerator's cartridge.
+    pub fn cartridge(&self) -> &Cartridge {
+        &self.cartridge
+    }
+
+    /// The regenerator's cartridge, to carry.
+    pub fn cartridge_mut(&mut self) -> &mut Cartridge {
+        &mut self.cartridge
+    }
+
     /// Rattles the desk clock's hammer between its bells.
     pub fn ring_clock(&mut self) {
         self.clock.ring();
