@@ -114,8 +114,12 @@ fn collision_highlight_fades_without_changing_alpha() {
     let just_collided = collision_color(base, COLLISION_FLASH_DURATION);
     let expired = collision_color(base, 0.0);
 
-    assert!(just_collided.g > base.g);
-    assert!(just_collided.b > base.b);
+    // Turned toward the highlight.
+    let gap = |color: Color| {
+        let flash = COLLISION_FLASH_COLOR;
+        (color.r - flash.r).abs() + (color.g - flash.g).abs() + (color.b - flash.b).abs()
+    };
+    assert!(gap(just_collided) < gap(base));
     assert_eq!(just_collided.a, base.a);
     assert_eq!(expired, base);
 }

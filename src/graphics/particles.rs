@@ -84,7 +84,7 @@ const LOW_DETAIL_LONGITUDE_SEGMENTS: usize = 4;
 /// temperature; temperature is a property of many particles.
 const COLD_COLOR: Color = Color::from_rgba(30, 120, 255, 255);
 /// Color of a particle with the mean energy at 300 K.
-const NORMAL_COLOR: Color = Color::from_rgba(255, 150, 0, 255);
+const NORMAL_COLOR: Color = Color::from_rgba(196, 84, 236, 255);
 /// Color of a particle with `HOT_ENERGY_MULTIPLIER` times that energy.
 const HOT_COLOR: Color = Color::from_rgba(255, 32, 48, 255);
 

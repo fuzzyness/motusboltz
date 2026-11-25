@@ -34,6 +34,7 @@ use crate::graphics::buttons::{
     button_boxes, //
 };
 use crate::graphics::clock::clock_place;
+use crate::graphics::mixing_box::mixing_box_place;
 use crate::graphics::tank::tank_place;
 use crate::graphics::thermometers::{
     dial_middle,
@@ -296,6 +297,9 @@ const CLOCK_REACH: f32 = 1.3;
 /// How far round a thermometer's dial counts as under the pointer, in the
 /// dial's radii.
 const THERMOMETER_REACH: f32 = 1.2;
+/// How far round its middle the mixing box counts as under the pointer, in
+/// bore radii.
+const MIXING_BOX_REACH: f32 = 1.2;
 /// How far round a valve's handwheel counts as over the valve, in the
 /// wheel's radii.
 const VALVE_REACH: f32 = 1.3;
@@ -515,6 +519,20 @@ pub fn tags(engine: &ConnectedChambers, cartridge: Option<Vec3>) -> Vec<Tag> {
         "3rd law: it can never reach 0 K",
         ReservoirSide::Cold,
     ));
+    let mixer = mixing_box_place(shape);
+    let grip = mixer.grip();
+    tags.push(Tag {
+        key: "mixing box",
+        name: "Mixing box",
+        role: "2nd law: lift the divider; it never unmixes",
+        anchor: grip,
+        also: None,
+        outward: away(grip, out) + Vec3::Y * out,
+        spots: vec![Spot::Ball {
+            center: mixer.middle(),
+            radius: MIXING_BOX_REACH * shape.bore,
+        }],
+    });
     if let Some(rest) = cartridge {
         tags.push(Tag {
             key: CARTRIDGE_KEY,

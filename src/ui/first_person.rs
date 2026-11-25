@@ -17,8 +17,9 @@
 //! crouching in the air tucks the feet up, so a crouched jump clears a
 //! little more. Whenever the feet move up or down at once, on a step up or
 //! a tuck, the eyes glide after them. Nothing stops it walking off an edge,
-//! crouched or not, and off the table's edge it falls, and is put back at
-//! the start. Esc lets the mouse go and opens the menu (see `menu`), with
+//! crouched or not: off the table's edge it falls to the ground under the
+//! table, and climbs back up by the drawers; off the ground's edge it falls
+//! into the sky, and is put back at the start. Esc lets the mouse go and opens the menu (see `menu`), with
 //! a way back out.
 
 use std::f32::consts::{
@@ -126,8 +127,8 @@ const GRIP_EDGE_SHARE: f32 = 0.97;
 const GRIP_PUSH_MOST: f32 = 2.0;
 /// Least push left, in radians, below which a view let go is back.
 const GRIP_SETTLED: f32 = 1e-3;
-/// How far below the table's top a figure that has stepped off its edge
-/// falls before it is put back at the start, in bore radii.
+/// How far below the ground a figure that has stepped off its edge falls
+/// before it is put back at the start, in bore radii.
 const FALL_DEPTH: f32 = 5.0;
 /// Where the figure stands, along the shaft toward the cold side, in bore
 /// radii.
@@ -400,6 +401,7 @@ impl Walker {
             self.jump_wanted = None;
         }
         if self.airborne {
+            let before = self.feet.y;
             self.since_ground += dt;
             let pull = if self.velocity.y < 0.0 {
                 FALL_PULL
@@ -411,7 +413,16 @@ impl Walker {
             // height at any frame rate.
             self.feet.y += (self.velocity.y - gravity * dt / 2.0) * dt;
             self.velocity.y -= gravity * dt;
-            let ground = map.ground(place, radius, self.feet.y);
+            // The head stops at what is overhead, as under the table.
+            if let Some(most) = map.head_room(place, radius, before)
+                && self.feet.y > most
+            {
+                self.feet.y = most;
+                self.velocity.y = self.velocity.y.min(0.0);
+            }
+            // What was underfoot before this frame's fall, so a fast fall
+            // never passes through a step.
+            let ground = map.ground(place, radius, before.max(self.feet.y));
             let landing = ground.filter(|&height| self.feet.y <= height && self.velocity.y <= 0.0);
             if let Some(height) = landing {
                 self.move_feet_to(height);
@@ -423,7 +434,7 @@ impl Walker {
             }
         }
         self.set_eye();
-        if !map.on_table(place) && self.feet.y < map.floor - FALL_DEPTH * unit {
+        if !map.over_ground(place) && self.feet.y < map.ground - FALL_DEPTH * unit {
             Walked::Fell
         } else {
             Walked::OnFoot

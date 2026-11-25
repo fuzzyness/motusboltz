@@ -15,12 +15,14 @@ pub mod cartridge;
 pub mod chamber;
 pub mod clock;
 pub mod cloud;
+pub mod drawers;
 pub mod fire;
 pub mod floor;
 pub mod gpu;
 pub mod hatch;
 pub mod heat_sparks;
 pub mod levels;
+pub mod mixing_box;
 pub mod nitrogen;
 pub mod outline;
 pub mod particles;
@@ -79,6 +81,7 @@ use cartridge::Cartridge;
 use chamber::ConnectedChamberVisual;
 use clock::Clock;
 use cloud::CloudFloor;
+use drawers::Drawers;
 use fire::Fire;
 use floor::FloorGrid;
 use gpu::{
@@ -88,6 +91,7 @@ use gpu::{
 use hatch::Hatch;
 use heat_sparks::HeatSparks;
 use levels::ReservoirLevels;
+use mixing_box::MixingBox;
 use nitrogen::Nitrogen;
 use particles::{
     ParticleRenderer,
@@ -396,12 +400,16 @@ pub struct Scene {
     switches: DomeStates,
     /// The regenerator's cartridge, on the table or in the opening.
     cartridge: Cartridge,
+    /// The drawers in the desk's pedestal.
+    drawers: Drawers,
     /// First person's slot for the cartridge and its door.
     hatch: Hatch,
     /// First person's glass windows in the cylinders.
     windows: Windows,
     /// The thermometers on the cylinders.
     thermometers: Thermometers,
+    /// The mixing box on the table.
+    mixing_box: MixingBox,
     /// The scene is seen in first person: the block whole, with windows
     /// and the slot, rather than cut away toward the camera.
     first_person: bool,
@@ -473,8 +481,10 @@ impl Scene {
             switches: DomeStates::default(),
             cartridge: Cartridge::new(shape, simulation.regenerator().is_enabled()),
             hatch: Hatch::new(shape),
+            drawers: Drawers::new(shape),
             windows: Windows::new(shape),
             thermometers: Thermometers::new(shape),
+            mixing_box: MixingBox::new(shape),
             first_person: false,
             tank: Tank::new(shape, simulation.port()),
             knob_turn: 0.0,
@@ -522,6 +532,27 @@ impl Scene {
     /// The regenerator's cartridge, to carry.
     pub fn cartridge_mut(&mut self) -> &mut Cartridge {
         &mut self.cartridge
+    }
+
+    /// The drawers in the desk's pedestal.
+    pub fn drawers(&self) -> &Drawers {
+        &self.drawers
+    }
+
+    /// The drawers in the desk's pedestal, to pull them out or push them
+    /// in.
+    pub fn drawers_mut(&mut self) -> &mut Drawers {
+        &mut self.drawers
+    }
+
+    /// The mixing box on the table.
+    pub fn mixing_box(&self) -> &MixingBox {
+        &self.mixing_box
+    }
+
+    /// The mixing box on the table, to lift its divider or sort it.
+    pub fn mixing_box_mut(&mut self) -> &mut MixingBox {
+        &mut self.mixing_box
     }
 
     /// Rattles the desk clock's hammer between its bells.
@@ -680,10 +711,12 @@ impl Scene {
         self.hatch.follow(self.cartridge.door_open(), seconds);
         self.thermometers
             .follow(simulation.hot_kelvin(), simulation.cold_kelvin(), seconds);
+        self.mixing_box.follow(effects);
         self.chamber.draw(camera, whole);
         self.fire.draw_burner();
         if diagnostics::shown(Piece::Table) {
             self.table.draw(camera);
+            self.drawers.draw(camera);
         }
         // Lit right over the table, before what stands on it, which then
         // covers it.
@@ -697,6 +730,7 @@ impl Scene {
         }
         self.tank.draw(camera);
         self.thermometers.draw(camera);
+        self.mixing_box.draw(camera);
         self.clock.draw(self.clock_hands, seconds, camera);
         if scenery == Scenery::Sky {
             self.cloud.draw(camera, light);
@@ -736,6 +770,7 @@ impl Scene {
         let effects = diagnostics::shown(Piece::Effects);
         let sparks = effects && simulation.tracers().is_none();
         let materials = self.sprite_materials.as_ref();
+        self.mixing_box.draw_glass(camera);
         if whole {
             // Inside the cylinders, the sparks go before the glass, which
             // would hide them, and the glass over them.

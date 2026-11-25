@@ -243,6 +243,26 @@ impl Solid {
         self.quad(high, [axis; 4], [color; 4]);
     }
 
+    /// Adds every triangle of `other` to this solid.
+    pub fn absorb(&mut self, other: Solid) {
+        let first = self.vertices.len() as u16;
+        self.vertices.extend(other.vertices);
+        self.indices
+            .extend(other.indices.into_iter().map(|index| first + index));
+    }
+
+    /// Adds a ball of `radius` about `center`, in `rings` from pole to
+    /// pole and twice as many segments round.
+    pub fn ball(&mut self, center: Vec3, radius: f32, rings: usize, color: Color) {
+        let outline: Vec<Turn> = (0..=rings)
+            .map(|ring| {
+                let angle = std::f32::consts::PI * ring as f32 / rings as f32;
+                turn(radius * angle.sin(), -radius * angle.cos(), color)
+            })
+            .collect();
+        self.lathe(Frame::along(center, Vec3::Y), &outline, 2 * rings);
+    }
+
     /// Adds a flat plate: the convex `outline` (in `frame.u`, `frame.v`)
     /// raised `thickness` along `frame.axis` from `frame.origin`.
     pub fn plate(&mut self, frame: Frame, outline: &[Vec2], thickness: f32, color: Color) {

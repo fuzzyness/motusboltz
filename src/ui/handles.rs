@@ -73,6 +73,11 @@ pub enum Handle {
     /// The desk clock: a click turns slow motion on or off, a long press
     /// pauses or resumes (see `ui::desk_clock`).
     Clock,
+    /// The mixing box's divider: a press lifts or drops it.
+    MixingBox,
+    /// A drawer in the desk's pedestal, bottom first: held, the mouse
+    /// pulls it out or pushes it in (first person only).
+    Drawer(u8),
 }
 
 impl Handle {
@@ -80,7 +85,7 @@ impl Handle {
     pub fn presses(self) -> bool {
         matches!(
             self,
-            Self::ResetButton | Self::TracersButton | Self::Cartridge
+            Self::ResetButton | Self::TracersButton | Self::Cartridge | Self::MixingBox
         )
     }
 }

@@ -562,3 +562,150 @@ fn a_view_let_go_turns_with_the_mouse_at_once() {
     );
     assert!(!walker.gripping());
 }
+
+/// The drawers pulled out as a staircase, each a bore radius further out
+/// than the one above, the top one a little past the table's edge.
+fn staircase(shape: BlockShape) -> [f32; crate::graphics::drawers::DRAWER_COUNT] {
+    use crate::graphics::drawers::DRAWER_COUNT;
+    std::array::from_fn(|index| (1.2 + (DRAWER_COUNT - 1 - index) as f32) * shape.bore)
+}
+
+/// Holding forward and jump, a figure on the ground in front of the
+/// drawers pulled out as a staircase climbs them, drawer by drawer, onto
+/// the table's top; and walking off the top over them, it comes down
+/// them to the ground, never falling into the sky.
+#[test]
+fn the_drawers_are_climbed_up_and_down() {
+    use crate::graphics::drawers::drawer_places;
+    use crate::sim::port::Port;
+    let shape = BlockShape::new(DEFAULT_GEOMETRY);
+    let unit = shape.bore;
+    let pulls = staircase(shape);
+    let map = WalkMap::new(shape, Port::new(DEFAULT_GEOMETRY), None).with_drawers(shape, pulls);
+    let places = drawer_places(shape);
+    let middle_x = (places[0].left + places[0].right) / 2.0;
+    let bottom_front = places[0].front + pulls[0];
+    let mut walker = Walker::standing(shape);
+    walker.feet = vec3(middle_x, map.ground, bottom_front + unit);
+    assert!(
+        map.over_ground(vec2(walker.feet.x, walker.feet.z)),
+        "starts on the ground"
+    );
+    walker.yaw = 0.0;
+    walker.settling = 0;
+    let climbing = FirstPersonKeys {
+        way: vec2(0.0, 1.0),
+        jump: true,
+        ..Default::default()
+    };
+    let mut highest = walker.feet.y;
+    let on_top = |walker: &Walker| {
+        (walker.feet.y - shape.base).abs() < 1e-3 && walker.feet.z < places[0].front - unit
+    };
+    for _ in 0..600 {
+        assert_eq!(walker.walk(climbing, FRAME, &map), Walked::OnFoot);
+        highest = highest.max(walker.feet.y);
+        if on_top(&walker) {
+            break;
+        }
+    }
+    assert!(
+        on_top(&walker),
+        "on the table's top, at {} after reaching {highest}",
+        walker.feet / unit
+    );
+    // Back down, facing out over the drawers.
+    walker.yaw = PI;
+    walker.feet.x = middle_x;
+    for _ in 0..600 {
+        assert_eq!(
+            walker.walk(walking(vec2(0.0, 1.0)), FRAME, &map),
+            Walked::OnFoot
+        );
+        if walker.feet.z > bottom_front + unit {
+            break;
+        }
+    }
+    for _ in 0..120 {
+        walker.walk(FirstPersonKeys::default(), FRAME, &map);
+    }
+    assert!(
+        (walker.feet.y - map.ground).abs() < 1e-3,
+        "down on the ground, not at {}",
+        walker.feet / unit
+    );
+}
+
+/// On the ground the figure walks into the knee space under the desk's
+/// top and pencil drawer, but not through the end panel or the rail, and
+/// never up onto the top.
+#[test]
+fn under_the_table_the_top_is_overhead_and_the_panel_in_the_way() {
+    use crate::graphics::table::{
+        back_rail,
+        end_panel, //
+    };
+    let shape = BlockShape::new(DEFAULT_GEOMETRY);
+    let map = table_map(shape);
+    let radius = BODY_RADIUS * shape.bore;
+    let under = vec2(0.0, 0.0);
+    assert_eq!(map.ground(under, radius, map.ground), Some(map.ground));
+    assert!(
+        map.clearance(under, radius, map.ground) > 0.0,
+        "the top is overhead"
+    );
+    for board in [end_panel(shape), back_rail(shape)] {
+        let middle = (board.low + board.high) / 2.0;
+        assert!(
+            map.clearance(vec2(middle.x, middle.z), radius, map.ground) < 0.0,
+            "in the way"
+        );
+    }
+    // From the top, the table is underfoot.
+    assert_eq!(
+        map.ground(under + vec2(0.0, 5.0 * shape.bore), radius, shape.base),
+        Some(shape.base)
+    );
+}
+
+/// Jumping under the table, the head stops at the top's underside rather
+/// than passing through it, and the figure comes back down to the ground.
+#[test]
+fn a_jump_under_the_table_stops_at_its_underside() {
+    let shape = BlockShape::new(DEFAULT_GEOMETRY);
+    let map = table_map(shape);
+    let radius = BODY_RADIUS * shape.bore;
+    let under = vec2(0.0, 0.0);
+    let most = map
+        .head_room(under, radius, map.ground)
+        .expect("the top is overhead");
+    let mut walker = Walker::standing(shape);
+    walker.feet = vec3(under.x, map.ground, under.y);
+    walker.settling = 0;
+    let jumping = FirstPersonKeys {
+        jump: true,
+        ..Default::default()
+    };
+    let mut highest = walker.feet.y;
+    for _ in 0..60 {
+        assert_eq!(walker.walk(jumping, FRAME, &map), Walked::OnFoot);
+        highest = highest.max(walker.feet.y);
+        assert_eq!(
+            vec2(walker.feet.x, walker.feet.z),
+            under,
+            "not pushed aside"
+        );
+    }
+    assert!(highest > map.ground, "it jumped");
+    assert!(
+        highest <= most + 1e-4,
+        "the head stays under the top: {highest} against {most}"
+    );
+    for _ in 0..120 {
+        walker.walk(FirstPersonKeys::default(), FRAME, &map);
+    }
+    assert!(
+        (walker.feet.y - map.ground).abs() < 1e-3,
+        "back on the ground"
+    );
+}

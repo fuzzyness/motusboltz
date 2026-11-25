@@ -9,6 +9,7 @@ pub mod gas;
 pub mod gauge;
 pub mod geometry;
 pub mod grid;
+pub mod mixing;
 pub mod pistons;
 pub mod port;
 pub mod regenerator;

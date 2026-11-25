@@ -1,10 +1,14 @@
-//! The wooden table the engine stands on.
+//! The pine desk the engine stands on.
 //!
 //! The engine is a desk model, about 25 cm tall, so it stands on a small
-//! table: a top of planks laid along the shaft, an apron under its edge,
-//! and four square legs reaching down to the cloud or the grid. A shader
-//! draws the wood's grain from each point's place, so the table needs no
-//! texture. Built once and drawn in one call.
+//! student's desk of honey pine: a top with a rounded edge, overhanging a
+//! little at the front and the ends; a solid end panel down to the ground
+//! at its left; at its right a pedestal of three drawers from the top down
+//! to an arched base (see `drawers.rs` for the pedestal and its drawers);
+//! between them the knee space, a shallow pencil drawer across its top
+//! and a rail across its back. A shader draws the wood's grain from each
+//! point's place, so the desk needs no texture. Built once and drawn in
+//! one call.
 //!
 //! While the first-person figure is dragged over it, the top lights up, a
 //! soft glow with a brighter rim pulsing gently, to show it can be dropped
@@ -17,15 +21,21 @@ use macroquad::models::{
 use macroquad::prelude::{
     Camera3D,
     Color,
+    UniformType,
     Vec2,
     Vec3,
-    vec2,
     vec3, //
 };
 
 use super::block::{
     BlockShape,
     key_light, //
+};
+use super::drawers::{
+    DrawerPlace,
+    cabinet_place,
+    cabinet_solid,
+    drawer_solid, //
 };
 use super::gpu::{
     GpuMaterial,
@@ -40,11 +50,12 @@ use super::{
     load_lit, //
 };
 
-/// Fragment shader for the wood: rings of grain warped by noise and fine
-/// streaks along it, darker seams between the top's planks, and a soft
-/// varnish sheen. Each vertex's alpha says which way its grain runs: 1
-/// along the shaft (the top and the apron), 0 up and down (the legs).
-const WOOD_FRAGMENT: &str = r#"#version 100
+/// Fragment shader for the wood: soft rings of grain warped by noise, fine
+/// streaks along it, and a soft varnish sheen. Each
+/// vertex's alpha says which way its grain runs: 1 along the shaft (the
+/// top, the rail and the drawers' fronts), 0 up and down (the end panel
+/// and the pedestal).
+pub(super) const WOOD_FRAGMENT: &str = r#"#version 100
 precision mediump float;
 
 varying lowp vec4 color;
@@ -55,6 +66,9 @@ varying vec3 surface_normal;
 uniform sampler2D Texture;
 uniform vec3 Eye;
 uniform vec3 Light;
+// How far the part has moved from where it was built, so its grain moves
+// with it: a drawer's, as it is pulled out.
+uniform vec3 Shift;
 
 float hash(vec2 p) {
     vec3 q = fract(vec3(p.xyx) * 0.1031);
@@ -76,21 +90,18 @@ void main() {
     if (dot(n, toward_eye) < 0.0) {
         n = -n;
     }
-    // Along the grain and across it, in centimeters.
+    // Along the grain and across it, in centimeters; upright grain's
+    // rings are spaced wider, as on a pine panel's broad face.
+    vec3 built = world - Shift;
     float flat_grain = step(0.5, color.a);
-    float along = mix(world.y, world.x, flat_grain);
-    float across = mix(world.x + world.z, world.z + 0.6 * world.y, flat_grain);
+    float along = mix(built.y, built.x, flat_grain);
+    float across = mix(0.45 * (built.x + built.z), built.z + 0.6 * built.y, flat_grain);
     float warp = 1.6 * noise(vec2(along * 0.08, across * 0.35))
         + 0.4 * noise(vec2(along * 0.25, across * 0.9));
     float ring = fract(across * 0.55 + warp);
     float late = smoothstep(0.55, 0.95, ring) * (1.0 - smoothstep(0.95, 1.0, ring));
     float streak = noise(vec2(along * 0.6, across * 9.0));
-    vec3 wood = color.rgb * (1.0 - 0.22 * late) * (0.93 + 0.12 * streak);
-    // Planks 7 cm wide, seen on the top only.
-    float plank = fract(world.z / 7.0 + 0.5);
-    float seam = (1.0 - smoothstep(0.0, 0.012, plank) * smoothstep(1.0, 0.988, plank))
-        * step(0.9, n.y) * flat_grain;
-    wood *= 1.0 - 0.45 * seam;
+    vec3 wood = color.rgb * (1.0 - 0.14 * late) * (0.96 + 0.06 * streak);
     float diffuse = max(dot(n, Light), 0.0);
     float shine = 0.18 * pow(max(dot(n, normalize(Light + toward_eye)), 0.0), 30.0);
     gl_FragColor = vec4(wood * (0.42 + 0.6 * diffuse) + vec3(shine), 1.0);
@@ -116,35 +127,50 @@ void main() {
 
 /// Half the top's length, along the shaft.
 ///
-/// Sizes are in bore radii, so the table keeps its proportions at any
+/// Sizes are in bore radii, so the desk keeps its proportions at any
 /// engine size.
-pub const TOP_HALF_LENGTH: f32 = 8.0;
+pub const TOP_HALF_LENGTH: f32 = 10.0;
 /// Half the top's depth, front to back.
-pub const TOP_HALF_DEPTH: f32 = 5.5;
-/// Height of the top's surface above the floor the legs stand on.
-pub const TABLE_HEIGHT: f32 = 9.0;
+pub const TOP_HALF_DEPTH: f32 = 7.0;
+/// Height of the top's surface above the ground the desk stands on.
+pub const TABLE_HEIGHT: f32 = 5.3;
 /// Thickness of the top.
-const TOP_THICKNESS: f32 = 0.9;
+pub const TOP_THICKNESS: f32 = 0.55;
+/// How far the top reaches past the desk's body at the front and the ends;
+/// at the back the two are flush.
+pub const OVERHANG: f32 = 0.3;
+/// Thickness of the end panel at the left.
+const END_PANEL: f32 = 0.3;
+/// Height of the pencil drawer's front, across the top of the knee space.
+const PENCIL_HEIGHT: f32 = 0.75;
+/// How far back the pencil drawer reaches from the desk's front.
+const PENCIL_DEPTH: f32 = 8.0;
+/// Room left round the pencil drawer, between it and what it stands in.
+const PENCIL_GAP: f32 = 0.06;
+/// Height of the bottom of the rail across the back of the knee space.
+const RAIL_LOW: f32 = 1.5;
+/// Height of the rail's board.
+const RAIL_HEIGHT: f32 = 0.6;
+/// Thickness of the rail's board.
+const RAIL_THICKNESS: f32 = 0.22;
+/// How far in from the desk's back the rail stands, to its middle.
+const RAIL_INSET: f32 = 0.6;
+/// Segments round the top's rounded edge.
+const EDGE_SEGMENTS: usize = 12;
+/// Rings from pole to pole of the top's rounded corners.
+const CORNER_RINGS: usize = 6;
 /// Just below the block's underside, so the two never fight for depth.
 const BELOW_BLOCK: f32 = 0.004;
-/// Half the width of a leg.
-const LEG_HALF_WIDTH: f32 = 0.45;
-/// How far in from the top's corners the legs stand, to their middles.
-const LEG_INSET: f32 = 1.0;
-/// Depth of the apron under the top's edge.
-const APRON_DEPTH: f32 = 1.4;
-/// Half the thickness of the apron's boards.
-const APRON_HALF_THICKNESS: f32 = 0.16;
 /// The grain runs along the shaft (see the shader).
-const ALONG_SHAFT: f32 = 1.0;
+pub(super) const ALONG_SHAFT: f32 = 1.0;
 /// The grain runs up and down (see the shader).
-const UPRIGHT: f32 = 0.0;
-/// The top's wood, a warm oak; alpha is the grain's way.
-const TOP_WOOD: Color = Color::new(0.69, 0.47, 0.28, ALONG_SHAFT);
-/// The apron's wood, a little darker.
-const APRON_WOOD: Color = Color::new(0.6, 0.4, 0.24, ALONG_SHAFT);
-/// The legs' wood.
-const LEG_WOOD: Color = Color::new(0.6, 0.4, 0.24, UPRIGHT);
+pub(super) const UPRIGHT: f32 = 0.0;
+/// The top's wood, a honey pine; alpha is the grain's way.
+const TOP_WOOD: Color = Color::new(0.94, 0.67, 0.35, ALONG_SHAFT);
+/// The rail's wood, a little deeper.
+const RAIL_WOOD: Color = Color::new(0.88, 0.61, 0.31, ALONG_SHAFT);
+/// The end panel's and the pedestal's wood, its grain upright.
+const PANEL_WOOD: Color = Color::new(0.92, 0.65, 0.33, UPRIGHT);
 
 /// The highlight's color; its opacity is set as it glows.
 const HIGHLIGHT_COLOR: Color = Color::new(1.0, 0.92, 0.5, 1.0);
@@ -171,28 +197,104 @@ pub fn over_top(shape: BlockShape, point: Vec2) -> bool {
     point.x.abs() <= TOP_HALF_LENGTH * shape.bore && point.y.abs() <= TOP_HALF_DEPTH * shape.bore
 }
 
+/// Height of the underside of the table's top under a block of `shape`.
+pub fn underside(shape: BlockShape) -> f32 {
+    top_height(shape) - TOP_THICKNESS * shape.bore
+}
+
 /// Height of the table's top surface under a block of `shape`.
 pub fn top_height(shape: BlockShape) -> f32 {
     shape.base - BELOW_BLOCK
 }
 
-/// Height of the floor the table's legs stand on, under a block of
-/// `shape`.
+/// Height of the ground the desk stands on, under a block of `shape`.
 pub fn ground(shape: BlockShape) -> f32 {
     shape.base - TABLE_HEIGHT * shape.bore
 }
 
-/// Where the middles of the table's four feet stand, seen from above
-/// (x, z), under a block of `shape`.
+/// Where the desk's body stands at its four bottom corners, seen from
+/// above (x, z), half an end panel in from each, under a block of
+/// `shape`.
+#[cfg(test)]
 pub fn feet(shape: BlockShape) -> [Vec2; 4] {
-    let x = (TOP_HALF_LENGTH - LEG_INSET) * shape.bore;
-    let z = (TOP_HALF_DEPTH - LEG_INSET) * shape.bore;
-    [vec2(-x, -z), vec2(x, -z), vec2(x, z), vec2(-x, z)]
+    let inset = END_PANEL / 2.0;
+    let x = (TOP_HALF_LENGTH - OVERHANG - inset) * shape.bore;
+    let front = (TOP_HALF_DEPTH - OVERHANG - inset) * shape.bore;
+    let back = -(TOP_HALF_DEPTH - inset) * shape.bore;
+    [
+        Vec2::new(-x, back),
+        Vec2::new(x, back),
+        Vec2::new(x, front),
+        Vec2::new(-x, front),
+    ]
+}
+
+/// A plain board of the desk, square to the axes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Board {
+    /// Its least corner.
+    pub low: Vec3,
+    /// Its most corner.
+    pub high: Vec3,
+}
+
+/// The end panel at the desk's left, under a block of `shape`: from the
+/// ground up to the top's underside, from the back to the front.
+pub fn end_panel(shape: BlockShape) -> Board {
+    let unit = shape.bore;
+    let outside = -(TOP_HALF_LENGTH - OVERHANG) * unit;
+    Board {
+        low: vec3(outside, ground(shape), -TOP_HALF_DEPTH * unit),
+        high: vec3(
+            outside + END_PANEL * unit,
+            underside(shape),
+            (TOP_HALF_DEPTH - OVERHANG) * unit,
+        ),
+    }
+}
+
+/// The knee space's two sides, across: the end panel's inside and the
+/// pedestal's, under a block of `shape`.
+fn knee_space(shape: BlockShape) -> (f32, f32) {
+    (end_panel(shape).high.x, cabinet_place(shape).left)
+}
+
+/// The rail across the back of the knee space, under a block of `shape`.
+pub fn back_rail(shape: BlockShape) -> Board {
+    let unit = shape.bore;
+    let (left, right) = knee_space(shape);
+    let middle_z = (RAIL_INSET - TOP_HALF_DEPTH) * unit;
+    let half = RAIL_THICKNESS * unit / 2.0;
+    let low = ground(shape) + RAIL_LOW * unit;
+    Board {
+        low: vec3(left, low, middle_z - half),
+        high: vec3(right, low + RAIL_HEIGHT * unit, middle_z + half),
+    }
+}
+
+/// The pencil drawer across the top of the knee space, under a block of
+/// `shape`: its front flush with the pedestal's drawers, shut for good.
+pub fn pencil_drawer(shape: BlockShape) -> DrawerPlace {
+    let unit = shape.bore;
+    let (left, right) = knee_space(shape);
+    let gap = PENCIL_GAP * unit;
+    let front = cabinet_place(shape).front;
+    let top = underside(shape) - gap / 2.0;
+    DrawerPlace {
+        left: left + gap,
+        right: right - gap,
+        front,
+        back: front - PENCIL_DEPTH * unit,
+        bottom: top - PENCIL_HEIGHT * unit + gap,
+        top,
+        most: 0.0,
+    }
 }
 
 /// The table under the engine.
 pub struct Table {
-    /// The top, the apron and the legs, on the graphics card.
+    /// The top, the end panel, the pedestal, the pencil drawer and the
+    /// rail, on the graphics card.
     mesh: GpuMesh,
     /// Made on the first draw (it needs a window); `Some(None)` where it
     /// cannot be built, and the table is drawn in plain colors.
@@ -276,7 +378,7 @@ impl Table {
     /// Draws the table seen from `camera`.
     pub fn draw(&mut self, camera: &Camera3D) {
         let material = self.material.get_or_insert_with(|| {
-            let material = load_lit(WOOD_FRAGMENT, &[]);
+            let material = load_lit(WOOD_FRAGMENT, &[("Shift", UniformType::Float3)]);
             if material.is_none() {
                 // Drawn in plain colors, alpha means transparency.
                 for vertex in &mut self.mesh.edit().vertices {
@@ -285,6 +387,9 @@ impl Table {
             }
             material
         });
+        if let Some(material) = material {
+            material.set_uniform("Shift", Vec3::ZERO);
+        }
         let light = key_light(camera.position);
         draw_lit([&self.mesh], material.as_ref(), camera, light);
     }
@@ -324,57 +429,84 @@ fn highlight_mesh(shape: BlockShape) -> Mesh {
     }
 }
 
-/// The table's top, apron and legs under a block of `shape`.
-fn build(shape: BlockShape) -> Solid {
+/// Adds `board` to `solid` in `wood`, its grain the way the wood's says:
+/// along the shaft, or up and down.
+fn board_solid(solid: &mut Solid, board: Board, wood: Color) {
+    let middle = (board.low + board.high) / 2.0;
+    let half = (board.high - board.low) / 2.0;
+    if wood.a == ALONG_SHAFT {
+        solid.bar(
+            vec3(board.low.x, middle.y, middle.z),
+            vec3(board.high.x, middle.y, middle.z),
+            Vec3::Y,
+            (half.y, half.y),
+            half.z,
+            wood,
+        );
+    } else {
+        solid.bar(
+            vec3(middle.x, board.low.y, middle.z),
+            vec3(middle.x, board.high.y, middle.z),
+            Vec3::Z,
+            (half.z, half.z),
+            half.x,
+            wood,
+        );
+    }
+}
+
+/// Adds the desk's top to `solid`, under a block of `shape`: a slab with
+/// a rounded edge along its front and ends, its back square.
+fn top_solid(solid: &mut Solid, shape: BlockShape) {
     let unit = shape.bore;
-    let mut solid = Solid::new();
     let top = top_height(shape);
-    let underside = top - TOP_THICKNESS * unit;
+    let edge = TOP_THICKNESS * unit / 2.0;
+    let middle_y = top - edge;
     let (length, depth) = (TOP_HALF_LENGTH * unit, TOP_HALF_DEPTH * unit);
-    let middle_y = (top + underside) / 2.0;
-    let half_thick = TOP_THICKNESS * unit / 2.0;
+    let (ends, front) = (length - edge, depth - edge);
+    let half_depth = (front + depth) / 2.0;
+    let middle_z = (front - depth) / 2.0;
     solid.bar(
-        vec3(-length, middle_y, 0.0),
-        vec3(length, middle_y, 0.0),
+        vec3(-ends, middle_y, middle_z),
+        vec3(ends, middle_y, middle_z),
         Vec3::Z,
-        (depth, depth),
-        half_thick,
+        (half_depth, half_depth),
+        edge,
         TOP_WOOD,
     );
-    // The apron: a board under each edge, between the legs.
-    let (reach_x, reach_z) = (length - LEG_INSET * unit, depth - LEG_INSET * unit);
-    let apron_y = underside - APRON_DEPTH * unit / 2.0;
-    let apron_half = APRON_DEPTH * unit / 2.0;
-    let board = APRON_HALF_THICKNESS * unit;
+    solid.cylinder(
+        vec3(-ends, middle_y, front),
+        vec3(ends, middle_y, front),
+        edge,
+        EDGE_SEGMENTS,
+        TOP_WOOD,
+    );
     for side in [-1.0, 1.0] {
-        solid.bar(
-            vec3(-reach_x, apron_y, side * reach_z),
-            vec3(reach_x, apron_y, side * reach_z),
-            Vec3::Y,
-            (apron_half, apron_half),
-            board,
-            APRON_WOOD,
+        solid.cylinder(
+            vec3(side * ends, middle_y, -depth),
+            vec3(side * ends, middle_y, front),
+            edge,
+            EDGE_SEGMENTS,
+            TOP_WOOD,
         );
-        solid.bar(
-            vec3(side * reach_x, apron_y, -reach_z),
-            vec3(side * reach_x, apron_y, reach_z),
-            Vec3::Y,
-            (apron_half, apron_half),
-            board,
-            APRON_WOOD,
+        solid.ball(
+            vec3(side * ends, middle_y, front),
+            edge,
+            CORNER_RINGS,
+            TOP_WOOD,
         );
     }
-    let leg = LEG_HALF_WIDTH * unit;
-    for foot in feet(shape) {
-        solid.bar(
-            vec3(foot.x, ground(shape), foot.y),
-            vec3(foot.x, underside, foot.y),
-            Vec3::X,
-            (leg, leg),
-            leg,
-            LEG_WOOD,
-        );
-    }
+}
+
+/// The desk under a block of `shape`: its top, end panel, pedestal, pencil
+/// drawer and back rail.
+fn build(shape: BlockShape) -> Solid {
+    let mut solid = Solid::new();
+    top_solid(&mut solid, shape);
+    board_solid(&mut solid, end_panel(shape), PANEL_WOOD);
+    board_solid(&mut solid, back_rail(shape), RAIL_WOOD);
+    cabinet_solid(&mut solid, cabinet_place(shape), PANEL_WOOD);
+    solid.absorb(drawer_solid(pencil_drawer(shape), shape.bore));
     solid
 }
 

@@ -85,6 +85,13 @@ void main() {
     gl_FragColor = vec4(lit, 1.0) * texture2D(Texture, uv);
 }"#;
 
+/// How far round the middle the top of the cloud under a block of
+/// `shape` is flat enough to walk on, along the shaft and front to back:
+/// an oval.
+pub fn ground_reach(shape: BlockShape) -> Vec2 {
+    Vec2::new(HALF_LENGTH, HALF_DEPTH) * shape.bore * CLOUD_SCALE * FLAT_SHARE
+}
+
 /// Half the cloud across, along the shaft.
 ///
 /// Sizes are fractions of the bore's radius times `CLOUD_SCALE`, so the
@@ -92,9 +99,12 @@ void main() {
 const HALF_LENGTH: f32 = 5.0;
 /// How much bigger every size of the cloud is than the bore's radius says:
 /// it carries the table, which is far wider than the engine.
-const CLOUD_SCALE: f32 = 2.4;
+const CLOUD_SCALE: f32 = 4.0;
 /// Half the cloud front to back.
-const HALF_DEPTH: f32 = 3.6;
+const HALF_DEPTH: f32 = 5.0;
+/// How far out its top is flat enough to walk on, as a share of its half
+/// length and depth: short of the bumps along its edge.
+const FLAT_SHARE: f32 = 0.9;
 /// Every puff is squashed to this share of its width in height, so the
 /// top rolls gently instead of bulging.
 const FLATTEN: f32 = 0.35;

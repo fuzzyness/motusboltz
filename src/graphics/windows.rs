@@ -86,7 +86,7 @@ const GLASS_TINT: Color = Color::from_rgba(196, 228, 255, 255);
 /// Fragment shader of the glass: faintly tinted, clearer face on, with a
 /// dark seal round its edge, a bright rim where it turns away and two
 /// soft streaks of reflected light across it.
-const GLASS_FRAGMENT: &str = r#"#version 100
+pub(super) const GLASS_FRAGMENT: &str = r#"#version 100
 precision mediump float;
 
 varying lowp vec4 color;

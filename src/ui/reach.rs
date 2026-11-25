@@ -38,6 +38,13 @@ pub const BUTTON_AIM: f32 = 1.3;
 pub const KNOB_AIM: f32 = 0.45;
 /// How far round the crank's handle aiming finds it, in bore radii.
 pub const CRANK_AIM: f32 = 0.6;
+/// How far round the middle of a drawer's front's top edge aiming finds
+/// it, in bore radii.
+pub const DRAWER_AIM: f32 = 0.8;
+/// How far a drawer moves for each point the mouse moves, in bore radii.
+pub const PULL_PER_POINT: f32 = 0.02;
+/// How far round the mixing box's middle aiming finds it, in bore radii.
+pub const MIXING_BOX_AIM: f32 = 0.9;
 /// How far round the cartridge aiming finds it, in the opening's radii.
 pub const CARTRIDGE_AIM: f32 = 1.3;
 /// How far in front of the eyes the cartridge is carried, in bore radii.
@@ -126,10 +133,22 @@ pub fn caption(handle: Handle, cartridge: CartridgeState) -> &'static str {
         Handle::Clock => "Desk clock \u{b7} tap E: slow motion \u{b7} hold E: pause",
         Handle::ResetButton => "Reset \u{b7} tap E to refill the gas",
         Handle::TracersButton => "Tracers \u{b7} tap E",
+        Handle::MixingBox => mixing_caption(false),
+        Handle::Drawer(_) => "Drawer \u{b7} hold E, then pull the mouse back to open it",
         Handle::Cartridge => match cartridge {
             CartridgeState::Lying => "Regenerator \u{b7} press E to pick it up",
             CartridgeState::Seated => "Regenerator \u{b7} press E to take it out",
         },
+    }
+}
+
+/// The caption under the crosshair for the mixing box, aimed at, its
+/// divider `raised` or not.
+pub fn mixing_caption(raised: bool) -> &'static str {
+    if raised {
+        "Mixing box \u{b7} tap E to drop the divider: they stay mixed (2nd law)"
+    } else {
+        "Mixing box \u{b7} tap E to lift the divider and let them mix (2nd law)"
     }
 }
 
@@ -140,7 +159,8 @@ pub fn using_caption(handle: Handle) -> &'static str {
         Handle::Valve(_) | Handle::TankKnob => "Move the mouse left or right to turn",
         Handle::Clock => "Hold E to pause, or let go for slow motion",
         Handle::Cartridge => "Bring it to the opening \u{b7} press E to drop it",
-        Handle::ResetButton | Handle::TracersButton => "",
+        Handle::Drawer(_) => "Pull the mouse back to open it, forward to shut it",
+        Handle::ResetButton | Handle::TracersButton | Handle::MixingBox => "",
     }
 }
 

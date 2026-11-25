@@ -192,8 +192,11 @@ use crate::ui::reach::{
     CARTRIDGE_AIM,
     CRANK_AIM,
     CartridgeState,
+    DRAWER_AIM,
     EDGE_TURN_PER_SECOND,
     KNOB_AIM,
+    MIXING_BOX_AIM,
+    PULL_PER_POINT,
     REACH,
     SIGHT_REACH,
     Sight,
@@ -203,6 +206,7 @@ use crate::ui::reach::{
     VALVE_AIM,
     aimed,
     caption,
+    mixing_caption,
     sight_caption,
     using_caption, //
 };
@@ -809,7 +813,8 @@ impl App {
         }
         // With the menu open it stops, or goes on falling.
         let shape = BlockShape::new(self.simulation.geometry());
-        let map = WalkMap::new(shape, self.simulation.port(), self.cartridge_on_table());
+        let map = WalkMap::new(shape, self.simulation.port(), self.cartridge_on_table())
+            .with_drawers(shape, self.scene.drawers().pulls());
         if walker.walk(moves, dt, &map) == Walked::Fell {
             // Back at the start, facing the engine, the mouse as it was.
             walker = Walker::standing(shape);
@@ -1069,6 +1074,7 @@ impl App {
         let chose = |key: bool, action: Action| key || events.action == Some(action);
         if chose(keys.reset_gas, Action::ResetGas) {
             self.simulation.reset();
+            self.scene.mixing_box_mut().sort();
         }
         // Space does what the shared button shows: Start while it is
         // offered (which also lifts a pause), Pause or Resume otherwise.
@@ -1180,6 +1186,7 @@ impl App {
                 (Handle::Cartridge, cartridge),
                 (Handle::TankKnob, knob),
                 (Handle::Clock, clock_place(shape).face()),
+                (Handle::MixingBox, self.scene.mixing_box().place().grip()),
             ];
             // A crank the engine has caught turns by itself; it cannot be
             // grabbed until the engine is refilled or comes to rest.
@@ -1230,21 +1237,28 @@ impl App {
             Handle::Clock => self.hold_clock(dt),
             // Pressed once when grabbed; held, they only keep the camera
             // still.
-            Handle::ResetButton | Handle::TracersButton | Handle::Cartridge => {}
+            Handle::ResetButton
+            | Handle::TracersButton
+            | Handle::Cartridge
+            | Handle::MixingBox
+            | Handle::Drawer(_) => {}
         }
         self.grab = Some(grab);
     }
 
-    /// Does what pressing `handle` does: Reset refills the gas and Tracers
-    /// turns the tracers on or off, as their keys would, and the cartridge
-    /// puts the regenerator in or takes it out, as E would.
+    /// Does what pressing `handle` does: Reset refills the gas and sorts
+    /// the mixing box, and Tracers turns the tracers on or off, as their
+    /// keys would; the cartridge puts the regenerator in or takes it out,
+    /// as E would; and the mixing box lifts or drops its divider.
     fn press(&mut self, handle: Handle) {
         match handle {
             Handle::ResetButton => {
                 self.simulation.reset();
+                self.scene.mixing_box_mut().sort();
                 self.controls.press(Action::ResetGas);
             }
             Handle::TracersButton => self.toggle_tracers(),
+            Handle::MixingBox => self.scene.mixing_box_mut().toggle(),
             Handle::Cartridge => {
                 // Not while it is carried or falling.
                 if self.scene.cartridge().carried().is_none() {
@@ -1254,7 +1268,11 @@ impl App {
                     self.demo = None;
                 }
             }
-            Handle::Crank | Handle::Valve(_) | Handle::TankKnob | Handle::Clock => {}
+            Handle::Crank
+            | Handle::Valve(_)
+            | Handle::TankKnob
+            | Handle::Clock
+            | Handle::Drawer(_) => {}
         }
     }
 
@@ -1310,7 +1328,21 @@ impl App {
                 KNOB_AIM * unit,
             ),
             usable(Handle::Clock, clock.middle(), clock.radius()),
+            usable(
+                Handle::MixingBox,
+                self.scene.mixing_box().place().middle(),
+                MIXING_BOX_AIM * unit,
+            ),
         ];
+        let drawers = self.scene.drawers();
+        let places = drawers.places().into_iter().zip(drawers.pulls());
+        for (index, (place, pull)) in places.enumerate() {
+            usables.push(usable(
+                Handle::Drawer(index as u8),
+                place.grip(pull),
+                DRAWER_AIM * unit,
+            ));
+        }
         if !self.crank_locked {
             let pistons = self.simulation.power_pistons();
             let crank = hand_crank(self.simulation.geometry(), pistons);
@@ -1393,12 +1425,16 @@ impl App {
                 usable: true,
             },
             None => {
+                let raised = self.scene.mixing_box().raised();
                 let sights = self.sights(shape);
                 let reach = SIGHT_REACH * shape.bore;
                 let seen = reach::aimed(walker.eye, walker.forward(), &sights, reach);
                 Aim {
                     caption: aimed
-                        .map(|handle| caption(handle, cartridge))
+                        .map(|handle| match handle {
+                            Handle::MixingBox => mixing_caption(raised),
+                            _ => caption(handle, cartridge),
+                        })
                         .or(seen.map(sight_caption)),
                     using: false,
                     usable: aimed.is_some(),
@@ -1418,12 +1454,12 @@ impl App {
         };
         let middle = size / 2.0;
         match handle {
-            Handle::ResetButton | Handle::TracersButton => self.press(handle),
+            Handle::ResetButton | Handle::TracersButton | Handle::MixingBox => self.press(handle),
             Handle::Clock => {
                 self.desk_clock.press();
                 self.using = using(middle);
             }
-            Handle::Valve(_) | Handle::TankKnob => {
+            Handle::Valve(_) | Handle::TankKnob | Handle::Drawer(_) => {
                 walker.grip();
                 self.using = using(middle);
             }
@@ -1502,7 +1538,17 @@ impl App {
                     return false;
                 }
             }
-            Handle::ResetButton | Handle::TracersButton => return false,
+            Handle::Drawer(index) => {
+                // The hand moves with the mouse across the floor, as the
+                // view sees it: back toward the eyes, or across.
+                let forward = walker.forward();
+                let ahead = vec2(forward.x, forward.z).normalize_or(-Vec2::Y);
+                let right = vec2(-ahead.y, ahead.x);
+                let hand = right * moved.x - ahead * moved.y;
+                let by = hand.y * PULL_PER_POINT * self.menu.sensitivity * shape.bore;
+                self.scene.drawers_mut().pull(usize::from(index), by);
+            }
+            Handle::ResetButton | Handle::TracersButton | Handle::MixingBox => return false,
         }
         true
     }
@@ -1530,7 +1576,9 @@ impl App {
             | Handle::Valve(_)
             | Handle::TankKnob
             | Handle::ResetButton
-            | Handle::TracersButton => {}
+            | Handle::TracersButton
+            | Handle::MixingBox
+            | Handle::Drawer(_) => {}
         }
     }
 
@@ -1640,6 +1688,7 @@ impl App {
         self.simulation.set_cold_kelvin(cold_kelvin);
         self.simulation.set_regenerator(scenario.regenerator());
         self.simulation.reset();
+        self.scene.mixing_box_mut().sort();
         self.controls.set_kelvin(hot_kelvin, cold_kelvin);
         self.paused = false;
         self.show_demos = false;
