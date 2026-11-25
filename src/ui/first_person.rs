@@ -631,15 +631,19 @@ pub struct Aim {
     pub caption: Option<&'static str>,
     /// Whether something is in use, gripped, held or carried.
     pub using: bool,
+    /// Whether the crosshair is on something to use, rather than only to
+    /// look at.
+    pub usable: bool,
 }
 
 /// Draws the crosshair in the middle of a window `width` by `height`, grown
-/// into a ring over something within reach and filled while it is in use,
+/// into a ring over something to use within reach and filled while it is
+/// in use,
 /// with `aim`'s caption under it, and the hint at the bottom, saying a
 /// click captures the mouse while `waiting` for one.
 pub fn draw_view(pen: &mut Pen, width: f32, height: f32, waiting: bool, aim: Aim) {
     let middle = vec2(width, height) / 2.0;
-    if aim.caption.is_some() || aim.using {
+    if aim.usable || aim.using {
         let ring = |radius: f32, color: Color| {
             for piece in 0..AIM_RING_PIECES {
                 let angle = |at: usize| std::f32::consts::TAU * at as f32 / AIM_RING_PIECES as f32;

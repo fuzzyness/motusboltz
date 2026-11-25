@@ -35,11 +35,16 @@ use crate::graphics::buttons::{
 };
 use crate::graphics::clock::clock_place;
 use crate::graphics::tank::tank_place;
+use crate::graphics::thermometers::{
+    dial_middle,
+    dial_radius, //
+};
 use crate::graphics::valves::{
     ValveWheel,
     valve_wheels, //
 };
 use crate::sim::engine::ConnectedChambers;
+use crate::sim::reservoir::ReservoirSide;
 use crate::ui::controls::{
     BACKING,
     BACKING_RADIUS,
@@ -288,6 +293,9 @@ const TANK_REACH: f32 = 1.4;
 /// How far round its case's middle the desk clock counts as under the
 /// pointer, in the case's radii.
 const CLOCK_REACH: f32 = 1.3;
+/// How far round a thermometer's dial counts as under the pointer, in the
+/// dial's radii.
+const THERMOMETER_REACH: f32 = 1.2;
 /// How far round a valve's handwheel counts as over the valve, in the
 /// wheel's radii.
 const VALVE_REACH: f32 = 1.3;
@@ -477,6 +485,36 @@ pub fn tags(engine: &ConnectedChambers, cartridge: Option<Vec3>) -> Vec<Tag> {
             radius: CLOCK_REACH * clock.radius(),
         }],
     });
+    // The thermometers, each naming the law it shows.
+    let thermometer = |key, name, role, side| {
+        let middle = dial_middle(shape, side);
+        let radius = dial_radius(shape);
+        let top = middle + Vec3::Y * radius;
+        Tag {
+            key,
+            name,
+            role,
+            anchor: top,
+            also: None,
+            outward: away(top, out) + Vec3::Y * out,
+            spots: vec![Spot::Ball {
+                center: middle,
+                radius: THERMOMETER_REACH * radius,
+            }],
+        }
+    };
+    tags.push(thermometer(
+        "hot thermometer",
+        "Hot thermometer",
+        "2nd law: heat flows from hot to cold",
+        ReservoirSide::Hot,
+    ));
+    tags.push(thermometer(
+        "cold thermometer",
+        "Cold thermometer",
+        "3rd law: it can never reach 0 K",
+        ReservoirSide::Cold,
+    ));
     if let Some(rest) = cartridge {
         tags.push(Tag {
             key: CARTRIDGE_KEY,

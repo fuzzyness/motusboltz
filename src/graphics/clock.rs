@@ -102,9 +102,9 @@ const NUMERAL_RING: f32 = 0.64;
 /// Height of a numeral, as a share of the dial's radius.
 const NUMERAL_HEIGHT: f32 = 0.27;
 /// Rows in the numerals' grid, from the baseline to the top.
-const NUMERAL_ROWS: f32 = 6.0;
+pub(super) const NUMERAL_ROWS: f32 = 6.0;
 /// Columns in a digit.
-const NUMERAL_COLUMNS: f32 = 4.0;
+pub(super) const NUMERAL_COLUMNS: f32 = 4.0;
 /// Room between the digits of a numeral, in the numerals' grid.
 const NUMERAL_GAP: f32 = 1.2;
 /// Half the width of a numeral's stroke, in the numerals' grid.
@@ -327,11 +327,11 @@ fn in_face(center: Vec3, angle: f32, radius: f32) -> Vec3 {
 }
 
 /// One stroke of a digit: from one point of its grid to another.
-type Stroke = ((f32, f32), (f32, f32));
+pub(super) type Stroke = ((f32, f32), (f32, f32));
 
 /// Strokes of each digit, as segments between points of a grid
 /// `NUMERAL_COLUMNS` wide and `NUMERAL_ROWS` high, from the baseline.
-fn digit(glyph: char) -> &'static [Stroke] {
+pub(super) fn digit(glyph: char) -> &'static [Stroke] {
     match glyph {
         '0' => &[
             ((1.0, 0.0), (3.0, 0.0)),

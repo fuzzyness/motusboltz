@@ -29,6 +29,7 @@ pub mod solid;
 pub mod sprites;
 pub mod table;
 pub mod tank;
+pub mod thermometers;
 pub mod trails;
 pub mod valves;
 pub mod windows;
@@ -103,6 +104,7 @@ use sprites::{
 };
 use table::Table;
 use tank::Tank;
+use thermometers::Thermometers;
 use trails::TrailRenderer;
 use valves::Valves;
 use windows::Windows;
@@ -398,6 +400,8 @@ pub struct Scene {
     hatch: Hatch,
     /// First person's glass windows in the cylinders.
     windows: Windows,
+    /// The thermometers on the cylinders.
+    thermometers: Thermometers,
     /// The scene is seen in first person: the block whole, with windows
     /// and the slot, rather than cut away toward the camera.
     first_person: bool,
@@ -470,6 +474,7 @@ impl Scene {
             cartridge: Cartridge::new(shape, simulation.regenerator().is_enabled()),
             hatch: Hatch::new(shape),
             windows: Windows::new(shape),
+            thermometers: Thermometers::new(shape),
             first_person: false,
             tank: Tank::new(shape, simulation.port()),
             knob_turn: 0.0,
@@ -673,6 +678,8 @@ impl Scene {
         self.cartridge
             .follow(simulation.regenerator().is_enabled(), seconds);
         self.hatch.follow(self.cartridge.door_open(), seconds);
+        self.thermometers
+            .follow(simulation.hot_kelvin(), simulation.cold_kelvin(), seconds);
         self.chamber.draw(camera, whole);
         self.fire.draw_burner();
         if diagnostics::shown(Piece::Table) {
@@ -689,6 +696,7 @@ impl Scene {
             self.windows.draw_sills(camera);
         }
         self.tank.draw(camera);
+        self.thermometers.draw(camera);
         self.clock.draw(self.clock_hands, seconds, camera);
         if scenery == Scenery::Sky {
             self.cloud.draw(camera, light);

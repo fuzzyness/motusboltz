@@ -46,12 +46,19 @@ pub const CARRY_AHEAD: f32 = 1.6;
 /// low, clear of the crosshair and its caption.
 pub const CARRY_BELOW: f32 = 0.9;
 
-/// Something within reach to use: what it is, the point to aim at, and how
-/// far round that point aiming finds it.
+/// How far off the figure sees what it only looks at, in bore radii:
+/// across the table.
+pub const SIGHT_REACH: f32 = 9.0;
+/// How far round a thermometer's dial aiming finds it, in the dial's
+/// radii.
+pub const THERMOMETER_AIM: f32 = 1.2;
+
+/// Something within reach to use, or in sight to look at: what it is, the
+/// point to aim at, and how far round that point aiming finds it.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Usable {
+pub struct Usable<T = Handle> {
     /// What it is.
-    pub handle: Handle,
+    pub handle: T,
     /// The point to aim at.
     pub point: Vec3,
     /// How far round the point the line of sight finds it.
@@ -62,7 +69,7 @@ pub struct Usable {
 /// unit vector) is on, within `reach` of the eyes: of those it passes
 /// within their radius of, the one it passes nearest the middle of, for
 /// its size.
-pub fn aimed(eye: Vec3, forward: Vec3, usables: &[Usable], reach: f32) -> Option<Handle> {
+pub fn aimed<T: Copy>(eye: Vec3, forward: Vec3, usables: &[Usable<T>], reach: f32) -> Option<T> {
     usables
         .iter()
         .filter_map(|usable| {
@@ -74,6 +81,27 @@ pub fn aimed(eye: Vec3, forward: Vec3, usables: &[Usable], reach: f32) -> Option
         })
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(handle, _)| handle)
+}
+
+/// Something in first person only to look at, which E does nothing to,
+/// but whose caption says what it shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sight {
+    /// The thermometer on `ReservoirSide`'s cylinder.
+    Thermometer(ReservoirSide),
+}
+
+/// The caption under the crosshair for `sight`, looked at: what it is and
+/// which law it shows.
+pub fn sight_caption(sight: Sight) -> &'static str {
+    match sight {
+        Sight::Thermometer(ReservoirSide::Hot) => {
+            "Hot thermometer \u{b7} the gap to the cold side drives the engine (2nd law)"
+        }
+        Sight::Thermometer(ReservoirSide::Cold) => {
+            "Cold thermometer \u{b7} stops at 77 K: nothing reaches 0 K (3rd law)"
+        }
+    }
 }
 
 /// What the cartridge is doing, for its caption.

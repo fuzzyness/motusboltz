@@ -64,6 +64,10 @@ use crate::graphics::cartridge;
 use crate::graphics::clock::clock_place;
 use crate::graphics::table;
 use crate::graphics::tank::tank_place;
+use crate::graphics::thermometers::{
+    dial_middle,
+    dial_radius, //
+};
 use crate::graphics::valves::valve_wheels;
 use crate::graphics::{
     Dissolve,
@@ -181,6 +185,7 @@ use crate::ui::pen::Pen;
 use crate::ui::physics_budget::PhysicsBudget;
 use crate::ui::physics_runner::PhysicsRunner;
 use crate::ui::reach::{
+    self,
     BUTTON_AIM,
     CARRY_AHEAD,
     CARRY_BELOW,
@@ -190,11 +195,15 @@ use crate::ui::reach::{
     EDGE_TURN_PER_SECOND,
     KNOB_AIM,
     REACH,
+    SIGHT_REACH,
+    Sight,
+    THERMOMETER_AIM,
     TURN_PER_POINT,
     Usable,
     VALVE_AIM,
     aimed,
     caption,
+    sight_caption,
     using_caption, //
 };
 use crate::ui::scene_labels::{
@@ -1249,6 +1258,19 @@ impl App {
         }
     }
 
+    /// What a figure on a block of `shape` may look at for a caption, with
+    /// the points to aim at.
+    fn sights(&self, shape: BlockShape) -> Vec<Usable<Sight>> {
+        let radius = THERMOMETER_AIM * dial_radius(shape);
+        [ReservoirSide::Hot, ReservoirSide::Cold]
+            .map(|side| Usable {
+                handle: Sight::Thermometer(side),
+                point: dial_middle(shape, side),
+                radius,
+            })
+            .to_vec()
+    }
+
     /// The parts within reach of a figure on a block of `shape` to use with
     /// E, with the points to aim at.
     fn usables(&self, shape: BlockShape) -> Vec<Usable> {
@@ -1368,11 +1390,20 @@ impl App {
             Some(using) => Aim {
                 caption: Some(using_caption(using.handle)),
                 using: true,
+                usable: true,
             },
-            None => Aim {
-                caption: aimed.map(|handle| caption(handle, cartridge)),
-                using: false,
-            },
+            None => {
+                let sights = self.sights(shape);
+                let reach = SIGHT_REACH * shape.bore;
+                let seen = reach::aimed(walker.eye, walker.forward(), &sights, reach);
+                Aim {
+                    caption: aimed
+                        .map(|handle| caption(handle, cartridge))
+                        .or(seen.map(sight_caption)),
+                    using: false,
+                    usable: aimed.is_some(),
+                }
+            }
         }
     }
 
