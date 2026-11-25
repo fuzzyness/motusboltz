@@ -15,8 +15,10 @@
 //! ahead of the eyes, lagging the view. Brought near the front of the
 //! opening it flies the rest of the way in from there; let go anywhere
 //! else, it falls onto the table and lies where it lands, and flies back
-//! there when the regenerator is next taken out. Drawing only: what a
-//! press does is the app's.
+//! there when the regenerator is next taken out. Taken out, it first
+//! slides straight out of the slot (see `hatch.rs`), then comes to hand.
+//! The slot's door stands open while it is on its way in or out and while
+//! it is seated. Drawing only: what a press does is the app's.
 
 use std::f32::consts::{
     FRAC_PI_2,
@@ -68,7 +70,7 @@ use super::{
 pub const FIT: f32 = 0.97;
 /// Thickness of the cartridge, in bore radii: the shared wall's, so it
 /// fills the opening's length when seated.
-const THICKNESS: f32 = 0.2;
+pub const THICKNESS: f32 = 0.2;
 /// Opacity of the seated cartridge drawn again over the gas.
 const GHOST_OPACITY: f32 = 0.3;
 
@@ -142,6 +144,10 @@ const SNAP_REARM: f32 = 1.5;
 /// How near where it is carried to a cartridge must be to be in the
 /// hands, rather than still on its way out of the opening, in bore radii.
 const IN_HANDS: f32 = 0.2;
+/// Share of the trip in from which the slot's door stands open: early
+/// enough that it is all the way up before the slide in starts, and, on
+/// the way out, until the cartridge is well clear.
+pub const DOOR_OPENS_AT: f32 = 0.3;
 /// The steel ring.
 const RING_STEEL: Color = finish(176, 184, 198, 0.75);
 /// The wire mesh.
@@ -195,6 +201,12 @@ pub fn trip_pose(shape: BlockShape, from: (Vec3, Quat), progress: f32) -> (Vec3,
         let share = smoothstep(0.0, 1.0, (progress - FLIGHT_SHARE) / (1.0 - FLIGHT_SHARE));
         (line_up(shape).lerp(seat(shape), share), seated)
     }
+}
+
+/// Seconds it takes to slide into the opening from in front of it, or
+/// out: the last part of its trip.
+pub fn slide_seconds() -> f32 {
+    (1.0 - FLIGHT_SHARE) * TRIP_SECONDS
 }
 
 /// Builds the cartridge for an opening of `shape`, its middle at the
@@ -255,6 +267,9 @@ pub struct Cartridge {
     /// Whether, carried, it flies in once brought near the opening: not
     /// until it has been carried away from it after being taken out.
     snaps: bool,
+    /// Taken out into the hands, how far it has slid out of the slot, from
+    /// 0 to 1, while it is.
+    leaving: Option<f32>,
     /// A fall onto the table under way: its middle and turn when let go,
     /// and seconds since.
     falling: Option<((Vec3, Quat), f32)>,
@@ -305,6 +320,7 @@ impl Cartridge {
             from: (rest(shape), Quat::IDENTITY),
             carried: None,
             snaps: false,
+            leaving: None,
             falling: None,
             last_seconds: None,
             shape,
@@ -355,8 +371,10 @@ impl Cartridge {
     /// or out of the opening.
     pub fn pick_up(&mut self) {
         // Off the table it may fly in at once; out of the opening, not
-        // until it has been carried away (see `carry`).
+        // until it has been carried away (see `carry`), and it slides out
+        // of the slot first.
         self.snaps = self.progress <= 0.0;
+        self.leaving = self.seated().then_some(0.0);
         self.carried = Some(self.now());
         self.falling = None;
         self.progress = 0.0;
@@ -369,6 +387,15 @@ impl Cartridge {
         let Some((at, turned)) = self.carried else {
             return;
         };
+        if let Some(out) = self.leaving {
+            // Straight out of the slot the way it slid in, then to hand.
+            let out = out + dt.max(0.0) / slide_seconds();
+            let share = smoothstep(0.0, 1.0, out.min(1.0));
+            let at = seat(self.shape).lerp(line_up(self.shape), share);
+            self.carried = Some((at, Quat::from_rotation_z(-FRAC_PI_2)));
+            self.leaving = (out < 1.0).then_some(out);
+            return;
+        }
         let share = 1.0 - (-dt.max(0.0) / CARRY_LAG_SECONDS).exp();
         let at = at.lerp(center, share);
         self.carried = Some((at, turned.slerp(turn, share)));
@@ -389,9 +416,17 @@ impl Cartridge {
         self.snaps && self.carried().is_some_and(|at| self.near_opening(at, 1.0))
     }
 
+    /// Whether the slot's door should stand open: while it slides in or
+    /// out, and while it is seated.
+    pub fn door_open(&self) -> bool {
+        let settled = self.carried.is_none() && self.falling.is_none();
+        self.leaving.is_some() || (settled && self.progress > DOOR_OPENS_AT)
+    }
+
     /// Lets go of it to fall onto the table with its middle at `spot`, where
     /// it then lies.
     pub fn drop_onto(&mut self, spot: Vec3) {
+        self.leaving = None;
         if let Some(carried) = self.carried.take() {
             self.lying = vec3(spot.x, rest(self.shape).y, spot.z);
             self.from = (self.lying, Quat::IDENTITY);
@@ -402,6 +437,7 @@ impl Cartridge {
     /// Lets go of it to fly into the opening from where it is carried; the
     /// regenerator goes in with it.
     pub fn fly_in(&mut self) {
+        self.leaving = None;
         if let Some(carried) = self.carried.take() {
             self.from = carried;
             self.progress = 0.0;

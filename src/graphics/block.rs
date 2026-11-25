@@ -2,6 +2,11 @@
 //! between them, drawn solid, with a round-cornered window cut into the
 //! half that faces the camera so the gas stays in view from any side.
 //!
+//! In first person it is drawn whole instead, with glass windows in the
+//! cylinders' walls (see `windows.rs`) and the regenerator's slot in the
+//! front face (see `hatch.rs`): the shader cuts their holes and paints a
+//! bolted frame round each window.
+//!
 //! The mesh is built once as a closed solid: every edge is shared by
 //! exactly two triangles. The window is cut by the shader, which drops the
 //! block's surfaces inside it; through the cut, any surface seen from
@@ -32,6 +37,13 @@ use macroquad::prelude::{
 use super::gpu::{
     GpuMaterial,
     GpuMesh, //
+};
+use super::hatch::slot;
+use super::windows::{
+    BOLT_RADIUS,
+    BOLT_SPACING,
+    PANE_ANGLE,
+    PaneLayout, //
 };
 use super::{
     DRAW_CALL_INDEX_CAPACITY,
@@ -109,8 +121,60 @@ uniform vec4 Window;
 // Distance from the middle of the block to each bore's axis.
 uniform float Offset;
 uniform vec3 Light;
+// First person's windows: half the angle each spans round its bore, the
+// heights of their bottoms and tops, and 1 to cut them (0 not to).
+uniform vec4 Panes;
+// The angle of the windows' middles round each bore, from the way toward
+// the shared wall (the same toward the back), nothing, their corners'
+// radius, and the radius of each bore.
+uniform vec4 PaneShape;
+// Their frames: width, the distance between the bolts and a bolt's
+// radius.
+uniform vec4 Frame;
+// First person's slot for the regenerator: half its width, the heights
+// of its bottom and top, and 1 to cut it (0 not to).
+uniform vec4 Slot;
+
+// The axis of the bore on the side of `p`.
+vec3 bore_axis(vec3 p) {
+    return vec3(p.x < 0.0 ? -Offset : Offset, 0.0, 0.0);
+}
+
+// How far `p` is outside the nearest window of its bore, along the wall
+// and up, less than 0 inside; `at` is where it is from that window's
+// middle, round the bore and up.
+float pane_edge(vec3 p, out vec2 at) {
+    // Toward the shared wall: +x from the hot bore, -x from the cold.
+    float side = p.x < 0.0 ? 1.0 : -1.0;
+    vec2 from_axis = vec2((p.x - bore_axis(p).x) * side, p.z);
+    float angle = abs(atan(from_axis.y, from_axis.x));
+    float off = abs(angle - PaneShape.x);
+    at = vec2(off * PaneShape.w, p.y - 0.5 * (Panes.y + Panes.z));
+    vec2 half_size = vec2(Panes.x * PaneShape.w, 0.5 * (Panes.z - Panes.y));
+    vec2 corner = abs(at) - (half_size - PaneShape.z);
+    return length(max(corner, 0.0)) + min(max(corner.x, corner.y), 0.0) - PaneShape.z;
+}
 
 void main() {
+    // First person: the windows go through the wall, from the bore's
+    // inside out, and the slot from the front face into the opening.
+    float frame = -1.0;
+    vec2 at = vec2(0.0);
+    if (Panes.w > 0.5) {
+        float from_axis = length((world - bore_axis(world)).xz);
+        float pane = pane_edge(world, at);
+        if (from_axis > 0.999 * PaneShape.w && pane < 0.0) {
+            discard;
+        }
+        bool in_slot = abs(world.x) < Slot.x && world.y > Slot.y && world.y < Slot.z;
+        if (Slot.w > 0.5 && in_slot && world.z > 0.0) {
+            discard;
+        }
+        // The frame is painted on the outside only.
+        if (from_axis > 1.01 * PaneShape.w && pane < Frame.x) {
+            frame = pane;
+        }
+    }
     // Inside the window, and on the camera's side of a vertical plane
     // through the nearer bore's axis: cut away. Each cylinder is opened
     // through its own axis, the way engine cutaways are drawn.
@@ -138,7 +202,18 @@ void main() {
     float rings = 0.94 + 0.06 * smoothstep(0.2, 0.8, abs(fract(world.y * 2.2) - 0.5) * 2.0);
     // Vertex alpha is shade: 1 outside, less on the interior surfaces.
     float shade = color.a;
-    vec3 lit = shade * (color.rgb * rings * (0.32 + 0.6 * diffuse + 0.15 * facing)
+    vec3 paint = color.rgb * rings;
+    if (frame >= 0.0) {
+        // Dark steel, with bolts down its middle: along the sides on the
+        // sides, across the top and bottom there.
+        vec2 half_size = vec2(Panes.x * PaneShape.w, 0.5 * (Panes.z - Panes.y));
+        bool on_side = abs(at.x) > half_size.x - PaneShape.z;
+        float along = on_side ? at.y : at.x;
+        float gap = (fract(along / Frame.y + 0.5) - 0.5) * Frame.y;
+        float bolt = length(vec2(frame - 0.5 * Frame.x, gap));
+        paint = bolt < Frame.z ? vec3(0.78, 0.8, 0.86) : vec3(0.24, 0.26, 0.31);
+    }
+    vec3 lit = shade * (paint * (0.32 + 0.6 * diffuse + 0.15 * facing)
         + vec3(0.5) * shine + vec3(0.55, 0.7, 1.0) * rim * 0.22);
     gl_FragColor = vec4(lit, 1.0) * texture2D(Texture, uv);
 }"#;
@@ -253,6 +328,10 @@ impl EngineBlock {
             ("CutNormal", UniformType::Float3),
             ("Window", UniformType::Float4),
             ("Offset", UniformType::Float1),
+            ("Panes", UniformType::Float4),
+            ("PaneShape", UniformType::Float4),
+            ("Frame", UniformType::Float4),
+            ("Slot", UniformType::Float4),
         ];
         let material = load_lit(BLOCK_FRAGMENT, &window)?;
         Some(Self {
@@ -262,14 +341,41 @@ impl EngineBlock {
         })
     }
 
-    /// Draws the block with its window cut toward `camera`.
-    pub fn draw(&self, camera: &Camera3D) {
+    /// Draws the block seen from `camera`: with its window cut toward it,
+    /// or `whole`, as first person sees it, with the cylinders' windows and
+    /// the regenerator's slot cut instead.
+    pub fn draw(&self, camera: &Camera3D, whole: bool) {
         let [half_width, middle, half_height, corner] = self.shape.window();
         let window = Vec4::new(half_width, middle, half_height, corner);
-        self.material
-            .set_uniform("CutNormal", cut_normal(camera.position));
+        // No way toward the camera, no cutaway.
+        let cut = if whole {
+            Vec3::ZERO
+        } else {
+            cut_normal(camera.position)
+        };
+        let on = if whole { 1.0 } else { 0.0 };
+        let panes = PaneLayout::new(self.shape);
+        let slot = slot(self.shape);
+        let unit = self.shape.bore;
+        self.material.set_uniform("CutNormal", cut);
         self.material.set_uniform("Window", window);
         self.material.set_uniform("Offset", self.shape.offset);
+        self.material.set_uniform(
+            "Panes",
+            Vec4::new(panes.half_angle, panes.bottom, panes.top, on),
+        );
+        self.material.set_uniform(
+            "PaneShape",
+            Vec4::new(PANE_ANGLE, 0.0, panes.corner, panes.bore),
+        );
+        self.material.set_uniform(
+            "Frame",
+            Vec4::new(panes.frame, BOLT_SPACING * unit, BOLT_RADIUS * unit, 0.0),
+        );
+        self.material.set_uniform(
+            "Slot",
+            Vec4::new(slot.half_width, slot.bottom, slot.top, on),
+        );
         let light = key_light(camera.position);
         draw_lit([&self.mesh], Some(&self.material), camera, light);
     }

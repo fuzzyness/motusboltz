@@ -27,7 +27,7 @@ fn shown(hot: f32, cold: f32) -> [(usize, usize); 2] {
     let mut sparks = HeatSparks::new(DEFAULT_GEOMETRY);
     for frame in 0..FRAMES {
         simulation.update(FRAME as f32);
-        sparks.build(&simulation, &camera(), frame as f64 * FRAME);
+        sparks.build(&simulation, &camera(), frame as f64 * FRAME, true);
     }
     let mut counts = [(0, 0); 2];
     for (center, color) in sparks.sprites.centers() {

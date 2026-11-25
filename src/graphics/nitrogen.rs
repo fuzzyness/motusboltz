@@ -154,6 +154,9 @@ void main() {
 /// each side, in bore radii: the cylinders' sides show the gas a little
 /// past the window's edge.
 const WINDOW_MARGIN: f32 = 0.4;
+/// A window's half width that cuts nothing: narrower than nothing, yet
+/// small enough to square in a shader's medium precision.
+const NO_WINDOW: f32 = -100.0;
 /// Reach of the frost on the floor around the coil, in radii of the
 /// coil's path.
 const FROST_REACH: f32 = 1.7;
@@ -368,8 +371,9 @@ impl Nitrogen {
     }
 
     /// Draws the liquid, then the glass around it, both see-through, seen
-    /// from `camera`; call it after everything solid.
-    pub fn draw_coil(&mut self, camera: &Camera3D) {
+    /// from `camera`, cut where the block's window is cut toward it, or
+    /// `whole`, as in first person; call it after everything solid.
+    pub fn draw_coil(&mut self, camera: &Camera3D, whole: bool) {
         if let Clear::Untried = self.clear {
             let cut = [
                 ("CutNormal", UniformType::Float3),
@@ -382,7 +386,12 @@ impl Nitrogen {
             return;
         };
         let [half_width, middle, half_height, corner] = self.shape.window();
-        let half_width = half_width + WINDOW_MARGIN * self.unit;
+        // Whole, the window is too narrow to hold anything.
+        let half_width = if whole {
+            NO_WINDOW
+        } else {
+            half_width + WINDOW_MARGIN * self.unit
+        };
         material.set_uniform("CutNormal", cut_normal(camera.position));
         material.set_uniform("Window", Vec4::new(half_width, middle, half_height, corner));
         let light = key_light(camera.position);
@@ -396,8 +405,10 @@ impl Nitrogen {
     }
 
     /// Fills the coil and builds the bubbles and mist for `cold` (see
-    /// `cold_level`) at `seconds` on the clock, facing the camera at `eye`.
-    pub fn build(&mut self, cold: f32, seconds: f64, facing: Facing, eye: Vec3) {
+    /// `cold_level`) at `seconds` on the clock, facing the camera, with the
+    /// block's window cut toward `cut_toward`, the camera's eye, or not at
+    /// all, as in first person.
+    pub fn build(&mut self, cold: f32, seconds: f64, facing: Facing, cut_toward: Option<Vec3>) {
         // The flow and the smoke run on their own clocks, whose pace follows
         // the setting, so a change of setting speeds or slows them without
         // making them jump.
@@ -410,7 +421,7 @@ impl Nitrogen {
             self.smoked += step * puff_rate(cold) as f64;
         }
         self.build_tubes(cold);
-        self.build_bubbles(cold, facing, eye);
+        self.build_bubbles(cold, facing, cut_toward);
         self.build_mist(cold, facing);
     }
 
@@ -492,7 +503,7 @@ impl Nitrogen {
     /// Builds the bubbles riding along the liquid at `cold`, leaving out
     /// those where the coil lines up with the block's window, seen from the
     /// camera at `eye`.
-    fn build_bubbles(&mut self, cold: f32, facing: Facing, eye: Vec3) {
+    fn build_bubbles(&mut self, cold: f32, facing: Facing, cut_toward: Option<Vec3>) {
         self.bubbles.clear();
         if cold <= 0.0 {
             return;
@@ -504,7 +515,8 @@ impl Nitrogen {
             let along =
                 (self.flowed + unit_hash(bubble, SALT_BUBBLE) as f64).rem_euclid(1.0) as f32;
             let (point, _) = self.point_along(along);
-            if in_window(self.shape, eye, point, WINDOW_MARGIN * self.unit) {
+            let margin = WINDOW_MARGIN * self.unit;
+            if cut_toward.is_some_and(|eye| in_window(self.shape, eye, point, margin)) {
                 continue;
             }
             // Drawn just in front of the glass, which hides what is behind

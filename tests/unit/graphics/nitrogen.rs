@@ -34,7 +34,7 @@ fn cold_level_runs_from_none_at_room_temperature_to_full_at_the_bottom() {
 #[test]
 fn the_coil_is_empty_and_still_at_300_k() {
     let (_, mut nitrogen) = nitrogen();
-    nitrogen.build(cold_level(MAX_COLD_KELVIN), 3.0, facing(), EYE);
+    nitrogen.build(cold_level(MAX_COLD_KELVIN), 3.0, facing(), Some(EYE));
     assert!(nitrogen.liquid.mesh().indices.is_empty());
     assert_eq!(nitrogen.mist.len(), 0);
     assert_eq!(nitrogen.bubbles.len(), 0);
@@ -51,7 +51,7 @@ fn the_liquid_always_fills_the_whole_coil() {
     let (_, mut nitrogen) = nitrogen();
     let outlet_rings = nitrogen.glass.mesh().vertices.len() / (nitrogen.stations.len() + 2);
     for kelvin in [295.0, 230.0, 130.0, MIN_COLD_KELVIN] {
-        nitrogen.build(cold_level(kelvin), 0.0, facing(), EYE);
+        nitrogen.build(cold_level(kelvin), 0.0, facing(), Some(EYE));
         assert_eq!(
             nitrogen.liquid.mesh().vertices.len() + 2 * outlet_rings,
             nitrogen.glass.mesh().vertices.len(),
@@ -75,7 +75,7 @@ fn colder_makes_more_smoke() {
     let (_, mut nitrogen) = nitrogen();
     let mut previous = 0;
     for kelvin in [280.0, 200.0, 120.0, MIN_COLD_KELVIN] {
-        nitrogen.build(cold_level(kelvin), 1.0, facing(), EYE);
+        nitrogen.build(cold_level(kelvin), 1.0, facing(), Some(EYE));
         assert!(nitrogen.mist.len() > previous, "{kelvin} K");
         previous = nitrogen.mist.len();
     }
@@ -86,11 +86,11 @@ fn colder_makes_more_smoke() {
 #[test]
 fn a_change_of_setting_does_not_move_the_bubbles() {
     let (_, mut nitrogen) = nitrogen();
-    nitrogen.build(0.2, 5.0, facing(), EYE);
+    nitrogen.build(0.2, 5.0, facing(), Some(EYE));
     let flowed = nitrogen.flowed;
-    nitrogen.build(0.9, 5.0, facing(), EYE);
+    nitrogen.build(0.9, 5.0, facing(), Some(EYE));
     assert_eq!(nitrogen.flowed, flowed);
-    nitrogen.build(0.9, 5.1, facing(), EYE);
+    nitrogen.build(0.9, 5.1, facing(), Some(EYE));
     assert!(nitrogen.flowed > flowed);
 }
 
@@ -121,7 +121,7 @@ fn the_coil_winds_up_the_cold_half_outside_the_block() {
 #[test]
 fn bubbles_leave_the_window_clear() {
     let (shape, mut nitrogen) = nitrogen();
-    nitrogen.build(0.5, 7.3, facing(), EYE);
+    nitrogen.build(0.5, 7.3, facing(), Some(EYE));
     let seen = nitrogen.bubbles.len();
     assert!(seen > 0 && seen < BUBBLES as usize, "{seen}");
     let [_, middle, _, _] = shape.window();
@@ -148,7 +148,7 @@ fn the_coil_ends_on_its_top_pass_and_its_smoke_stays_near_it() {
     let (first, last) = (nitrogen.stations[0], *nitrogen.stations.last().unwrap());
     let top = first.point.y + (PASSES - 1) as f32 * PASS_SPACING * shape.bore;
     assert!((last.point.y - top).abs() < 1e-4);
-    nitrogen.build(1.0, 2.5, facing(), EYE);
+    nitrogen.build(1.0, 2.5, facing(), Some(EYE));
     assert!(nitrogen.mist.len() > 0);
     const { assert!(PUFF_SIZE_OLD + PUFF_SPREAD + DRIFT < 0.5, "a small wisp") };
 }
@@ -166,6 +166,6 @@ fn the_outlet_turns_down_and_its_smoke_stays_low() {
         "then down to the floor"
     );
     const { assert!(OUTLET_SPREAD < 0.2 && OUTLET_SINK < 0.5, "a slow pool") };
-    nitrogen.build(1.0, 4.0, facing(), EYE);
+    nitrogen.build(1.0, 4.0, facing(), Some(EYE));
     assert!(nitrogen.mist.len() > 0);
 }

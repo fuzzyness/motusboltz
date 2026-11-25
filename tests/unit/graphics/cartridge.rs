@@ -165,3 +165,46 @@ fn taken_out_it_flies_back_in_only_once_carried_away() {
     carry(&mut cartridge, line_up(shape));
     assert!(cartridge.by_opening(), "brought back");
 }
+
+/// The slot's door is up before the cartridge slides in, while it is
+/// seated, and while it slides back out into the hands, and down while
+/// it lies on the table or is carried.
+#[test]
+fn the_door_stands_open_for_it_and_while_it_is_in() {
+    use crate::graphics::hatch::DOOR_SECONDS;
+    let flight = TRIP_SECONDS - slide_seconds();
+    assert!(
+        DOOR_OPENS_AT * TRIP_SECONDS + DOOR_SECONDS <= flight,
+        "up in time"
+    );
+    let shape = BlockShape::new(DEFAULT_GEOMETRY);
+    let mut cartridge = Cartridge::build(shape, false);
+    assert!(!cartridge.door_open(), "lying on the table");
+    let mut seconds = 0.0;
+    cartridge.follow(true, seconds);
+    let frame = 1.0 / 60.0;
+    while !cartridge.seated() {
+        seconds += frame;
+        cartridge.follow(true, seconds);
+        assert_eq!(cartridge.door_open(), cartridge.progress > DOOR_OPENS_AT);
+        assert!(seconds < 2.0 * f64::from(TRIP_SECONDS));
+    }
+    assert!(cartridge.door_open(), "seated");
+    cartridge.pick_up();
+    let seat = seat(shape);
+    let held = line_up(shape) + Vec3::new(0.5, -1.0, 1.0) * shape.bore;
+    let mut left = false;
+    for _ in 0..120 {
+        cartridge.carry(held, Quat::IDENTITY, frame as f32);
+        let at = cartridge.carried().unwrap();
+        if cartridge.door_open() {
+            // Straight out along the slot, never through the wall.
+            assert!(at.x.abs() < 1e-5 && (at.y - seat.y).abs() < 1e-5);
+            assert!(!left);
+        } else {
+            left = true;
+        }
+    }
+    assert!(left, "out into the hands, the door shuts");
+    assert!(cartridge.carried().unwrap().distance(held) < 0.05 * shape.bore);
+}

@@ -18,6 +18,7 @@ pub mod cloud;
 pub mod fire;
 pub mod floor;
 pub mod gpu;
+pub mod hatch;
 pub mod heat_sparks;
 pub mod levels;
 pub mod nitrogen;
@@ -30,6 +31,7 @@ pub mod table;
 pub mod tank;
 pub mod trails;
 pub mod valves;
+pub mod windows;
 
 use macroquad::miniquad::{
     BlendFactor,
@@ -82,6 +84,7 @@ use gpu::{
     GpuMaterial,
     GpuMesh, //
 };
+use hatch::Hatch;
 use heat_sparks::HeatSparks;
 use levels::ReservoirLevels;
 use nitrogen::Nitrogen;
@@ -102,6 +105,7 @@ use table::Table;
 use tank::Tank;
 use trails::TrailRenderer;
 use valves::Valves;
+use windows::Windows;
 
 /// How one view dissolves into the next.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -390,6 +394,13 @@ pub struct Scene {
     switches: DomeStates,
     /// The regenerator's cartridge, on the table or in the opening.
     cartridge: Cartridge,
+    /// First person's slot for the cartridge and its door.
+    hatch: Hatch,
+    /// First person's glass windows in the cylinders.
+    windows: Windows,
+    /// The scene is seen in first person: the block whole, with windows
+    /// and the slot, rather than cut away toward the camera.
+    first_person: bool,
     /// The helium tank, its gauge and its pipe to the port.
     tank: Tank,
     /// The tank's knob's turn (see `set_knob_turn`).
@@ -457,6 +468,9 @@ impl Scene {
             buttons: Buttons::new(shape),
             switches: DomeStates::default(),
             cartridge: Cartridge::new(shape, simulation.regenerator().is_enabled()),
+            hatch: Hatch::new(shape),
+            windows: Windows::new(shape),
+            first_person: false,
             tank: Tank::new(shape, simulation.port()),
             knob_turn: 0.0,
             clock: Clock::new(shape),
@@ -521,6 +535,14 @@ impl Scene {
     /// to come.
     pub fn set_paused(&mut self, paused: bool) {
         self.paused = paused;
+    }
+
+    /// Draws the block whole, with glass windows in the cylinders and the
+    /// regenerator's slot and door, rather than cut away toward the
+    /// camera, while `on`, as first person sees it, for the frames to
+    /// come.
+    pub fn set_first_person(&mut self, on: bool) {
+        self.first_person = on;
     }
 
     /// Lights the table's top while `on`, for the frames to come.
@@ -639,16 +661,19 @@ impl Scene {
             self.effects_seconds += step;
         }
         let effects = self.effects_seconds;
+        let whole = self.first_person;
+        let cut_toward = (!whole).then_some(camera.position);
         self.fire.build(self.levels.heat, effects, facing);
         self.nitrogen
-            .build(self.levels.cold, effects, facing, camera.position);
-        self.heat_sparks.build(simulation, camera, effects);
+            .build(self.levels.cold, effects, facing, cut_toward);
+        self.heat_sparks.build(simulation, camera, effects, !whole);
         let particles = simulation.particles.len();
         let flow = simulation.port_flow();
         self.tank.pose(self.knob_turn, particles, flow, facing);
         self.cartridge
             .follow(simulation.regenerator().is_enabled(), seconds);
-        self.chamber.draw(camera);
+        self.hatch.follow(self.cartridge.door_open(), seconds);
+        self.chamber.draw(camera, whole);
         self.fire.draw_burner();
         if diagnostics::shown(Piece::Table) {
             self.table.draw(camera);
@@ -659,6 +684,10 @@ impl Scene {
         self.valves.draw(self.valve_turns, camera);
         self.buttons.draw_bodies(camera);
         self.cartridge.draw(camera);
+        if whole {
+            self.hatch.draw(camera);
+            self.windows.draw_sills(camera);
+        }
         self.tank.draw(camera);
         self.clock.draw(self.clock_hands, seconds, camera);
         if scenery == Scenery::Sky {
@@ -668,8 +697,11 @@ impl Scene {
             self.particles.draw(simulation, camera, background);
         }
         // The seated cartridge shows faintly through the gas, but not
-        // through the pistons, which come after.
-        self.cartridge.draw_ghost();
+        // through the pistons, which come after, nor through the whole
+        // block.
+        if !whole {
+            self.cartridge.draw_ghost();
+        }
         self.assembly.draw(simulation.power_pistons(), camera);
         // The background behind everything solid, where it shows, and
         // before anything see-through, which blends over it.
@@ -679,7 +711,7 @@ impl Scene {
                 .draw(scenery, camera, size, self.levels, seconds);
         }
         // The coil after everything solid, which shows through it.
-        self.nitrogen.draw_coil(camera);
+        self.nitrogen.draw_coil(camera, whole);
         self.buttons.draw_domes(self.switches, seconds, camera);
         // The see-through grid and trails after everything solid, so they
         // blend over it.
@@ -694,12 +726,22 @@ impl Scene {
         // The sparks stay out of the way of the followed particles while
         // the tracers are on.
         let effects = diagnostics::shown(Piece::Effects);
-        if let (Some(materials), true) = (&self.sprite_materials, effects) {
+        let sparks = effects && simulation.tracers().is_none();
+        let materials = self.sprite_materials.as_ref();
+        if whole {
+            // Inside the cylinders, the sparks go before the glass, which
+            // would hide them, and the glass over them.
+            if let (Some(materials), true) = (materials, sparks) {
+                self.heat_sparks.draw(materials, whole);
+            }
+            self.windows.draw(camera);
+        }
+        if let (Some(materials), true) = (materials, effects) {
             self.fire.draw(materials);
             self.nitrogen.draw(materials);
             self.tank.draw_puff(materials);
-            if simulation.tracers().is_none() {
-                self.heat_sparks.draw(materials);
+            if sparks && !whole {
+                self.heat_sparks.draw(materials, whole);
             }
         }
     }

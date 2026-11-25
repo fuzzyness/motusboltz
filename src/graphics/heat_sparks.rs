@@ -111,8 +111,14 @@ impl HeatSparks {
     }
 
     /// Lays out the sparks of `simulation` at `seconds` on the clock, seen
-    /// from `camera`.
-    pub fn build(&mut self, simulation: &ConnectedChambers, camera: &Camera3D, seconds: f64) {
+    /// from `camera`, with the block's window cut toward it if `cutaway`.
+    pub fn build(
+        &mut self,
+        simulation: &ConnectedChambers,
+        camera: &Camera3D,
+        seconds: f64,
+        cutaway: bool,
+    ) {
         self.sprites.clear();
         let sparks = simulation.heat_sparks();
         let mut totals = [(0.0, 0.0); 2];
@@ -153,7 +159,8 @@ impl HeatSparks {
             if unit_hash(key, SALT_SHOW) > balance.shown() {
                 continue;
             }
-            // The near half of each bore's wall is cut away for the window.
+            // The near half of each bore's wall is cut away for the window;
+            // whole, as in first person, the wall hides what is behind it.
             let axis = if cold {
                 self.geometry.cold_center_x()
             } else {
@@ -161,7 +168,8 @@ impl HeatSparks {
             };
             let out = vec2(spark.position.x - axis, spark.position.z);
             let on_floor = spark.position.y <= floor + PARTICLE_RADIUS;
-            if !on_floor && out.dot(vec2(toward_camera.x, toward_camera.z)) > 0.0 {
+            let near = out.dot(vec2(toward_camera.x, toward_camera.z)) > 0.0;
+            if cutaway && !on_floor && near {
                 continue;
             }
             // Seen from above, the piston's crown hides the wall under it.
@@ -190,9 +198,16 @@ impl HeatSparks {
     /// Draws the sparks, which add their light to the scene.
     ///
     /// They are drawn over everything: the gas would hide those at a bore's
-    /// far wall, and the near wall's are left out.
-    pub fn draw(&self, materials: &SpriteMaterials) {
-        self.sprites.draw(&materials.overlay);
+    /// far wall, and the near wall's are left out. With the block `whole`,
+    /// as in first person, its walls hide them but for the windows, so
+    /// they are drawn behind what stands in front of them.
+    pub fn draw(&self, materials: &SpriteMaterials, whole: bool) {
+        let material = if whole {
+            &materials.sparkle
+        } else {
+            &materials.overlay
+        };
+        self.sprites.draw(material);
     }
 }
 

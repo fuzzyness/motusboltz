@@ -1849,6 +1849,7 @@ impl App {
             .set_knob_turn(knob_turn(self.controls.concentration()));
         let held = |handle| self.grab.is_some_and(|grab| grab.handle == handle);
         self.scene.set_paused(self.paused);
+        self.scene.set_first_person(self.walker.is_some());
         self.scene.set_switches(DomeStates {
             on: [false, self.tracers],
             held: [held(Handle::ResetButton), held(Handle::TracersButton)],

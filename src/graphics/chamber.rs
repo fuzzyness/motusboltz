@@ -223,8 +223,8 @@ impl ConnectedChamberVisual {
     }
 
     /// Draws the block (or the frames and opening) with its window toward
-    /// `camera`.
-    pub fn draw(&mut self, camera: &Camera3D) {
+    /// `camera`, or `whole`, with first person's windows and slot.
+    pub fn draw(&mut self, camera: &Camera3D, whole: bool) {
         if let Block::Untried = self.block {
             self.block = match EngineBlock::new(self.geometry) {
                 Some(block) => Block::Ready(Box::new(block)),
@@ -232,7 +232,7 @@ impl ConnectedChamberVisual {
             };
         }
         if let Block::Ready(block) = &self.block {
-            block.draw(camera);
+            block.draw(camera, whole);
         } else {
             self.hot.draw();
             self.cold.draw();
